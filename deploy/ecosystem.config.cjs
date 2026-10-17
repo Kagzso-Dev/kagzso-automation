@@ -53,7 +53,8 @@ const apps = [
 // Voice backend (AI calls) - only once its .venv exists. One uvicorn worker:
 // live call state is kept in process memory. Bound to localhost; nginx
 // publishes it at PUBLIC_BASE_URL for Plivo.
-if (fs.existsSync(uvicorn)) {
+// KAGZSO_SKIP_VOICE=1 is set by scripts/prod-deploy.mjs when the voice setup failed.
+if (fs.existsSync(uvicorn) && process.env.KAGZSO_SKIP_VOICE !== "1") {
   apps.push({
     ...common,
     name: "kagzso_orchestrator_voice",

@@ -36,14 +36,29 @@ run("Generating the Prisma client", "npm run prisma:generate");
 run("Applying database migrations", "npm run prisma:deploy");
 run("Building the web app", "npm run build");
 
+// Like dev:voice, a voice backend problem never blocks the email/WhatsApp deploy:
+// it is reported, and the voice process is left out of this start.
+let skipVoice = false;
 if (existsSync(path.join(voiceBin, "python"))) {
-  run("Voice backend: installing requirements", `${path.join(voiceBin, "pip")} install -q -r requirements.txt`, voiceDir);
-  run("Voice backend: applying migrations", `${path.join(voiceBin, "alembic")} upgrade head`, voiceDir);
+  try {
+    run("Voice backend: installing requirements", `${path.join(voiceBin, "pip")} install -q -r requirements.txt`, voiceDir);
+    run("Voice backend: applying migrations", `${path.join(voiceBin, "alembic")} upgrade head`, voiceDir);
+  } catch {
+    skipVoice = true;
+    console.warn(
+      "\n[prod] WARNING: voice backend setup failed (see the error above) - deploying without it.\n" +
+        "       Fix kagzso-voice-backend-english/.env (MYSQL_* etc.), then rerun npm run prod.",
+    );
+  }
 } else {
   console.log("\n[prod] Voice backend skipped - no kagzso-voice-backend-english/.venv (create it to run AI calls).");
 }
+// deploy/ecosystem.config.cjs reads this when pm2 loads it below.
+if (skipVoice) process.env.KAGZSO_SKIP_VOICE = "1";
 
 // Same idea as dev:kill, scoped to this project's process names only.
+// With KAGZSO_SKIP_VOICE set, the voice process is not in this list, so an
+// already-running one is left alone.
 const names = createRequire(import.meta.url)(ecosystem).apps.map((a) => a.name);
 for (const name of names) {
   try {
