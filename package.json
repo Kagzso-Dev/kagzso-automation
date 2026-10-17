@@ -16,6 +16,7 @@
     "dev:web": "npm run dev --workspace @dispatch/web",
     "dev:voice": "node scripts/dev-voice.mjs",
     "build": "npm run build --workspace @dispatch/web",
+    "prod": "node scripts/prod-deploy.mjs",
     "prisma:generate": "node scripts/prisma.mjs generate",
     "prisma:migrate": "node scripts/prisma.mjs migrate dev",
     "prisma:deploy": "node scripts/prisma.mjs migrate deploy",
