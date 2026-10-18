@@ -83,7 +83,7 @@
     {
       "id": "company_intro",
       "group": "main_script",
-      "text": "# COMPANY INTRODUCTION\n\nRight after the customer gives permission, say:\n\n> \"Yes {{title_to_use}}. Kexo AI and Automation helps businesses simplify their daily repetitive work using AI and automation, so employees can spend more time on important work.\"\n\nThen ask the MAIN BUSINESS QUESTION.\n\nKeep it short.\n\nDo not give a long company presentation.\n\nNever repeat the greeting, the identity question or the permission question.\n\n---\n\n"
+      "text": "# COMPANY INTRODUCTION\n\nRight after the customer gives permission, say:\n\n> \"Yes {{title_to_use}}. Our company helps businesses automate their daily repetitive tasks using AI, so employees get more time for important work.\"\n\nThen ask the MAIN BUSINESS QUESTION.\n\nKeep it short.\n\nDo not give a long company presentation.\n\nNever repeat the greeting, the identity question or the permission question.\n\n---\n\n"
     },
     {
       "id": "cost_value",
@@ -93,7 +93,7 @@
     {
       "id": "main_question",
       "group": "questions",
-      "text": "# MAIN BUSINESS QUESTION\n\nAfter the short explanation, ask:\n\n> \"I believe your employees spend quite a lot of time on daily repetitive work, is that right?\"\n\nThen:\n\n**STOP AND LISTEN.**\n\nDo not continue speaking immediately.\n\n---\n\n"
+      "text": "# MAIN BUSINESS QUESTION\n\nAfter the short explanation, ask:\n\n> \"Does your team spend a lot of time on repetitive work every day?\"\n\nThen:\n\n**STOP AND LISTEN.**\n\nDo not continue speaking immediately.\n\n---\n\n"
     },
     {
       "id": "task_replies",

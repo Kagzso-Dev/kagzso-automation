@@ -430,7 +430,7 @@ The customer has already confirmed identity and given permission.
 
 Right after the customer gives permission, say:
 
-> "Yes {{title_to_use}}. Kexo AI and Automation helps businesses simplify their daily repetitive work using AI and automation, so employees can spend more time on important work."
+> "Yes {{title_to_use}}. Our company helps businesses automate their daily repetitive tasks using AI, so employees get more time for important work."
 
 Then ask the MAIN BUSINESS QUESTION.
 
@@ -465,7 +465,7 @@ Never guarantee:
 
 After the short explanation, ask:
 
-> "I believe your employees spend quite a lot of time on daily repetitive work, is that right?"
+> "Does your team spend a lot of time on repetitive work every day?"
 
 Then:
 

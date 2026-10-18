@@ -4,7 +4,7 @@
                                                                        after step 1, or at once when the
                                                                        customer says anything)
   3. "Thank you, {{title_to_use}}. This is Nila ... Is that okay?"   (script, after confirmation)
-  4. "Yes {{title_to_use}}. Kexo AI and Automation helps ..."         (script, after permission)
+  4. "Yes {{title_to_use}}. Our company helps businesses automate ..." (script, after permission)
 Do-not-call and AI questions at the opening still go to the script, no line is repeated, and the
 preview renders the opening for male, female and unknown gender."""
 import json
@@ -25,8 +25,8 @@ GREETING = "Hi sir, Good morning."
 IDENTITY = "Am I speaking with Ragul, sir?"
 PERMISSION = ("Thank you, sir. This is Nila from Kexo AI and Automation. Could you give me just one minute? "
               "I'll quickly tell you about our company. Is that okay?")
-INTRO = ("Yes sir. Kexo AI and Automation helps businesses simplify their daily repetitive work using AI and "
-         "automation, so employees can spend more time on important work.")
+INTRO = ("Yes sir. Our company helps businesses automate their daily repetitive tasks using AI, so employees get "
+         "more time for important work. Does your team spend a lot of time on repetitive work every day?")
 DNC = "Understood. I respect your request. Thank you."
 
 
@@ -60,7 +60,7 @@ def test_yes_at_step_two_gives_the_introduction(client, auth, fakes):
     assert spoken[0] == GREETING
     assert spoken[1] == IDENTITY
     assert spoken[2] == PERMISSION
-    assert spoken[3].startswith("Yes sir. Kexo AI and Automation helps businesses")
+    assert spoken[3].startswith("Yes sir. Our company helps businesses automate their daily repetitive tasks using AI")
     assert len(fakes.llm.seen_messages) == 2  # only steps 3 and 4 use the LLM
     history = fakes.llm.seen_messages[0]
     assert {"role": "assistant", "content": GREETING} in history
