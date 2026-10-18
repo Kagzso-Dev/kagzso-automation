@@ -70,6 +70,45 @@ def test_turn_timing_line_has_every_stage_and_no_text():
                     "first_token_to_audio=500 tts_first_audio=500 total=1250 reply_delay=2000")
     # the database row keeps its existing columns
     assert set(m.as_row()) == {"stt_ms", "llm_ms", "llm_first_token_ms", "tts_first_byte_ms", "total_response_ms"}
+    # LATENCY_DETAIL_METRICS adds the same numbers the log line has (no text)
+    m.source = "llm"
+    assert m.detail_row() == {"eos_wait_ms": 750, "tts_wait_ms": 62, "reply_delay_ms": 2000, "reply_source": "llm"}
+
+
+def test_call_summary_line_is_numbers_only():
+    rows = [
+        {"reply_source": "prerendered", "reply_delay_ms": 900, "stt_ms": 300},
+        {"reply_source": "llm", "reply_delay_ms": 2000, "eos_wait_ms": 700, "stt_ms": 400, "llm_first_token_ms": 800,
+         "llm_ms": 1500, "tts_wait_ms": 0, "tts_first_byte_ms": 200},
+        {"reply_source": "llm", "reply_delay_ms": 3000, "eos_wait_ms": 700, "stt_ms": 600, "llm_first_token_ms": 1600,
+         "llm_ms": 2500, "tts_wait_ms": 100, "tts_first_byte_ms": 300},
+    ]
+    line = call_service.latency_summary(rows, slow_speaker=True)
+    assert line.startswith("Call latency summary (avg/max ms over 2 AI replies, 3 turns, slow-speaker wait on)")
+    assert "reply_delay=2500/3000" in line and "llm_first_token=1200/1600" in line and "stt=500/600" in line
+    assert "all turns reply_delay=1966/3000" in line
+
+
+def test_reply_turn_saves_detail_columns_and_can_be_switched_off(client, auth, fakes, sync_engine, monkeypatch):
+    from sqlalchemy import text as sql
+
+    _greet_then_reply(client, auth, fakes)
+    with sync_engine.connect() as c:
+        rows = [dict(r._mapping) for r in c.execute(sql(
+            "select reply_source, eos_wait_ms, reply_delay_ms from call_latency_metrics order by id"))]
+    assert rows and {r["reply_source"] for r in rows} <= {"llm", "scripted", "prerendered"}
+    llm = [r for r in rows if r["reply_source"] == "llm"]
+    # eos_wait is empty when the reply came over the agent's own audio (no separate silence wait),
+    # exactly like the log line; the full reply delay is always there.
+    assert llm and all(r["reply_delay_ms"] is not None for r in llm)
+
+    monkeypatch.setattr(settings, "LATENCY_DETAIL_METRICS", False)
+    with sync_engine.begin() as c:
+        c.execute(sql("delete from call_latency_metrics"))
+    _greet_then_reply(client, auth, fakes)
+    with sync_engine.connect() as c:
+        rows = [dict(r._mapping) for r in c.execute(sql("select reply_source, reply_delay_ms from call_latency_metrics"))]
+    assert rows and all(r["reply_source"] is None and r["reply_delay_ms"] is None for r in rows)
 
 
 def test_reply_turn_logs_end_of_speech_wait(client, auth, fakes, caplog):

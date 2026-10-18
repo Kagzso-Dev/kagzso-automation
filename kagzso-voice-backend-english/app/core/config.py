@@ -129,6 +129,10 @@ class Settings(BaseSettings):
     LLM_HEDGE_AFTER_SECONDS: float = 0.0
     # Start the LLM while the TTS websocket is still connecting (first sentence waits for it).
     LLM_START_BEFORE_TTS: bool = True
+    # Extra per-turn timing in call_latency_metrics (end-of-speech wait, TTS wait, full reply
+    # delay, reply source) and a per-call summary log line. Numbers only, written off the
+    # audio path like the existing metrics. false = only the original five columns.
+    LATENCY_DETAIL_METRICS: bool = True
 
     # --- Provider connections ---
     # Keep idle HTTPS connections to Sarvam / the LLM open this long between turns

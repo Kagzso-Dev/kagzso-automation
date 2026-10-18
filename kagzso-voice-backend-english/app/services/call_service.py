@@ -262,6 +262,24 @@ def _ms(a: Optional[float], b: Optional[float]) -> Optional[int]:
     return int((b - a) * 1000) if a is not None and b is not None else None
 
 
+def latency_summary(rows: List[Dict[str, Any]], slow_speaker: bool = False) -> str:
+    """One log line per call: avg / max per step over its AI-reply turns (numbers only)."""
+    llm = [r for r in rows if r.get("reply_source") == "llm"]
+
+    def stat(key: str, of: List[Dict[str, Any]]) -> str:
+        vals = [r[key] for r in of if r.get(key) is not None]
+        return f"{sum(vals) // len(vals)}/{max(vals)}" if vals else "-"
+
+    return (
+        f"Call latency summary (avg/max ms over {len(llm)} AI replies, {len(rows)} turns"
+        f"{', slow-speaker wait on' if slow_speaker else ''}): "
+        f"reply_delay={stat('reply_delay_ms', llm)} eos_wait={stat('eos_wait_ms', llm)} stt={stat('stt_ms', llm)} "
+        f"llm_first_token={stat('llm_first_token_ms', llm)} llm_full={stat('llm_ms', llm)} "
+        f"tts_wait={stat('tts_wait_ms', llm)} tts_first_audio={stat('tts_first_byte_ms', llm)} "
+        f"| all turns reply_delay={stat('reply_delay_ms', rows)}"
+    )
+
+
 # ===========================================================================
 # Provider container (overridable in tests)
 # ===========================================================================
@@ -686,6 +704,7 @@ class TurnMetrics:
     t6: Optional[float] = None
     t0: Optional[float] = None  # customer actually stopped speaking (t1 minus the VAD silence)
     tts_wait: float = 0.0  # time the first sentence waited for the TTS connection
+    source: Optional[str] = None  # llm | scripted | prerendered (what produced the reply)
 
     def as_row(self) -> Dict[str, Optional[int]]:
         return {
@@ -694,6 +713,15 @@ class TurnMetrics:
             "llm_first_token_ms": _ms(self.t3, self.t3_first_token),
             "tts_first_byte_ms": _ms(self.t5, self.t6),
             "total_response_ms": _ms(self.t1, self.t6),
+        }
+
+    def detail_row(self) -> Dict[str, Any]:
+        """LATENCY_DETAIL_METRICS columns (migration 0005): numbers and the reply source only."""
+        return {
+            "eos_wait_ms": _ms(self.t0, self.t1),
+            "tts_wait_ms": int(self.tts_wait * 1000) if self.t3 is not None else None,
+            "reply_delay_ms": _ms(self.t0 if self.t0 is not None else self.t1, self.t6),
+            "reply_source": self.source,
         }
 
     def log_line(self, turn: int) -> str:
@@ -761,6 +789,7 @@ class CallSession:
         self._noise_gate = noise_gate
         self._last_speech_end: Optional[float] = None
         self._slow_speaker = False
+        self._latency_rows: List[Dict[str, Any]] = []  # LATENCY_DETAIL_METRICS: this call's turn timings
         self.endpointer = audio.SpeechEndpointer(
             classifier or audio.make_webrtc_classifier(cfg.VAD_AGGRESSIVENESS, vad_min_rms),
             start_ms=cfg.VAD_SPEECH_START_MS,
@@ -840,6 +869,8 @@ class CallSession:
             return
         self._closed = True
         ACTIVE_SESSIONS.pop(self.call_id, None)
+        if self._latency_rows:
+            log.info(latency_summary(self._latency_rows, slow_speaker=self._slow_speaker))
         if self.cleaner is not None and self.cleaner.frames:
             frames, avg, peak = self.cleaner.stats()
             log.info("Noise suppression for this call: %d chunks, %.2f ms avg / %.2f ms max per 20 ms chunk%s",
@@ -1545,6 +1576,7 @@ class CallSession:
                 cached = (take_greeting_audio(self.call_id, st.scripted, self.greeting_pace())
                           if st.is_greeting and st.scripted else None)
                 line_audio = self._line_audio.get(st.scripted) if st.scripted is not None and not cached else None
+                m.source = "prerendered" if (cached or line_audio) else "scripted" if st.scripted is not None else "llm"
                 if cached or line_audio:
                     log.info("Playing pre-rendered %s", "greeting" if cached else "line")
                     m.t5 = m.t6 = time.monotonic()
@@ -1566,7 +1598,10 @@ class CallSession:
                 self._commit_turn(st, interrupted=False)
                 if m.t6:
                     log.info("Total response latency: %dms", _ms(m.t1, m.t6))
-                row = m.as_row()
+                row: Dict[str, Any] = m.as_row()
+                if self.cfg.LATENCY_DETAIL_METRICS:
+                    row.update(m.detail_row())
+                    self._latency_rows.append(dict(row))
                 log.info(m.log_line(turn))
                 self._persist(lambda db, row=row: repo.add_latency_metric(db, self.call_id, turn, **row))
                 await self._after_reply()

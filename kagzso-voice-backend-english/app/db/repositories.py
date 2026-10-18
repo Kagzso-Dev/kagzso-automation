@@ -220,7 +220,7 @@ async def list_transcripts(db: AsyncSession, call_id: str) -> List[Transcript]:
     return list((await db.execute(stmt)).scalars().all())
 
 
-async def add_latency_metric(db: AsyncSession, call_id: str, turn_index: int, **metrics: Optional[int]) -> None:
+async def add_latency_metric(db: AsyncSession, call_id: str, turn_index: int, **metrics: Optional[int | str]) -> None:
     db.add(CallLatencyMetric(call_id=call_id, turn_index=turn_index, **metrics))
     await db.commit()
 

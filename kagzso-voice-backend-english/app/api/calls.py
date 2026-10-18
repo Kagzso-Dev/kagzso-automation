@@ -46,7 +46,9 @@ async def get_call(call_id: str, db: AsyncSession = Depends(get_db)) -> CallDeta
     out = CallDetailOut.model_validate(call)
     out.latency = [
         {"turn": m.turn_index, "stt_ms": m.stt_ms, "llm_ms": m.llm_ms, "llm_first_token_ms": m.llm_first_token_ms,
-         "tts_first_byte_ms": m.tts_first_byte_ms, "total_response_ms": m.total_response_ms}
+         "tts_first_byte_ms": m.tts_first_byte_ms, "total_response_ms": m.total_response_ms,
+         "eos_wait_ms": m.eos_wait_ms, "tts_wait_ms": m.tts_wait_ms, "reply_delay_ms": m.reply_delay_ms,
+         "reply_source": m.reply_source}
         for m in await repo.list_latency_metrics(db, call_id)
     ]
     out.events = [

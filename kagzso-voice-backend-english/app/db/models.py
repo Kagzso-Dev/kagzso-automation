@@ -175,6 +175,11 @@ class CallLatencyMetric(Base):
     llm_first_token_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     tts_first_byte_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # T6 - T5
     total_response_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # T6 - T1
+    # LATENCY_DETAIL_METRICS (migration 0005): null on older rows or when switched off.
+    eos_wait_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # T1 - T0: end-of-speech silence
+    tts_wait_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # first sentence waiting for TTS
+    reply_delay_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # T6 - T0: the pause the customer hears
+    reply_source: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # llm | scripted | prerendered
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
