@@ -2,6 +2,8 @@
 //
 //   GET  /api/whatsapp/templates/meta-sync     Meta templates not registered here yet (+ why any can't be used)
 //   POST /api/whatsapp/templates/meta-sync     import them { templates?: [{ name, language }] } (all when omitted)
+//   GET  /api/whatsapp/templates/meta-sync/updates   registered templates that differ from Meta (+ what differs)
+//   POST /api/whatsapp/templates/meta-sync/updates   make the picked ones follow Meta { ids: [...] }
 //   POST /api/whatsapp/templates/meta-create   submit a new template to Meta for review and register it
 //                                              (multipart: "template" = JSON, optional "file" = header example)
 
@@ -10,7 +12,14 @@ import multer from "multer";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import { createMetaTemplateInput } from "@dispatch/shared";
-import { createTemplateInMeta, findNewMetaTemplates, importMetaTemplates, TemplateSyncError } from "../../domain/whatsappTemplateSync.js";
+import {
+  createTemplateInMeta,
+  findChangedMetaTemplates,
+  findNewMetaTemplates,
+  importMetaTemplates,
+  TemplateSyncError,
+  updateFromMetaTemplates,
+} from "../../domain/whatsappTemplateSync.js";
 import { MEDIA_MAX_BYTES } from "../../domain/whatsappMedia.js";
 import { WhatsAppNotConfiguredError, WhatsAppSendError } from "../../services/whatsapp.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
@@ -60,6 +69,27 @@ whatsappTemplateSyncRouter.post(
   wrap(async (req, res) => {
     const { templates } = importBody.parse(req.body ?? {});
     res.json(await importMetaTemplates(templates).catch(toHttp));
+  }),
+);
+
+whatsappTemplateSyncRouter.get(
+  "/templates/meta-sync/updates",
+  ...admin,
+  limiter,
+  wrap(async (_req, res) => {
+    res.json({ items: await findChangedMetaTemplates().catch(toHttp) });
+  }),
+);
+
+const updateBody = z.object({ ids: z.array(z.string().min(1).max(64)).min(1).max(250) });
+
+whatsappTemplateSyncRouter.post(
+  "/templates/meta-sync/updates",
+  ...admin,
+  limiter,
+  wrap(async (req, res) => {
+    const { ids } = updateBody.parse(req.body ?? {});
+    res.json(await updateFromMetaTemplates(ids, req.user!.email).catch(toHttp));
   }),
 );
 

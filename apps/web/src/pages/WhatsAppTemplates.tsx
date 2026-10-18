@@ -76,7 +76,7 @@ export function WhatsAppTemplatesPage() {
         action={
           <div className="flex flex-wrap gap-2">
             {isAdmin && (
-              <button className="btn-ghost" onClick={() => setSyncOpen(true)} title="Import templates created in WhatsApp Manager">
+              <button className="btn-ghost" onClick={() => setSyncOpen(true)} title="Import new templates from WhatsApp Manager and update ones that changed there">
                 Sync from Meta
               </button>
             )}

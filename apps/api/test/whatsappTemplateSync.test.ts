@@ -4,6 +4,7 @@ import {
   createMetaTemplateInput,
   dispatchRowForCreated,
   planMetaImport,
+  planMetaUpdate,
   toMetaTemplateName,
 } from "@dispatch/shared";
 
@@ -60,6 +61,43 @@ describe("create-in-Meta form rules", () => {
       variables: ["first_name", "business_name"],
       buttonLabels: ["Yes, interested", "Not now"],
     });
+  });
+
+  it("website, phone and WhatsApp-call buttons: custom ones first, each with only its own fields", () => {
+    const v = createMetaTemplateInput.parse({
+      ...base,
+      buttons: [
+        { type: "URL", text: "Visit website", url: "https://kagzso.com", phone_number: "ignored" },
+        "Need help?",
+        { type: "PHONE_NUMBER", text: "Call us", phone_number: "+91 98765-43210" },
+        { type: "VOICE_CALL", text: "Call on WhatsApp" },
+        { type: "QUICK_REPLY", text: "Not now" },
+      ],
+    });
+    expect(buildMetaTemplatePayload(v).components.at(-1)).toEqual({
+      type: "BUTTONS",
+      buttons: [
+        { type: "QUICK_REPLY", text: "Need help?" },
+        { type: "QUICK_REPLY", text: "Not now" },
+        { type: "URL", text: "Visit website", url: "https://kagzso.com" },
+        { type: "PHONE_NUMBER", text: "Call us", phone_number: "+919876543210" },
+        { type: "VOICE_CALL", text: "Call on WhatsApp" },
+      ],
+    });
+    expect(dispatchRowForCreated(v).buttonLabels).toEqual(["Need help?", "Not now", "Visit website", "Call us", "Call on WhatsApp"]);
+  });
+
+  it.each([
+    [{ buttons: [{ type: "URL", text: "Open", url: "kagzso.com" }] }, /full website address/],
+    [{ buttons: [{ type: "URL", text: "Open", url: "https://kagzso.com/{{1}}" }] }, /without variables/],
+    [{ buttons: [{ type: "PHONE_NUMBER", text: "Call", phone_number: "9876543210" }] }, /country code/],
+    [{ buttons: [1, 2, 3].map((n) => ({ type: "URL", text: `Site ${n}`, url: `https://k${n}.com` })) }, /at most 2 \W+Visit website/],
+    [{ buttons: [{ type: "VOICE_CALL", text: "Call A" }, { type: "VOICE_CALL", text: "Call B" }] }, /at most 1 \W+Call on WhatsApp/],
+    [{ buttons: [{ type: "COPY_CODE", text: "Copy" }] }, /invalid_union_discriminator|Invalid discriminator/],
+  ])("rejects buttons %o", (over, msg) => {
+    const r = createMetaTemplateInput.safeParse({ ...base, ...over });
+    expect(r.success).toBe(false);
+    expect(JSON.stringify(r.error?.issues)).toMatch(msg);
   });
 
   it.each([
@@ -124,6 +162,47 @@ describe("Meta → Dispatch import planning", () => {
   });
 });
 
+describe("registered template follows Meta", () => {
+  const meta = (text: string, buttons: { type: string; text: string; url?: string }[] = []) => ({
+    name: "kagzso_ai_automation_intro",
+    language: "en",
+    components: [{ type: "BODY", text }, ...(buttons.length ? [{ type: "BUTTONS", buttons }] : [])],
+  });
+  const row = { body: "Hi {{first_name}}, meet Kagzso AI.", variables: ["first_name"], buttonLabels: ["Need help?"] };
+
+  it("already matching → no changes", () => {
+    expect(planMetaUpdate(row, meta("Hi {{1}}, meet Kagzso AI.", [{ type: "QUICK_REPLY", text: "Need help?" }]))).toMatchObject({ ok: true, changes: [] });
+  });
+
+  it("lists what differs and takes Meta's body and buttons", () => {
+    const p = planMetaUpdate(
+      row,
+      meta("Hi {{1}}, meet Kagzso AI automation.", [
+        { type: "QUICK_REPLY", text: "Need help?" },
+        { type: "URL", text: "Visit website", url: "https://kagzso.com" },
+      ]),
+    );
+    expect(p).toEqual({
+      ok: true,
+      changes: ["Body", "Buttons"],
+      row: { body: "Hi {{first_name}}, meet Kagzso AI automation.", variables: ["first_name"], buttonLabels: ["Need help?", "Visit website"] },
+      warnings: [],
+    });
+  });
+
+  it("keeps the field each {{n}} is filled from (e.g. full name, or a 3rd variable the row already maps)", () => {
+    const custom = { body: "Dear {{full_name}} of {{business_name}} ({{phone}})", variables: ["full_name", "business_name", "phone"], buttonLabels: [] };
+    const p = planMetaUpdate(custom, meta("Dear {{1}} from {{2}} ({{3}})"));
+    expect(p).toMatchObject({ ok: true, changes: ["Body"], row: { body: "Dear {{full_name}} from {{business_name}} ({{phone}})", variables: ["full_name", "business_name", "phone"] } });
+  });
+
+  it("refuses what Dispatch can't send, with the reason", () => {
+    const p = planMetaUpdate(row, meta("Hi {{1}}", [{ type: "URL", text: "Open", url: "https://k.com/{{1}}" }]));
+    expect(p.ok).toBe(false);
+    expect(p.ok ? "" : p.reason).toMatch(/URL button/);
+  });
+});
+
 /* ------------------------------------------------------------------ flows (mocked Meta + DB) */
 
 type Row = Record<string, any>;
@@ -139,6 +218,7 @@ vi.mock("../src/prisma.js", () => ({
         templates.push(row);
         return row;
       },
+      update: async ({ where, data }: Row) => Object.assign(templates.find((t) => t.id === where.id)!, data),
     },
   },
 }));
@@ -152,7 +232,9 @@ const setTemplateHeaderMedia = vi.fn(async () => ({}));
 vi.mock("../src/domain/whatsappTemplateHeader.js", () => ({ setTemplateHeaderMedia }));
 vi.mock("../src/domain/whatsappTemplateVerify.js", () => ({ resetTemplateVerifyCache: vi.fn() }));
 
-const { findNewMetaTemplates, importMetaTemplates, createTemplateInMeta } = await import("../src/domain/whatsappTemplateSync.js");
+const { findNewMetaTemplates, importMetaTemplates, createTemplateInMeta, findChangedMetaTemplates, updateFromMetaTemplates } = await import(
+  "../src/domain/whatsappTemplateSync.js"
+);
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64)]);
 const MP3 = Buffer.concat([Buffer.from("ID3"), Buffer.alloc(64)]);
@@ -194,6 +276,30 @@ describe("Sync from Meta", () => {
   it("can import a chosen subset", async () => {
     const r = await importMetaTemplates([{ name: "kagzso_offer", language: "ta" }]);
     expect(r.imported.map((i) => i.languageCode)).toEqual(["ta"]);
+  });
+});
+
+describe("Update from Meta", () => {
+  beforeEach(() => {
+    Object.assign(templates[0]!, { body: "Hello {{full_name}}", variables: ["full_name"], buttonLabels: [] });
+    templates.push({ id: "same", name: "Offer", providerTemplateName: "kagzso_offer", languageCode: "en", body: "Hi {{first_name}}, offer.", variables: ["first_name"], buttonLabels: [] });
+    templates.push({ id: "gone", name: "Gone", providerTemplateName: "kagzso_gone", languageCode: "en", body: "x", variables: [], buttonLabels: [] });
+  });
+
+  it("lists only registered templates that differ from Meta, with what differs", async () => {
+    const list = await findChangedMetaTemplates();
+    expect(list).toEqual([
+      expect.objectContaining({ id: "old", changes: ["Body"], updatable: true, metaBody: "Hi {{full_name}}", status: "APPROVED" }),
+    ]);
+  });
+
+  it("updates only the picked rows: body follows Meta, field choice, name and id stay", async () => {
+    const r = await updateFromMetaTemplates(["old", "same", "gone"], "admin@x");
+    expect(r.updated).toEqual([{ id: "old", name: "Company Intro", changes: ["Body"] }]);
+    expect(r.skipped).toEqual([{ id: "gone", name: "Gone", reason: expect.stringMatching(/Not found in Meta/) }]);
+    expect(templates.find((t) => t.id === "old")).toMatchObject({ name: "Company Intro", body: "Hi {{full_name}}", variables: ["full_name"] });
+    expect(templates.find((t) => t.id === "same")).toMatchObject({ body: "Hi {{first_name}}, offer." });
+    expect(await findChangedMetaTemplates()).toEqual([]);
   });
 });
 

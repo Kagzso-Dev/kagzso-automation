@@ -37,6 +37,18 @@ export const META_TEMPLATE_LANGUAGES: { code: string; label: string }[] = [
 export const TEMPLATE_HEADER_TYPES = ["NONE", "TEXT", "IMAGE", "VIDEO", "DOCUMENT"] as const;
 export type TemplateHeaderType = (typeof TEMPLATE_HEADER_TYPES)[number];
 
+/**
+ * Button types the create form offers, as in Meta's "Add button" menu. All of
+ * them send with no per-message value, so Dispatch can send the template as is.
+ * Meta's other types (Copy offer code, Complete flow, dynamic website links)
+ * need a value on every send, which Dispatch doesn't supply yet.
+ */
+export const TEMPLATE_BUTTON_TYPES = ["QUICK_REPLY", "URL", "PHONE_NUMBER", "VOICE_CALL"] as const;
+export type TemplateButtonType = (typeof TEMPLATE_BUTTON_TYPES)[number];
+
+/** Meta's per-type caps (10 buttons in all). */
+export const TEMPLATE_BUTTON_LIMITS: Record<TemplateButtonType, number> = { QUICK_REPLY: 10, URL: 2, PHONE_NUMBER: 1, VOICE_CALL: 1 };
+
 const PLACEHOLDER_RE = /\{\{\s*([^}]*?)\s*\}\}/g;
 
 /** Every {{…}} in a text, in order of appearance (inner text trimmed). */
@@ -62,6 +74,45 @@ export function humanizeTemplateName(name: string): string {
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ")
     .slice(0, 160);
+}
+
+const buttonText = z.string().trim().min(1, "Enter the button text").max(25, "Button text can be at most 25 characters");
+
+/** One template button. A plain string is a quick reply (the form's original shape). */
+export const templateButtonInput = z.preprocess(
+  (b) => (typeof b === "string" ? { type: "QUICK_REPLY", text: b } : b),
+  z.discriminatedUnion("type", [
+    z.object({ type: z.literal("QUICK_REPLY"), text: buttonText }),
+    z.object({
+      type: z.literal("URL"),
+      text: buttonText,
+      url: z
+        .string()
+        .trim()
+        .max(2000)
+        .regex(/^https?:\/\/[^\s{}]+\.[^\s{}]+$/i, "Enter a full website address without variables, e.g. https://kagzso.com"),
+    }),
+    z.object({
+      type: z.literal("PHONE_NUMBER"),
+      text: buttonText,
+      phone_number: z
+        .string()
+        .trim()
+        .transform((s) => s.replace(/[\s-]/g, ""))
+        .pipe(z.string().regex(/^\+[1-9]\d{6,14}$/, "Enter the phone number with country code, e.g. +919876543210")),
+    }),
+    z.object({ type: z.literal("VOICE_CALL"), text: buttonText }),
+  ]),
+);
+export type TemplateButton = z.infer<typeof templateButtonInput>;
+
+/**
+ * Meta requires quick replies and the other buttons in two separate groups, so
+ * quick replies go first, each group in the order they were added. Used for
+ * the Graph payload and the form preview alike.
+ */
+export function orderTemplateButtons<T extends { type: string }>(buttons: T[]): T[] {
+  return [...buttons.filter((b) => b.type === "QUICK_REPLY"), ...buttons.filter((b) => b.type !== "QUICK_REPLY")];
 }
 
 export const createMetaTemplateInput = z
@@ -92,10 +143,7 @@ export const createMetaTemplateInput = z
       .max(10)
       .default([]),
     footer: z.string().trim().max(60, "The footer can be at most 60 characters").optional().nullable(),
-    buttons: z
-      .array(z.string().trim().min(1).max(25, "Button text can be at most 25 characters"))
-      .max(10, "At most 10 quick-reply buttons")
-      .default([]),
+    buttons: z.array(templateButtonInput).max(10, "At most 10 buttons").default([]),
   })
   .superRefine((v, ctx) => {
     const ph = placeholdersIn(v.body);
@@ -114,8 +162,20 @@ export const createMetaTemplateInput = z
         ctx.addIssue({ code: "custom", path: ["headerText"], message: "Header variables aren't supported — use fixed text" });
       }
     }
-    if (new Set(v.buttons.map((b) => b.toLowerCase())).size !== v.buttons.length) {
+    if (new Set(v.buttons.map((b) => b.text.toLowerCase())).size !== v.buttons.length) {
       ctx.addIssue({ code: "custom", path: ["buttons"], message: "Button texts must be different" });
+    }
+    const LABEL: Record<TemplateButtonType, string> = {
+      QUICK_REPLY: "custom",
+      URL: "Visit website",
+      PHONE_NUMBER: "Call phone number",
+      VOICE_CALL: "Call on WhatsApp",
+    };
+    for (const t of TEMPLATE_BUTTON_TYPES) {
+      const max = TEMPLATE_BUTTON_LIMITS[t];
+      if (max < 10 && v.buttons.filter((b) => b.type === t).length > max) {
+        ctx.addIssue({ code: "custom", path: ["buttons"], message: `Meta allows at most ${max} "${LABEL[t]}" button${max > 1 ? "s" : ""}` });
+      }
     }
   });
 export type CreateMetaTemplateInput = z.infer<typeof createMetaTemplateInput>;
@@ -131,7 +191,7 @@ export function buildMetaTemplatePayload(v: CreateMetaTemplateInput, headerHandl
     ...(v.variables.length ? { example: { body_text: [v.variables.map((x) => x.example)] } } : {}),
   });
   if (v.footer) components.push({ type: "FOOTER", text: v.footer });
-  if (v.buttons.length) components.push({ type: "BUTTONS", buttons: v.buttons.map((text) => ({ type: "QUICK_REPLY", text })) });
+  if (v.buttons.length) components.push({ type: "BUTTONS", buttons: orderTemplateButtons(v.buttons) });
   return { name: v.name, language: v.language, category: v.category, parameter_format: "POSITIONAL", components };
 }
 
@@ -143,7 +203,7 @@ export function dispatchRowForCreated(v: CreateMetaTemplateInput) {
     languageCode: v.language,
     body: v.body.replace(/\{\{\s*(\d+)\s*\}\}/g, (_m, n: string) => `{{${v.variables[Number(n) - 1]?.field ?? n}}}`),
     variables: v.variables.map((x) => x.field),
-    buttonLabels: v.buttons,
+    buttonLabels: orderTemplateButtons(v.buttons).map((b) => b.text),
   };
 }
 
@@ -174,7 +234,7 @@ export type MetaImportPlan =
  * with {{1}} → {{first_name}}, {{2}} → {{business_name}}, quick-reply buttons in
  * order. Templates Dispatch can't send correctly are refused with the reason.
  */
-export function planMetaImport(t: MetaTemplateLike): MetaImportPlan {
+export function planMetaImport(t: MetaTemplateLike, fields: Record<string, DispatchTemplateField> = IMPORT_FIELDS): MetaImportPlan {
   const comps = t.components ?? [];
   const body = comps.find((c) => c.type?.toUpperCase() === "BODY")?.text ?? "";
   if (!body) return { ok: false, reason: "No body text" };
@@ -183,7 +243,7 @@ export function planMetaImport(t: MetaTemplateLike): MetaImportPlan {
     return { ok: false, reason: "Uses named variables ({{name}}) — Dispatch sends numbered variables only" };
   }
   const positions = [...new Set(ph)].sort((a, b) => Number(a) - Number(b));
-  if (positions.length > 2) {
+  if (positions.some((p) => !fields[p])) {
     return { ok: false, reason: `Has ${positions.length} variables — Dispatch can fill {{1}} (first name) and {{2}} (business name)` };
   }
   const warnings: string[] = [];
@@ -196,17 +256,50 @@ export function planMetaImport(t: MetaTemplateLike): MetaImportPlan {
   if (buttons.some((b) => b.type?.toUpperCase() === "URL" && placeholdersIn(b.url ?? "").length)) {
     return { ok: false, reason: "Has a URL button with a variable — not supported yet" };
   }
-  if (buttons.some((b) => (b.type ?? "").toUpperCase() !== "QUICK_REPLY")) warnings.push("Only quick-reply buttons are listed; other buttons still show in WhatsApp");
+  const known = (b: { type: string }) => (TEMPLATE_BUTTON_TYPES as readonly string[]).includes((b.type ?? "").toUpperCase());
+  if (buttons.some((b) => !known(b))) warnings.push("Only custom, website and call buttons are listed; other buttons still show in WhatsApp");
   return {
     ok: true,
     row: {
       name: humanizeTemplateName(t.name),
       providerTemplateName: t.name,
       languageCode: t.language,
-      body: body.replace(/\{\{\s*(\d+)\s*\}\}/g, (_m, n: string) => `{{${IMPORT_FIELDS[n] ?? n}}}`),
-      variables: positions.map((p) => IMPORT_FIELDS[p]!),
-      buttonLabels: buttons.filter((b) => (b.type ?? "").toUpperCase() === "QUICK_REPLY" && b.text).map((b) => b.text!).slice(0, 10),
+      body: body.replace(/\{\{\s*(\d+)\s*\}\}/g, (_m, n: string) => `{{${fields[n] ?? n}}}`),
+      variables: positions.map((p) => fields[p]!),
+      buttonLabels: buttons.filter((b) => known(b) && b.text).map((b) => b.text!).slice(0, 10),
     },
     warnings,
   };
+}
+
+export type MetaUpdatePlan =
+  | { ok: true; changes: string[]; row: { body: string; variables: string[]; buttonLabels: string[] }; warnings: string[] }
+  | { ok: false; reason: string };
+
+/**
+ * How a registered row follows its Meta template (same name + language): body,
+ * variables and buttons are taken from Meta, while each {{n}} keeps the
+ * recipient field the row already fills it from. `changes` lists what differs
+ * ("Body", "Variables", "Buttons"); empty means the row already matches Meta.
+ * The row's name, id and send history are never part of it.
+ */
+export function planMetaUpdate(
+  existing: { body: string; variables: unknown; buttonLabels: unknown },
+  t: MetaTemplateLike,
+): MetaUpdatePlan {
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  const fields: Record<string, DispatchTemplateField> = { ...IMPORT_FIELDS };
+  list(existing.variables).forEach((f, i) => {
+    if ((DISPATCH_TEMPLATE_FIELDS as readonly string[]).includes(f)) fields[String(i + 1)] = f as DispatchTemplateField;
+  });
+  const plan = planMetaImport(t, fields);
+  if (!plan.ok) return plan;
+  const { body, variables, buttonLabels } = plan.row;
+  const same = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+  const changes = [
+    ...(body !== existing.body ? ["Body"] : []),
+    ...(!same(variables, list(existing.variables)) ? ["Variables"] : []),
+    ...(!same(buttonLabels, list(existing.buttonLabels)) ? ["Buttons"] : []),
+  ];
+  return { ok: true, changes, row: { body, variables, buttonLabels }, warnings: plan.warnings };
 }

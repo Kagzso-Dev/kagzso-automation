@@ -2,7 +2,9 @@
 //
 //  Meta → Dispatch: templates in the WABA that aren't registered here yet are
 //  listed (with why any can't be used) and imported as new rows on request.
-//  Existing rows — including archived ones — are never edited or deleted.
+//  Registered rows whose body / variables / buttons differ from their Meta
+//  template (same name + language) are listed with what differs, and follow
+//  Meta only when an admin picks them. Rows are never deleted.
 //
 //  Dispatch → Meta: a template built in the "Create in Meta" form is submitted
 //  for review (POST /{waba-id}/message_templates) and registered here at once;
@@ -13,6 +15,7 @@ import {
   createWhatsAppTemplateInput,
   dispatchRowForCreated,
   planMetaImport,
+  planMetaUpdate,
   type CreateMetaTemplateInput,
 } from "@dispatch/shared";
 import { prisma } from "../prisma.js";
@@ -97,6 +100,83 @@ export async function importMetaTemplates(only?: { name: string; language: strin
   if (imported.length) resetTemplateVerifyCache();
   logger.info({ imported: imported.length, skipped: skipped.length }, "whatsapp templates imported from Meta");
   return { imported, skipped };
+}
+
+export interface SyncUpdate {
+  id: string;
+  name: string;
+  providerTemplateName: string;
+  languageCode: string;
+  status: string | null;
+  /** What differs from Meta: "Body", "Variables", "Buttons". */
+  changes: string[];
+  updatable: boolean;
+  reason: string | null;
+  warnings: string[];
+  /** Meta's version as it would be stored (body with {{field}} names). */
+  metaBody: string | null;
+  metaButtons: string[];
+}
+
+const templateRows = () =>
+  prisma.whatsAppTemplate.findMany({
+    where: { providerTemplateName: { not: null } },
+    select: { id: true, name: true, providerTemplateName: true, languageCode: true, body: true, variables: true, buttonLabels: true },
+  });
+
+/** Registered templates whose Meta template (same name + language) now differs from the row. */
+export async function findChangedMetaTemplates(): Promise<SyncUpdate[]> {
+  const [meta, rows] = await Promise.all([listMessageTemplates(), templateRows()]);
+  const byKey = new Map(meta.map((t) => [key(t.name, t.language), t]));
+  const out: SyncUpdate[] = [];
+  for (const r of rows) {
+    const t = byKey.get(key(r.providerTemplateName!, r.languageCode));
+    if (!t) continue; // not in Meta (or another language) — the Verify badge reports that
+    const plan = planMetaUpdate(r, t);
+    if (plan.ok && plan.changes.length === 0) continue;
+    out.push({
+      id: r.id,
+      name: r.name,
+      providerTemplateName: r.providerTemplateName!,
+      languageCode: r.languageCode,
+      status: t.status ?? null,
+      changes: plan.ok ? plan.changes : [],
+      updatable: plan.ok,
+      reason: plan.ok ? null : plan.reason,
+      warnings: plan.ok ? plan.warnings : [],
+      metaBody: plan.ok ? plan.row.body : null,
+      metaButtons: plan.ok ? plan.row.buttonLabels : [],
+    });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Make the picked rows follow their Meta template (body, variables, buttons). Name and id stay. */
+export async function updateFromMetaTemplates(ids: string[], actorEmail: string) {
+  const [meta, rows] = await Promise.all([listMessageTemplates(), templateRows()]);
+  const byKey = new Map(meta.map((t) => [key(t.name, t.language), t]));
+  const wanted = new Set(ids);
+  const updated: { id: string; name: string; changes: string[] }[] = [];
+  const skipped: { id: string; name: string; reason: string }[] = [];
+  for (const r of rows) {
+    if (!wanted.has(r.id)) continue;
+    const t = byKey.get(key(r.providerTemplateName!, r.languageCode));
+    if (!t) {
+      skipped.push({ id: r.id, name: r.name, reason: `Not found in Meta as ${r.providerTemplateName} (${r.languageCode})` });
+      continue;
+    }
+    const plan = planMetaUpdate(r, t);
+    if (!plan.ok) {
+      skipped.push({ id: r.id, name: r.name, reason: plan.reason });
+      continue;
+    }
+    if (plan.changes.length === 0) continue;
+    await prisma.whatsAppTemplate.update({ where: { id: r.id }, data: plan.row });
+    updated.push({ id: r.id, name: r.name, changes: plan.changes });
+  }
+  if (updated.length) resetTemplateVerifyCache();
+  logger.info({ updated: updated.map((u) => ({ id: u.id, changes: u.changes })), skipped: skipped.length, by: actorEmail }, "whatsapp templates updated from Meta");
+  return { updated, skipped };
 }
 
 /** Media a header example may be (Meta's Resumable Upload accepts JPEG, PNG, MP4, PDF). */

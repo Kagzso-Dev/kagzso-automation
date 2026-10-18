@@ -1,12 +1,15 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   createMetaTemplateInput,
   DISPATCH_TEMPLATE_FIELDS,
   META_TEMPLATE_LANGUAGES,
+  orderTemplateButtons,
   placeholdersIn,
+  TEMPLATE_BUTTON_LIMITS,
   toMetaTemplateName,
   type DispatchTemplateField,
+  type TemplateButtonType,
   type TemplateHeaderType,
 } from "@dispatch/shared";
 import { formatBytes, uploadWithProgress } from "../lib/whatsappMedia";
@@ -39,6 +42,105 @@ const HEADER_HINT: Record<string, string> = {
   DOCUMENT: "PDF, up to 100 MB",
 };
 
+/** A button row in the form; only the fields its type uses are submitted. */
+interface ButtonDraft {
+  type: TemplateButtonType;
+  text: string;
+  url: string;
+  phone_number: string;
+}
+const BUTTON_TYPE_LABEL: Record<TemplateButtonType, string> = {
+  QUICK_REPLY: "Custom",
+  URL: "Visit website",
+  VOICE_CALL: "Call on WhatsApp",
+  PHONE_NUMBER: "Call phone number",
+};
+const BUTTON_DEFAULT_TEXT: Record<TemplateButtonType, string> = {
+  QUICK_REPLY: "",
+  URL: "Visit website",
+  VOICE_CALL: "Call on WhatsApp",
+  PHONE_NUMBER: "Call us",
+};
+/** Meta's "Add button" menu, in Meta's order. Entries without a type need a value on every send. */
+const BUTTON_MENU: { group: string; items: { label: string; type?: TemplateButtonType; hint: string }[] }[] = [
+  { group: "Quick reply buttons", items: [{ label: "Custom", type: "QUICK_REPLY", hint: "Customer taps it to reply with this text" }] },
+  {
+    group: "Call-to-action buttons",
+    items: [
+      { label: "Visit website", type: "URL", hint: "Opens a web address (up to 2)" },
+      { label: "Call on WhatsApp", type: "VOICE_CALL", hint: "Starts a WhatsApp call to your business number" },
+      { label: "Call phone number", type: "PHONE_NUMBER", hint: "Dials a phone number" },
+      { label: "Complete flow", hint: "Not supported yet" },
+      { label: "Copy offer code", hint: "Not supported yet" },
+      { label: "Share contact info", hint: "Not supported yet" },
+    ],
+  },
+];
+const quickReply = (text: string): ButtonDraft => ({ type: "QUICK_REPLY", text, url: "", phone_number: "" });
+
+function toButtonInput(b: ButtonDraft) {
+  const text = b.text.trim();
+  if (b.type === "URL") return { type: b.type, text, url: b.url.trim() };
+  if (b.type === "PHONE_NUMBER") return { type: b.type, text, phone_number: b.phone_number.trim() };
+  return { type: b.type, text };
+}
+
+/** "+ Add button" with Meta's menu; types at their Meta limit are disabled. */
+function AddButtonMenu({ buttons, onAdd }: { buttons: ButtonDraft[]; onAdd: (type: TemplateButtonType) => void }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: Event) => {
+      if (!wrap.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+
+  const full = (t: TemplateButtonType) => buttons.filter((b) => b.type === t).length >= TEMPLATE_BUTTON_LIMITS[t];
+  return (
+    <div ref={wrap} className="relative inline-block">
+      <button type="button" className="text-xs text-accent-ink hover:underline" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        + Add button
+      </button>
+      {open && (
+        <div role="menu" className="absolute left-0 top-full z-20 mt-1 w-72 rounded-xl border border-line/70 bg-surface p-1.5 shadow-pop animate-dialog-in">
+          {BUTTON_MENU.map((g) => (
+            <div key={g.group} className="py-1">
+              <div className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-550">{g.group}</div>
+              {g.items.map((it) => {
+                const disabled = !it.type || full(it.type);
+                return (
+                  <button
+                    key={it.label}
+                    type="button"
+                    role="menuitem"
+                    disabled={disabled}
+                    className="flex w-full flex-col rounded-lg px-2 py-1.5 text-left text-sm transition-colors duration-150 hover:bg-tint disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+                    onClick={() => {
+                      onAdd(it.type!);
+                      setOpen(false);
+                    }}
+                  >
+                    <span>{it.label}</span>
+                    <span className="text-xs text-slate-550">{it.type && full(it.type) ? "Meta's limit reached" : it.hint}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function CreateInMetaForm({ onClose }: { onClose: () => void }) {
   const { appName } = useBranding();
   const qc = useQueryClient();
@@ -56,7 +158,7 @@ export function CreateInMetaForm({ onClose }: { onClose: () => void }) {
   const [body, setBody] = useState("Hi {{1}}, ");
   const [vars, setVars] = useState<{ field: DispatchTemplateField; example: string }[]>([{ field: "first_name", example: "" }]);
   const [footer, setFooter] = useState("");
-  const [buttons, setButtons] = useState<string[]>(["Yes, interested", "Not now"]);
+  const [buttons, setButtons] = useState<ButtonDraft[]>([quickReply("Yes, interested"), quickReply("Not now")]);
   const [progress, setProgress] = useState<number | null>(null);
   const [showErrors, setShowErrors] = useState(false);
 
@@ -77,8 +179,9 @@ export function CreateInMetaForm({ onClose }: { onClose: () => void }) {
     body,
     variables: rows,
     footer: footer || null,
-    buttons: buttons.map((b) => b.trim()).filter(Boolean),
+    buttons: buttons.map(toButtonInput),
   };
+  const setButton = (i: number, patch: Partial<ButtonDraft>) => setButtons(buttons.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   const check = createMetaTemplateInput.safeParse(input);
   const mediaHeader = headerType === "IMAGE" || headerType === "VIDEO" || headerType === "DOCUMENT";
   const problems = [
@@ -254,25 +357,54 @@ export function CreateInMetaForm({ onClose }: { onClose: () => void }) {
         </div>
 
         <div>
-          <label className="label">Quick-reply buttons (optional, up to 10)</label>
+          <label className="label">Buttons (optional, up to 10)</label>
           <div className="space-y-2">
             {buttons.map((b, i) => (
               <div key={i} className="flex gap-2">
-                <input
-                  className="input"
-                  maxLength={25}
-                  value={b}
-                  onChange={(e) => setButtons(buttons.map((x, j) => (j === i ? e.target.value : x)))}
-                />
-                <button type="button" className="btn-ghost px-2.5 text-crit" aria-label="Remove button" onClick={() => setButtons(buttons.filter((_, j) => j !== i))}>
+                <div className="grid flex-1 gap-2 sm:grid-cols-[8.5rem_1fr]">
+                  <span className="self-center text-xs font-medium text-slate-550">{BUTTON_TYPE_LABEL[b.type]}</span>
+                  <input
+                    className="input"
+                    maxLength={25}
+                    aria-label={`${BUTTON_TYPE_LABEL[b.type]} button text`}
+                    placeholder="Button text"
+                    value={b.text}
+                    onChange={(e) => setButton(i, { text: e.target.value })}
+                  />
+                  {b.type === "URL" && (
+                    <input
+                      className="input sm:col-start-2"
+                      type="url"
+                      aria-label="Website address"
+                      placeholder="https://kagzso.com"
+                      value={b.url}
+                      onChange={(e) => setButton(i, { url: e.target.value })}
+                    />
+                  )}
+                  {b.type === "PHONE_NUMBER" && (
+                    <input
+                      className="input sm:col-start-2"
+                      type="tel"
+                      aria-label="Phone number"
+                      placeholder="+919876543210"
+                      value={b.phone_number}
+                      onChange={(e) => setButton(i, { phone_number: e.target.value })}
+                    />
+                  )}
+                </div>
+                <button type="button" className="btn-ghost self-start px-2.5 text-crit" aria-label="Remove button" onClick={() => setButtons(buttons.filter((_, j) => j !== i))}>
                   ✕
                 </button>
               </div>
             ))}
             {buttons.length < 10 && (
-              <button type="button" className="text-xs text-accent-ink hover:underline" onClick={() => setButtons([...buttons, ""])}>
-                + Add button
-              </button>
+              <AddButtonMenu
+                buttons={buttons}
+                onAdd={(type) => setButtons([...buttons, { ...quickReply(BUTTON_DEFAULT_TEXT[type]), type }])}
+              />
+            )}
+            {buttons.some((b) => b.type === "QUICK_REPLY") && buttons.some((b) => b.type !== "QUICK_REPLY") && (
+              <p className="text-xs text-slate-550">Meta shows custom buttons first, then website and call buttons.</p>
             )}
           </div>
         </div>
@@ -314,11 +446,14 @@ export function CreateInMetaForm({ onClose }: { onClose: () => void }) {
             <div className="whitespace-pre-wrap break-words">{preview}</div>
             {footer && <div className="mt-1 text-xs text-slate-400">{footer}</div>}
           </div>
-          {input.buttons.map((b) => (
-            <div key={b} className="mt-1 rounded-lg bg-white py-1.5 text-center text-sm text-[#00a5f4] shadow-sm">
-              {b}
-            </div>
-          ))}
+          {orderTemplateButtons(buttons)
+            .filter((b) => b.text.trim())
+            .map((b, i) => (
+              <div key={i} className="mt-1 rounded-lg bg-white py-1.5 text-center text-sm text-[#00a5f4] shadow-sm">
+                {b.type === "URL" ? "↗ " : b.type === "QUICK_REPLY" ? "" : "✆ "}
+                {b.text}
+              </div>
+            ))}
         </div>
       </div>
     </div>
