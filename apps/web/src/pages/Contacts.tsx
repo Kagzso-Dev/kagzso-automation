@@ -42,6 +42,13 @@ const statusTone: Record<string, "ok" | "warn" | "crit" | "neutral"> = {
   COMPLAINED: "crit",
 };
 
+/**
+ * WhatsApp and AI Call entry points are not offered on Email Contacts (they live on
+ * the WhatsApp Contacts and Voicecall Contact pages). The code stays; it just isn't rendered here.
+ */
+const SHOW_WHATSAPP = false;
+const SHOW_AI_CALL = false;
+
 /** Phone is optional; when given it must be valid for its country (shared PhoneInput rules). */
 const phoneOk = (s: string) => phoneInputOk(s, false);
 /** Indian numbers are stored as 10 digits, other countries as +code…; show both with their code. */
@@ -180,19 +187,21 @@ export function ContactsPage() {
             >
               Send email{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}
             </button>
-            <button
-              className="btn-whatsapp"
-              disabled={!waConfigured}
-              title={
-                waConfigured
-                  ? "Send a WhatsApp template to the selected contacts that have a phone number"
-                  : WHATSAPP_NOT_CONFIGURED_HINT
-              }
-              onClick={openWaSend}
-            >
-              Send WhatsApp{waEligible.length > 0 ? ` (${waEligible.length})` : ""}
-            </button>
-            {aiCallsConfig.data?.enabled && (
+            {SHOW_WHATSAPP && (
+              <button
+                className="btn-whatsapp"
+                disabled={!waConfigured}
+                title={
+                  waConfigured
+                    ? "Send a WhatsApp template to the selected contacts that have a phone number"
+                    : WHATSAPP_NOT_CONFIGURED_HINT
+                }
+                onClick={openWaSend}
+              >
+                Send WhatsApp{waEligible.length > 0 ? ` (${waEligible.length})` : ""}
+              </button>
+            )}
+            {SHOW_AI_CALL && aiCallsConfig.data?.enabled && (
               <button
                 className="btn-ghost"
                 disabled={!aiCallsConfig.data.configured || !aiCallsConfig.data.canStart}
@@ -251,7 +260,7 @@ export function ContactsPage() {
         approved sending list (Settings) are skipped.
       </p>
 
-      {waConfigured && selectedIds.size > 0 && waSkippedNoPhone > 0 && (
+      {SHOW_WHATSAPP && waConfigured && selectedIds.size > 0 && waSkippedNoPhone > 0 && (
         <div className="mb-3 text-xs text-warn">
           {waSkippedNoPhone} contact{waSkippedNoPhone === 1 ? "" : "s"} skipped for WhatsApp — no
           phone number.
@@ -399,14 +408,16 @@ export function ContactsPage() {
         </>
       )}
 
-      <SendWhatsApp
-        recipients={waRecipients}
-        source="contacts"
-        onClose={() => setWaSendOpen(false)}
-        onSelectionConsumed={() => setSelectedIds(new Set())}
-      />
+      {SHOW_WHATSAPP && (
+        <SendWhatsApp
+          recipients={waRecipients}
+          source="contacts"
+          onClose={() => setWaSendOpen(false)}
+          onSelectionConsumed={() => setSelectedIds(new Set())}
+        />
+      )}
 
-      {aiCallsConfig.data?.enabled && (
+      {SHOW_AI_CALL && aiCallsConfig.data?.enabled && (
         <AiCallModal open={aiCallOpen} onClose={() => setAiCallOpen(false)} config={aiCallsConfig.data} />
       )}
 
