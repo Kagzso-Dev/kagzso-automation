@@ -23,6 +23,8 @@
     "prisma:studio": "node scripts/prisma.mjs studio",
     "db:seed": "tsx prisma/seed.ts",
     "db:seed:plan": "tsx prisma/seed.ts --dry-run",
+    "contacts:restore:plan": "tsx prisma/restoreFailedContacts.ts",
+    "contacts:restore": "tsx prisma/restoreFailedContacts.ts --apply",
     "seed": "npm run db:seed",
     "test": "npm run test --workspace @dispatch/api",
     "typecheck": "npm-run-all typecheck:*",

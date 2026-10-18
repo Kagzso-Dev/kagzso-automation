@@ -114,7 +114,7 @@ type ItemSeed = {
 export async function createWhatsAppSendBatch(args: {
   templateId: string;
   recipients: WhatsAppRecipient[];
-  /** Lead-gen: delete these contacts once the batch finishes. */
+  /** Lead-gen: delete these contacts once Meta confirms delivery to them (never on failure). */
   purge?: { table: "whatsapp" | "contact"; ids: string[] };
 }): Promise<string> {
   const template = await prisma.whatsAppTemplate.findUnique({ where: { id: args.templateId } });
@@ -167,6 +167,7 @@ export async function createWhatsAppSendBatch(args: {
       maxDelaySec,
       total: items.length,
       purgeAfter: !!args.purge,
+      ...(args.purge ? { purgeTable: args.purge.table, purgeIds: args.purge.ids } : {}),
       items: { create: items.map((i) => ({ ...i, templateId: template.id })) },
     },
   });

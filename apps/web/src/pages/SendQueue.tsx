@@ -332,7 +332,7 @@ function EmailQueue({ view, setView }: QueueViewProps) {
                     <div className="font-mono text-xs text-slate-550">{b.id.slice(0, 8)}</div>
                     {b.purgeAfter && (
                       <div className="mt-0.5 text-[11px] text-slate-400">
-                        {b.status === "RUNNING" ? "will remove contacts" : "contacts removed"}
+                        {b.status === "RUNNING" ? "will remove reached contacts" : "reached contacts removed"}
                       </div>
                     )}
                   </td>
@@ -571,7 +571,7 @@ function WhatsAppQueue({ view, setView }: QueueViewProps) {
                     <div className="font-mono text-xs text-slate-550">{b.id.slice(0, 8)}</div>
                     {b.purgeAfter && (
                       <div className="mt-0.5 text-[11px] text-slate-400">
-                        {b.status === "RUNNING" ? "will remove contacts" : "contacts removed"}
+                        {b.status === "RUNNING" ? "will remove reached contacts" : "reached contacts removed"}
                       </div>
                     )}
                   </td>

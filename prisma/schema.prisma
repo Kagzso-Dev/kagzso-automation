@@ -274,8 +274,8 @@ model ManualSendBatch {
   total       Int
   nextItemAt  DateTime? // when the next send is scheduled — drives the "next in Ns" countdown
   retryOfId   String? // set when this batch is a "retry failed" of an earlier one
-  // Lead-generation flow: when true, every contact this batch targeted is
-  // deleted once the batch finishes (see queue/manualBulkSend finish()).
+  // Lead-generation flow: when true, contacts this batch emailed successfully
+  // (item SENT) are deleted once the batch finishes. Failed / skipped are kept.
   purgeAfter  Boolean               @default(false)
   createdAt   DateTime              @default(now())
   updatedAt   DateTime              @updatedAt
@@ -369,9 +369,12 @@ model WhatsAppSendBatch {
   status      WhatsAppBatchStatus @default(RUNNING)
   total       Int
   nextItemAt  DateTime? // when the next send is scheduled — drives the "next in Ns" countdown
-  // Lead-generation flow: when true, every recipient this batch targeted is
-  // deleted once the batch finishes (see queue/whatsappBulkSend finish()).
+  // Lead-generation flow: when true, recipients whose message Meta confirms as
+  // DELIVERED / READ are deleted (at batch end, or when the confirmation arrives
+  // later). Failed and skipped recipients are never deleted.
   purgeAfter  Boolean             @default(false)
+  purgeTable  String?             @db.VarChar(16) // "whatsapp" | "contact": which table purgeIds are in
+  purgeIds    Json? // contact ids this batch may delete (string[])
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
   template    WhatsAppTemplate    @relation(fields: [templateId], references: [id])

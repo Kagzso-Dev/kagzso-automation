@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const db = vi.hoisted(() => ({
   manualSendBatch: { findUnique: vi.fn(), update: vi.fn() },
-  manualSendBatchItem: { findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn(), count: vi.fn(), groupBy: vi.fn() },
+  manualSendBatchItem: { findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), count: vi.fn(), groupBy: vi.fn() },
   emailLog: { findUnique: vi.fn(), deleteMany: vi.fn() },
   contact: { deleteMany: vi.fn() },
   $transaction: vi.fn(),
@@ -51,6 +51,12 @@ describe("processManualBulkSend (characterization)", () => {
     db.manualSendBatchItem.findFirst.mockResolvedValueOnce(null);
     await expect(processManualBulkSend({ batchId: "b1" })).resolves.toEqual({ done: true, SENT: 4 });
     expect(db.manualSendBatch.update).toHaveBeenCalledWith({ where: { id: "b1" }, data: { status: "DONE", nextItemAt: null } });
+    // An item left SENDING by a worker restart is marked FAILED once — never left pending or re-queued.
+    expect(db.manualSendBatchItem.updateMany).toHaveBeenCalledWith({
+      where: { batchId: "b1", status: "SENDING" },
+      data: { status: "FAILED", error: expect.stringMatching(/Interrupted/) },
+    });
+    expect(db.contact.deleteMany).not.toHaveBeenCalled(); // no purge without purgeAfter
   });
 
   it("daily cap reached: parks the batch until the next window, nothing sent", async () => {
@@ -108,7 +114,26 @@ describe("processManualBulkSend (characterization)", () => {
     expect(db.manualSendBatch.update).toHaveBeenLastCalledWith({ where: { id: "b1" }, data: { nextItemAt: null } });
   });
 
-  it("last item sent: DONE; purgeAfter deletes the batch's contacts and their email logs", async () => {
+  it("last item sent: DONE; purgeAfter deletes only the contacts emailed successfully, never failed / skipped", async () => {
+    db.manualSendBatch.findUnique.mockResolvedValue({ ...batch, purgeAfter: true });
+    db.manualSendBatchItem.count.mockResolvedValueOnce(0);
+    db.manualSendBatchItem.findMany.mockResolvedValueOnce([{ contactId: "c1" }, { contactId: "c2" }, { contactId: "c1" }]);
+    db.emailLog.deleteMany.mockReturnValueOnce("del-logs");
+    db.contact.deleteMany.mockReturnValueOnce("del-contacts");
+    await expect(processManualBulkSend({ batchId: "b1" })).resolves.toEqual({ done: true, SENT: 4 });
+    expect(db.manualSendBatchItem.findMany).toHaveBeenCalledWith({ where: { batchId: "b1", status: "SENT" }, select: { contactId: true } });
+  });
+
+  it("purgeAfter with only failed / skipped items deletes nothing", async () => {
+    db.manualSendBatch.findUnique.mockResolvedValue({ ...batch, purgeAfter: true });
+    db.manualSendBatchItem.findFirst.mockResolvedValueOnce(null);
+    db.manualSendBatchItem.findMany.mockResolvedValueOnce([]); // no SENT items
+    await expect(processManualBulkSend({ batchId: "b1" })).resolves.toMatchObject({ done: true });
+    expect(db.contact.deleteMany).not.toHaveBeenCalled();
+    expect(db.emailLog.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("purgeAfter deletes the SENT contacts and their email logs", async () => {
     db.manualSendBatch.findUnique.mockResolvedValue({ ...batch, purgeAfter: true });
     db.manualSendBatchItem.count.mockResolvedValueOnce(0);
     db.manualSendBatchItem.findMany.mockResolvedValueOnce([{ contactId: "c1" }, { contactId: "c2" }, { contactId: "c1" }]);

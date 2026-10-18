@@ -26,6 +26,12 @@ function intOr(v: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+/** WHATSAPP_131049_COOLDOWN_HOURS: whole hours, 0 turns the cooldown off; missing / invalid = 24. */
+function cooldownHours(v: string | undefined): number {
+  const n = Number.parseInt((v ?? "").trim(), 10);
+  return Number.isFinite(n) && n >= 0 ? n : 24;
+}
+
 /** "24.0" → "v24.0"; anything already starting with "v" is kept as-is. */
 function graphVersion(v: string | undefined): string {
   const t = str(v) ?? "v24.0";
@@ -62,6 +68,12 @@ export const whatsappConfig = {
   defaultCountryCode: defaultCountryCode || undefined,
   minDelaySec,
   maxDelaySec,
+  /**
+   * After Meta refuses a marketing template to a number with 131049 ("healthy
+   * ecosystem"), skip further marketing templates to it for this many hours
+   * (0 = off). Nothing is retried automatically; the contact is never changed.
+   */
+  marketingCooldownHours: cooldownHours(process.env.WHATSAPP_131049_COOLDOWN_HOURS),
   /**
    * Private folder for WhatsApp media (template headers, customer files, reply
    * attachments). Never served statically — only through authenticated routes.

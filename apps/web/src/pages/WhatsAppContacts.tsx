@@ -17,12 +17,40 @@ interface WContact {
   businessName?: string | null;
   status: string;
   createdAt: string;
+  /** Display only: the latest WhatsApp send to this number (never hides the contact or blocks a send). */
+  lastResult?: { status: string; errorCode: string | null; at: string; cooldownUntil: string | null } | null;
 }
 interface Page {
   items: WContact[];
   total: number;
   page: number;
   pageSize: number;
+}
+
+const RESULT_TONE: Record<string, "ok" | "warn" | "crit" | "neutral"> = {
+  READ: "ok",
+  DELIVERED: "ok",
+  SENT: "neutral",
+  QUEUED: "neutral",
+  SENDING: "neutral",
+  SKIPPED: "warn",
+  FAILED: "crit",
+};
+
+/** "Failed · 131049", with the cooldown end when one applies. */
+function LastResult({ r }: { r: WContact["lastResult"] }) {
+  if (!r) return <span className="text-slate-400">—</span>;
+  const label = `${r.status.charAt(0)}${r.status.slice(1).toLowerCase()}${r.errorCode ? ` · ${r.errorCode}` : ""}`;
+  return (
+    <span title={`Latest WhatsApp send: ${new Date(r.at).toLocaleString()}`}>
+      <Badge tone={RESULT_TONE[r.status] ?? "neutral"}>{label}</Badge>
+      {r.cooldownUntil && (
+        <span className="mt-0.5 block text-[11px] text-slate-550">
+          Marketing templates skipped until {new Date(r.cooldownUntil).toLocaleString()}
+        </span>
+      )}
+    </span>
+  );
 }
 
 const STATUSES = ["ACTIVE", "UNSUBSCRIBED", "BLOCKED"];
@@ -266,6 +294,7 @@ export function WhatsAppContactsPage() {
               "Name",
               "Business",
               "Status",
+              "Last result",
               "Added",
               "",
             ]}
@@ -290,6 +319,9 @@ export function WhatsAppContactsPage() {
                 <td className="px-4 py-2.5">{c.businessName || "—"}</td>
                 <td className="px-4 py-2.5">
                   <Badge tone={statusTone[c.status] ?? "neutral"}>{c.status}</Badge>
+                </td>
+                <td className="px-4 py-2.5">
+                  <LastResult r={c.lastResult} />
                 </td>
                 <td className="px-4 py-2.5 text-slate-550">
                   {new Date(c.createdAt).toLocaleDateString()}

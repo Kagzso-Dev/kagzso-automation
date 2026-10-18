@@ -19,13 +19,15 @@ async function countByStatus(batchId: string): Promise<Record<string, number>> {
 }
 
 /**
- * Lead-generation flow: delete every contact this batch targeted (sent, failed
- * and skipped alike). EmailLog has no cascade rule so it's cleared first;
- * list memberships and the unsubscribe row cascade on the contact delete.
+ * Lead-generation flow: delete the contacts this batch emailed successfully
+ * (item SENT). Failed and skipped contacts are kept, untouched, so a failure
+ * never costs a contact and they can be emailed again. EmailLog has no cascade
+ * rule so it's cleared first; list memberships and the unsubscribe row cascade
+ * on the contact delete.
  */
 async function purgeBatchContacts(batchId: string): Promise<number> {
   const items = await prisma.manualSendBatchItem.findMany({
-    where: { batchId },
+    where: { batchId, status: "SENT" },
     select: { contactId: true },
   });
   const ids = [...new Set(items.map((i) => i.contactId))];
@@ -41,6 +43,12 @@ async function finish(batchId: string, purgeAfter: boolean): Promise<Record<stri
   await prisma.manualSendBatch.update({
     where: { id: batchId },
     data: { status: "DONE", nextItemAt: null },
+  });
+  // A send interrupted mid-flight (worker restart) would otherwise stay SENDING for ever.
+  // Marked FAILED once; never re-queued.
+  await prisma.manualSendBatchItem.updateMany({
+    where: { batchId, status: "SENDING" },
+    data: { status: "FAILED", error: "Interrupted while sending (worker restarted) — not retried automatically" },
   });
   const counts = await countByStatus(batchId);
   logger.info({ batchId, ...counts }, "manual drip batch complete");

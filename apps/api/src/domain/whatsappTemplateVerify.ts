@@ -97,8 +97,8 @@ export function resetTemplateVerifyCache() {
   cache = null;
 }
 
-/** Verification for every registered template. `refresh` re-reads Meta (at most every 10 s). */
-export async function getTemplateVerification(refresh = false) {
+/** Meta's template list, cached for CACHE_MS (an Error when Meta couldn't be read). */
+async function metaTemplates(refresh = false): Promise<MetaMessageTemplate[] | Error> {
   const now = Date.now();
   const stale = !cache || now - cache.at > CACHE_MS || (refresh && now - cache.at > MIN_REFRESH_MS);
   if (stale) {
@@ -111,6 +111,19 @@ export async function getTemplateVerification(refresh = false) {
     }
     cache = { at: now, meta };
   }
+  return cache!.meta;
+}
+
+/** Meta's category for a template ("MARKETING", "UTILITY" …), or null when unknown / Meta unreachable. */
+export async function metaTemplateCategory(name: string, language: string): Promise<string | null> {
+  const meta = await metaTemplates();
+  if (meta instanceof Error) return null;
+  return meta.find((t) => t.name === name && t.language === language)?.category?.toUpperCase() ?? null;
+}
+
+/** Verification for every registered template. `refresh` re-reads Meta (at most every 10 s). */
+export async function getTemplateVerification(refresh = false) {
+  await metaTemplates(refresh);
   const rows = await prisma.whatsAppTemplate.findMany({
     select: { id: true, providerTemplateName: true, languageCode: true },
   });

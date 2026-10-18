@@ -77,7 +77,7 @@ function SendBody({
 }) {
   const toast = useToast();
   const [templateId, setTemplateId] = useState("");
-  const [purgeAfter, setPurgeAfter] = useState(true);
+  const [purgeAfter, setPurgeAfter] = useState(false);
 
   const templates = useQuery({
     queryKey: ["whatsapp-templates"],
@@ -112,7 +112,7 @@ function SendBody({
     onSuccess: () => {
       toast.success("WhatsApp send started", [
         "Track progress on the Send Queue page (WhatsApp tab).",
-        ...(purgeAfter ? ["Contacts the message reaches will be deleted once the batch finishes."] : []),
+        ...(purgeAfter ? ["Contacts are deleted only once Meta confirms the message was delivered. Failed contacts are kept."] : []),
       ]);
       onSelectionConsumed?.();
       onClose();
@@ -168,10 +168,10 @@ function SendBody({
           onChange={(e) => setPurgeAfter(e.target.checked)}
         />
         <span>
-          Remove these contacts after the batch finishes
+          Remove contacts the message reaches
           <span className="block text-xs text-slate-550">
-            For lead-generation blasts — once every message is done, deletes the recipients the
-            message was sent to. Failed or skipped recipients are kept so you can retry them.
+            For lead-generation blasts — deletes a recipient only once Meta confirms the message was
+            delivered. Failed, skipped or unconfirmed recipients are never deleted.
           </span>
         </span>
       </label>

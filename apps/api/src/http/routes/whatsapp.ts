@@ -24,6 +24,7 @@ import { getTemplateVerification } from "../../domain/whatsappTemplateVerify.js"
 import { getArchivedTemplateIds, setTemplateArchived } from "../../domain/whatsappTemplateArchive.js";
 import { getHeaderMediaMap, headerKindForFormat } from "../../domain/whatsappTemplateHeader.js";
 import { mediaView } from "../../domain/whatsappMedia.js";
+import { ECOSYSTEM_LIMIT_CODE } from "../../domain/whatsappCooldown.js";
 import { formatFromFilename, parseWhatsAppContactFile } from "../../domain/whatsappImport.js";
 import {
   createWhatsAppSendBatch,
@@ -119,7 +120,34 @@ whatsappRouter.get(
       }),
       prisma.whatsAppContact.count({ where }),
     ]);
-    res.json({ items, total, page: q.page, pageSize: q.pageSize });
+    // Display only: each contact's latest WhatsApp result, read from the send history.
+    // Never stored on the contact, never hides it and never blocks a manual send.
+    const latest = await prisma.whatsAppSend.findMany({
+      where: { phone: { in: items.map((c) => c.phone) } },
+      orderBy: { createdAt: "desc" },
+      distinct: ["phone"],
+      select: { phone: true, status: true, errorCode: true, createdAt: true, sentAt: true, deliveredAt: true, readAt: true, failedAt: true },
+    });
+    const byPhone = new Map(latest.map((s) => [s.phone, s]));
+    const cooldownMs = whatsappConfig.marketingCooldownHours * 60 * 60 * 1000;
+    res.json({
+      items: items.map((c) => {
+        const s = byPhone.get(c.phone);
+        const cooldownUntil =
+          s?.errorCode === ECOSYSTEM_LIMIT_CODE && s.failedAt && cooldownMs && s.failedAt.getTime() + cooldownMs > Date.now()
+            ? new Date(s.failedAt.getTime() + cooldownMs)
+            : null;
+        return {
+          ...c,
+          lastResult: s
+            ? { status: s.status, errorCode: s.errorCode, at: s.failedAt ?? s.readAt ?? s.deliveredAt ?? s.sentAt ?? s.createdAt, cooldownUntil }
+            : null,
+        };
+      }),
+      total,
+      page: q.page,
+      pageSize: q.pageSize,
+    });
   }),
 );
 

@@ -6,6 +6,7 @@
 import type { WhatsAppSendStatus } from "@prisma/client";
 import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
+import { purgeConfirmedRecipient } from "../queue/whatsappBulkSend.js";
 
 // Rank so status only ever advances. FAILED is highest — once Meta reports a
 // message failed, a stray out-of-order "sent"/"delivered" redelivery of the
@@ -72,4 +73,6 @@ export async function applyWhatsAppStatusEvent(ev: WhatsAppStatusEvent): Promise
 
   await prisma.whatsAppSend.update({ where: { id: send.id }, data });
   logger.info({ whatsappSendId: send.id, status: mapped }, "whatsapp status event applied");
+  // Lead-gen batches delete a recipient only once delivery is confirmed (never on a failure).
+  if (mapped === "DELIVERED" || mapped === "READ") await purgeConfirmedRecipient(send.id);
 }

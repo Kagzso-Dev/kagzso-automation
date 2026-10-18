@@ -521,7 +521,7 @@ function SendEmailBody({
 }) {
   const toast = useToast();
   const [templateId, setTemplateId] = useState("");
-  const [purgeAfter, setPurgeAfter] = useState(true);
+  const [purgeAfter, setPurgeAfter] = useState(false);
 
   const start = useMutation({
     mutationFn: () =>
@@ -533,7 +533,7 @@ function SendEmailBody({
     onSuccess: () => {
       toast.success("Send started", [
         "Track progress on the Send Queue page (Email tab).",
-        ...(purgeAfter ? ["These contacts will be deleted once the batch finishes."] : []),
+        ...(purgeAfter ? ["Contacts emailed successfully will be deleted once the batch finishes. Failed ones are kept."] : []),
       ]);
       onSent();
       onClose();
@@ -564,10 +564,10 @@ function SendEmailBody({
           onChange={(e) => setPurgeAfter(e.target.checked)}
         />
         <span>
-          Remove these contacts after the batch finishes
+          Remove contacts emailed successfully
           <span className="block text-xs text-slate-550">
-            For lead-generation blasts — deletes all {contacts.length} recipient
-            {contacts.length === 1 ? "" : "s"} (and their email history) once every send is done.
+            For lead-generation blasts — once every send is done, deletes the recipients whose email
+            was sent (and their email history). Failed or skipped recipients are never deleted.
           </span>
         </span>
       </label>
