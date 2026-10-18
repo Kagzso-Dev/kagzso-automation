@@ -27,6 +27,8 @@
     "contacts:restore": "tsx prisma/restoreFailedContacts.ts --apply",
     "followups:interested:plan": "tsx prisma/cancelInterestedFollowups.ts",
     "followups:interested": "tsx prisma/cancelInterestedFollowups.ts --apply",
+    "callflow:import:plan": "tsx prisma/importCallFlow.ts",
+    "callflow:import": "tsx prisma/importCallFlow.ts --apply",
     "seed": "npm run db:seed",
     "test": "npm run test --workspace @dispatch/api",
     "typecheck": "npm-run-all typecheck:*",
