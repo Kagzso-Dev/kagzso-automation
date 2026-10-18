@@ -26,14 +26,14 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/", label: "Dashboard", icon: "dashboard", end: true },
       { to: "/insights", label: "Insights", icon: "insights", hideKey: "insights" },
-      { to: "/contacts", label: "Contacts", icon: "contacts" },
       { to: "/lists", label: "Lists", icon: "lists", hideKey: "lists" },
     ],
   },
   {
     label: "Email",
     items: [
-      { to: "/templates", label: "Templates", icon: "templates" },
+      { to: "/contacts", label: "Email Contacts", icon: "contacts" },
+      { to: "/templates", label: "Email Templates", icon: "templates" },
       { to: "/campaigns", label: "Campaigns", icon: "campaigns", hideKey: "campaigns" },
       { to: "/triggers", label: "Triggers", icon: "triggers", hideKey: "triggers" },
     ],
@@ -44,19 +44,21 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/whatsapp-contacts", label: "WhatsApp Contacts", icon: "whatsapp" },
       { to: "/whatsapp-templates", label: "WhatsApp Templates", icon: "whatsapp" },
       { to: "/whatsapp-inbox", label: "WhatsApp Inbox", icon: "inbox", hideKey: "whatsapp-inbox" },
-      { to: "/send-queue", label: "Send Queue", icon: "activity" },
     ],
   },
   {
     label: "Calls",
     items: [
-      { to: "/ai-call-customers", label: "AI Call Customers", icon: "phone" },
-      { to: "/call-flows", label: "Call Flows", icon: "phone" },
+      { to: "/ai-call-customers", label: "Voicecall Contact", icon: "phone" },
+      { to: "/call-flows", label: "Voice Call Flows", icon: "phone" },
     ],
   },
   {
     label: "System",
-    items: [{ to: "/settings", label: "Settings", icon: "settings", hideKey: "settings-editors" }],
+    items: [
+      { to: "/send-queue", label: "Send Queue", icon: "activity" },
+      { to: "/settings", label: "Settings", icon: "settings", hideKey: "settings-editors" },
+    ],
   },
 ];
 
@@ -69,10 +71,10 @@ function cx(...parts: Array<string | false | null | undefined>) {
 export function Layout({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
   const location = useLocation();
-  // "Call Flows" shows for admins and editors while ENABLE_AI_CALLS + ENABLE_CALL_FLOW_EDITOR are on.
+  // "Voice Call Flows" (/call-flows) shows for admins and editors while ENABLE_AI_CALLS + ENABLE_CALL_FLOW_EDITOR are on.
   const aiCalls = useAiCallsConfig();
   const showCallFlows = !!aiCalls.data?.flowEditor && !!aiCalls.data.canStart;
-  // "AI Call Customers" only shows for admins while ENABLE_AI_CALLS is on.
+  // "Voicecall Contact" (/ai-call-customers) only shows for admins while ENABLE_AI_CALLS is on.
   const showAiCustomers = !!aiCalls.data?.enabled && !!aiCalls.data.canStart;
   // Optional items an admin hid in Settings → Sidebar menu (workspace-wide).
   const hidden = new Set<string>(useSidebarHiddenItems());
