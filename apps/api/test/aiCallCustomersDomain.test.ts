@@ -265,7 +265,7 @@ describe("confirmed Interested: no automatic follow-ups", () => {
     await customers.setCustomerStage(c.id, "INTERESTED", ADMIN);
 
     expect(pending(c.id)).toHaveLength(0);
-    expect(T("aiCallFollowup").find((f) => f.id === draft!.id)).toMatchObject({ status: "CANCELLED", error: "interested" });
+    expect(T("aiCallFollowup").find((f) => f.id === draft!.id)).toMatchObject({ status: "CANCELLED", error: "positive_review" });
     expect(T("aiCallFollowup").find((f) => f.id === "f-approved")!.status).toBe("APPROVED"); // already handed over: untouched
     expect(T("aiCallFollowup")).toHaveLength(2); // nothing deleted
     expect(cust(c.id)).toMatchObject({ ...before, stage: "INTERESTED", needsReview: false });
@@ -293,6 +293,42 @@ describe("confirmed Interested: no automatic follow-ups", () => {
     expect(now).toHaveLength(1);
     expect(cancelled).not.toContain(now[0]!.id);
     expect(T("aiCallFollowup").filter((f) => cancelled.includes(f.id)).every((f) => f.status === "CANCELLED")).toBe(true);
+  });
+});
+
+describe("confirmed Approved: same as confirmed Interested", () => {
+  it("Approve on a suggested Interested (e.g. Suganya) cancels its pending draft; the customer stays listed, unchanged otherwise", async () => {
+    const { c, log } = await calledCustomer();
+    await applyVoiceUpdate(log.id, { status: "completed", outcome: "interested" });
+    const [draft] = pending(c.id);
+    const before = { ...cust(c.id) };
+
+    await customers.setCustomerStage(c.id, "APPROVED", ADMIN);
+
+    expect(pending(c.id)).toHaveLength(0);
+    expect(T("aiCallFollowup").find((f) => f.id === draft!.id)).toMatchObject({ status: "CANCELLED", error: "positive_review" });
+    expect(cust(c.id)).toMatchObject({ ...before, stage: "APPROVED", needsReview: false });
+    expect((await customers.listCustomers({ page: 1, pageSize: 25 })).items.map((x: Row) => x.id)).toContain(c.id);
+    expect((await customers.callableCustomers()).map((x: Row) => x.id)).toContain(c.id);
+    expect(await followups.createFollowupDrafts(cust(c.id) as any, "APPROVED")).toEqual([]);
+  });
+
+  it("Approved back to Follow-up needed: queued again normally; cancelled drafts stay cancelled", async () => {
+    const { c, log } = await calledCustomer();
+    await applyVoiceUpdate(log.id, { status: "completed", outcome: "interested" });
+    await customers.setCustomerStage(c.id, "APPROVED", ADMIN);
+    const cancelled = T("aiCallFollowup").filter((f) => f.status === "CANCELLED").map((f) => f.id);
+
+    await customers.setCustomerStage(c.id, "FOLLOW_UP_NEEDED", ADMIN);
+
+    expect(pending(c.id)).toHaveLength(1);
+    expect(cancelled).not.toContain(pending(c.id)[0]!.id);
+  });
+
+  it("other stages keep their behaviour: Callback requested still creates a call-again draft", async () => {
+    const { c } = await calledCustomer();
+    await customers.setCustomerStage(c.id, "CALLBACK_REQUESTED", ADMIN);
+    expect(pending(c.id).map((f) => f.channel)).toEqual(["CALL"]);
   });
 });
 

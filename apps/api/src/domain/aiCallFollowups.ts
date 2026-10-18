@@ -57,12 +57,15 @@ export function canWhatsApp(c: Pick<AiCallCustomer, "whatsappOptIn" | "phone">):
   return c.whatsappOptIn && normalizeWhatsAppPhone(c.phone, "91") !== null;
 }
 
-/** Why a draft was cancelled because a person confirmed the customer as Interested. */
-export const INTERESTED_CANCEL_REASON = "interested";
+/** Why a draft was cancelled because a person confirmed the customer as positive. */
+export const POSITIVE_CANCEL_REASON = "positive_review";
 
-/** A person confirmed Interested (not just suggested by a call): no automatic follow-ups. */
-export function isConfirmedInterested(c: Pick<AiCallCustomer, "stage" | "needsReview">): boolean {
-  return c.stage === "INTERESTED" && !c.needsReview;
+/** Stages that, once a person confirms them, hand the customer over: no automatic follow-ups. */
+export const POSITIVE_STAGES = ["INTERESTED", "APPROVED"] as const;
+
+/** A person confirmed Interested or Approved (not just suggested by a call): no automatic follow-ups. */
+export function isConfirmedPositive(c: Pick<AiCallCustomer, "stage" | "needsReview">): boolean {
+  return (POSITIVE_STAGES as readonly string[]).includes(c.stage) && !c.needsReview;
 }
 
 /** Cancel drafts still waiting for approval (all of them, or only those from one call). */
@@ -88,15 +91,15 @@ export async function cancelPendingFollowups(
 /**
  * Create the follow-up drafts a stage calls for (see followupsForStage). A
  * channel that already has a draft waiting for approval is not duplicated.
- * A customer a person confirmed as Interested gets none (a suggested Interested
- * from a call still does, until someone reviews it).
+ * A customer a person confirmed as Interested or Approved gets none (a suggested
+ * Interested from a call still does, until someone reviews it).
  */
 export async function createFollowupDrafts(
   customer: AiCallCustomer,
   stage: AiCallStage,
   opts: { sourceCallLogId?: string | null; actorEmail?: string | null } = {},
 ): Promise<AiCallFollowup[]> {
-  if (isConfirmedInterested(customer)) return [];
+  if (isConfirmedPositive(customer)) return [];
   const noAnswerRetries = await prisma.aiCallFollowup.count({
     where: { customerId: customer.id, channel: "CALL", reason: REASON.NO_ANSWER, status: { not: "CANCELLED" } },
   });
