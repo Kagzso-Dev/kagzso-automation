@@ -9,7 +9,7 @@ import type { VoiceOption } from "../lib/callFlows";
  * saved by the editor's own Save button.
  */
 
-export const DEFAULT_SAMPLE = "Hi, is this Ragul?";
+export const DEFAULT_SAMPLE = "Hello, am I speaking with Ragul?";
 
 /** Previews already fetched this session: voice + text → object URL. */
 const played = new Map<string, string>();
