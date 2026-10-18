@@ -63,10 +63,10 @@ def test_followup_detail_is_sanitized_and_capped():
 
 
 @pytest.mark.parametrize("variables,expected", [
-    ({"customer_name": "Ragul", "gender": "male"}, "Hello Mr. Ragul, this is Nila from Kagzso AI and Automation."),
-    ({"customer_name": "Priya", "gender": "female"}, "Hello Ms. Priya, this is Nila from Kagzso AI and Automation."),
-    ({"customer_name": "Sam", "gender": "unknown"}, "Hello Sam, this is Nila from Kagzso AI and Automation."),
-    ({}, "Hello, this is Nila from Kagzso AI and Automation."),
+    ({"customer_name": "Ragul", "gender": "male"}, "Hello Mr. Ragul, this is Thaara from Kagzso AI and Automation."),
+    ({"customer_name": "Priya", "gender": "female"}, "Hello Ms. Priya, this is Thaara from Kagzso AI and Automation."),
+    ({"customer_name": "Sam", "gender": "unknown"}, "Hello Sam, this is Thaara from Kagzso AI and Automation."),
+    ({}, "Hello, this is Thaara from Kagzso AI and Automation."),
 ])
 def test_followup_first_message(variables, expected):
     assert llm.render_first_message(llm.FOLLOWUP_AGENT["first_message"], variables).startswith(expected)
@@ -213,5 +213,5 @@ def test_followup_prompt_without_detail_explains_what_kagzso_does():
 
 def test_followup_first_message_says_what_we_do():
     text = llm.render_first_message(llm.FOLLOWUP_AGENT["first_message"], {"customer_name": "Raagul", "gender": "male"})
-    assert text == ("Hello Mr. Raagul, this is Nila from Kagzso AI and Automation. "
+    assert text == ("Hello Mr. Raagul, this is Thaara from Kagzso AI and Automation. "
                     "We help businesses automate their daily repetitive work. Could you give me just one minute?")

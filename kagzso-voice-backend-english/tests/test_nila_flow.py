@@ -52,7 +52,7 @@ def test_prompt_data_block():
     assert data["title_to_use"] == "madam" and data["gender"] == "female"
     assert data["business_type"] == "Restaurant" and data["company_name"] is None
     assert data["team_follow_up_configured"] is False and data["callback_scheduling_supported"] is False
-    assert "You are **Nila**" in sp and data["contact_name"] == "Ragul"
+    assert "You are **Thaara**" in sp and data["contact_name"] == "Ragul"
     unknown = llm.build_system_prompt("x", {"customer_name": "Ragul"}, "en")
     assert '"title_to_use": ""' in unknown
 

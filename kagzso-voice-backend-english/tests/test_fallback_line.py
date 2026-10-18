@@ -70,7 +70,7 @@ def test_fallback_line_is_recorded_and_said_once_then_call_closes(client, auth, 
 
 def test_real_reply_resets_the_fallback_count(client, auth, fakes, sync_engine, monkeypatch):
     _failing_llm(fakes, monkeypatch, fail_times=1)
-    fakes.llm.reply = "Thank you sir. This is Nila from Kagzso AI and Automation. Is that okay?"
+    fakes.llm.reply = "Thank you sir. This is Thaara from Kagzso AI and Automation. Is that okay?"
     call_id, token = _call(client, auth, customer_name="Karthick", gender="male")
     fakes.stt.replies = ["Hello?", "Hello", "Yes, I'm Karthick", "Yes, I'm Karthick", "Sure, go ahead"]
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:

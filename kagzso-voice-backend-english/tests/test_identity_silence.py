@@ -104,7 +104,7 @@ def test_no_hangup_before_the_sequence_has_run(client, auth, fakes, quick, monke
 def test_speech_after_the_question_cancels_the_timers(client, auth, fakes, quick, monkeypatch):
     monkeypatch.setattr(settings, "SILENCE_REPROMPT_SECONDS", 30)
     call_id, token = _open(client, auth, fakes, ("Hello?", "Yes, speaking"))
-    fakes.llm.reply = "Thank you, sir. This is Nila from Kexo AI and Automation. Is that okay?"
+    fakes.llm.reply = "Thank you, sir. This is Thaara from Kexo AI and Automation. Is that okay?"
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         _until_identity(ws)
         _send(ws, tone_mulaw(400) + silence_mulaw(900))  # answers before the wait is over
@@ -116,7 +116,7 @@ def test_speech_after_the_question_cancels_the_timers(client, auth, fakes, quick
 def test_speech_after_the_repeat_cancels_the_silence_message(client, auth, fakes, quick, monkeypatch):
     monkeypatch.setattr(settings, "SILENCE_REPROMPT_SECONDS", 30)
     call_id, token = _open(client, auth, fakes, ("Hello?", "Yes"))
-    fakes.llm.reply = "Thank you, sir. This is Nila from Kexo AI and Automation. Is that okay?"
+    fakes.llm.reply = "Thank you, sir. This is Thaara from Kexo AI and Automation. Is that okay?"
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         _until_identity(ws)
         _ack(ws, _until(ws, "checkpoint"))  # the repeat

@@ -152,7 +152,7 @@ def test_noise_burst_does_not_cancel_greeting(client, auth, fakes, sync_engine, 
 def test_short_yes_after_the_question_is_answered(client, auth, fakes, sync_engine):
     call_id, token = _call(client, auth, gender="male")
     fakes.stt.replies = ["Hello?", "Yes"]
-    fakes.llm.reply = "Thank you sir. This is Nila from Kagzso AI and Automation. Is that okay?"
+    fakes.llm.reply = "Thank you sir. This is Thaara from Kagzso AI and Automation. Is that okay?"
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         _start(ws)
         _send(ws, tone_mulaw(400) + silence_mulaw(900))

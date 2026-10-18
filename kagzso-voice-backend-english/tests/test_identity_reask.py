@@ -13,7 +13,7 @@ from app.services.call_service import is_greeting_only, needs_script_at_opening
 from tests.conftest import silence_mulaw, tone_mulaw
 from tests.test_nila_flow import _call, _send, _start, _until
 
-PERMISSION = ("Thank you, sir. This is Nila from Kexo AI and Automation. Could you give me just one minute? "
+PERMISSION = ("Thank you, sir. This is Thaara from Kexo AI and Automation. Could you give me just one minute? "
               "I'll quickly tell you about our company. Is that okay?")
 OLD_FLOW = json.loads((Path(__file__).parents[1] / "app/flows/rollback/nila_before_time_greeting.json")
                       .read_text(encoding="utf-8"))

@@ -132,7 +132,7 @@ def test_llm_starts_while_tts_connects(client, auth, fakes, sync_engine, monkeyp
 
     monkeypatch.setattr(fakes.tts, "open_stream", slow_open)
     monkeypatch.setattr(fakes.llm, "_stream", timed_stream)
-    fakes.llm.reply = "Thank you sir. This is Nila from Kagzso AI and Automation. Is that okay?"
+    fakes.llm.reply = "Thank you sir. This is Thaara from Kagzso AI and Automation. Is that okay?"
     call_id = _greet_then_reply(client, auth, fakes)
     assert _agent_lines(sync_engine, call_id)[2] == fakes.llm.reply  # same words either way
     llm_start, ready = marks["llm"][0], marks["tts_ready"][-1]

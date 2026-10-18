@@ -103,7 +103,7 @@ def test_silence_plays_the_greeting_when_the_wait_ends(client, auth, fakes, sync
 def test_first_words_are_not_carried_into_the_next_turn(client, auth, fakes):
     call_id, token = _call(client, auth, gender="male")
     fakes.stt.replies = ["Hello, who is this", "Yes", "Yes, speaking"]
-    fakes.llm.reply = "Thank you, sir. This is Nila from Kexo AI and Automation. Is that okay?"
+    fakes.llm.reply = "Thank you, sir. This is Thaara from Kexo AI and Automation. Is that okay?"
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         _start(ws)
         for _ in range(3):
@@ -218,4 +218,4 @@ def test_other_flows_keep_the_old_start(client, auth, fakes):
         _send(ws, tone_mulaw(400) + silence_mulaw(900))
         _until(ws, "checkpoint")
     assert fakes.tts.streams[0].pace is None
-    assert " ".join(fakes.tts.streams[0].texts).startswith("Hello Mr. Ragul, this is Nila")
+    assert " ".join(fakes.tts.streams[0].texts).startswith("Hello Mr. Ragul, this is Thaara")

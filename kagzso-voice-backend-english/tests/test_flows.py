@@ -260,7 +260,7 @@ def test_drafts_are_keyed_by_content(client, auth, sync_engine):
 
 
 def test_greeting_without_the_name_variable_needs_no_name(client, auth):
-    flow = nila_copy(greeting={"text": "Hello, this is Nila from Kagzso. Is this a good time?"})
+    flow = nila_copy(greeting={"text": "Hello, this is Thaara from Kagzso. Is this a good time?"})
     r = _outbound(client, auth, customer_name=None, flow_id="flow_f", flow_version=1, flow=flow)
     assert r.status_code == 200, r.text
     with_name = nila_copy(greeting={"text": "Hi {{name}}?"})

@@ -3,7 +3,7 @@
   2. "Am I speaking with {{customer_name}}, {{title_to_use}}?"        (system: GREETING_WAIT_SECONDS
                                                                        after step 1, or at once when the
                                                                        customer says anything)
-  3. "Thank you, {{title_to_use}}. This is Nila ... Is that okay?"   (script, after confirmation)
+  3. "Thank you, {{title_to_use}}. This is Thaara ... Is that okay?" (script, after confirmation)
   4. "Yes {{title_to_use}}. Our company helps businesses automate ..." (script, after permission)
 Do-not-call and AI questions at the opening still go to the script, no line is repeated, and the
 preview renders the opening for male, female and unknown gender."""
@@ -23,7 +23,7 @@ from tests.test_nila_flow import PHONE, _call, _nila_id, _send, _start, _until
 
 GREETING = "Hi sir, Good morning."
 IDENTITY = "Am I speaking with Ragul, sir?"
-PERMISSION = ("Thank you, sir. This is Nila from Kexo AI and Automation. Could you give me just one minute? "
+PERMISSION = ("Thank you, sir. This is Thaara from Kexo AI and Automation. Could you give me just one minute? "
               "I'll quickly tell you about our company. Is that okay?")
 INTRO = ("Yes sir. Our company helps businesses automate their daily repetitive tasks using AI, so employees get "
          "more time for important work. Does your team spend a lot of time on repetitive work every day?")
@@ -195,6 +195,17 @@ def test_no_interim_agent_names_in_spoken_or_displayed_text():
     assert llm.NILA_AGENT["name"] == "Nila"
 
 
+def test_the_agent_introduces_itself_as_thaara():
+    """Spoken name is Thaara; "Nila" stays only as the agent's internal name / flow id (routing)."""
+    for agent in (llm.NILA_AGENT, llm.FOLLOWUP_AGENT):
+        for field in ("system_prompt", "first_message"):
+            assert not re.search(r"\bnila\b", agent[field] or "", re.I), (agent["name"], field)
+    assert "This is Thaara from Kexo AI and Automation." in llm.NILA_AGENT["system_prompt"]
+    assert "1. Agent name = **Thaara**." in llm.NILA_AGENT["system_prompt"]
+    assert "this is Thaara from Kagzso AI and Automation" in llm.FOLLOWUP_AGENT["first_message"]
+    assert llm.NILA_AGENT["name"] == "Nila" and llm.FOLLOWUP_AGENT["name"] == "Follow-up"  # routing unchanged
+
+
 @pytest.mark.parametrize("old_name", ["Radhi", "Kayal"])
 def test_old_agent_name_still_finds_the_agent(client, auth, sync_engine, old_name):
     from sqlalchemy import text
@@ -214,7 +225,7 @@ def test_preview_renders_the_opening_by_gender(client, auth, gender, title):
     assert r.status_code == 200 and body["valid"]
     assert body["greeting"] == f"Hi {title}, Good morning."
     assert f'"Am I speaking with Ragul, {title}?"' in body["system_prompt"]
-    assert f'"Thank you, {title}. This is Nila from Kexo AI and Automation.' in body["system_prompt"]
+    assert f'"Thank you, {title}. This is Thaara from Kexo AI and Automation.' in body["system_prompt"]
     assert f'"title_to_use": "{title}"' in body["system_prompt"]
 
 

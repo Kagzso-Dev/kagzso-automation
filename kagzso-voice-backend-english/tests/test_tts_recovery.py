@@ -54,7 +54,7 @@ def test_llm_reply_recovered_when_stream_fails(client, auth, fakes, sync_engine,
     _fail_streams_after(fakes, monkeypatch, ok_count=2)  # greeting + identity question stream fine, the reply fails
     call_id, token = _call(client, auth, gender="male")
     fakes.stt.replies = ["Hello?", "Yes", "Yes, please tell me about it"]  # not a filler word
-    fakes.llm.reply = "Thank you sir. This is Nila from Kagzso AI and Automation. Is that okay?"
+    fakes.llm.reply = "Thank you sir. This is Thaara from Kagzso AI and Automation. Is that okay?"
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         _start(ws)
         _send(ws, tone_mulaw(400) + silence_mulaw(900))
@@ -71,5 +71,5 @@ def test_llm_reply_recovered_when_stream_fails(client, auth, fakes, sync_engine,
     lines = _agent_lines(sync_engine, call_id)
     assert lines[0] == "Hi sir, Good morning."
     assert lines[1] == "Am I speaking with Ragul, sir?"
-    assert lines[2] == "Thank you sir. This is Nila from Kagzso AI and Automation. Is that okay?"
+    assert lines[2] == "Thank you sir. This is Thaara from Kagzso AI and Automation. Is that okay?"
     assert "tts_recovered" in _events(sync_engine, call_id)
