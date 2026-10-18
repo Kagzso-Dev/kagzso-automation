@@ -146,7 +146,7 @@ async def test_sarvam_tts_rest_request_and_mulaw(monkeypatch):
 
     assert seen["path"] == "/text-to-speech" and seen["key"] == "sarvam-test-key"
     body = seen["body"]
-    assert body["model"] == "bulbul:v3" and body["speaker"] == "priya" and body["language_code"] == "en-IN"
+    assert body["model"] == "bulbul:v3" and body["speaker"] == "roopa" and body["language_code"] == "en-IN"
     assert body["speech_sample_rate"] == 8000 and body["output_audio_codec"] == "wav"
     assert body["text"] == "Hello from Kexo."
     assert out == audio.pcm16_to_mulaw(pcm)
@@ -165,7 +165,7 @@ async def test_sarvam_tts_resamples_and_maps_errors():
 def test_sarvam_tts_ignores_non_bulbul_voice_ids():
     from app.services.sarvam_tts import SarvamTTS
 
-    assert SarvamTTS(settings, voice_id="9cebb910-d4b7-4a4a-85a4-12c79137724c").voice_id == "priya"
+    assert SarvamTTS(settings, voice_id="9cebb910-d4b7-4a4a-85a4-12c79137724c").voice_id == "roopa"
     assert SarvamTTS(settings, voice_id="ritu").voice_id == "ritu"
 
 
@@ -208,7 +208,7 @@ async def test_sarvam_tts_websocket_stream(monkeypatch):
     config = received[0]
     assert config["type"] == "config"
     assert config["data"]["output_audio_codec"] == "linear16" and config["data"]["speech_sample_rate"] == "8000"
-    assert config["data"]["speaker"] == "priya" and config["data"]["language_code"] == "en-IN"
+    assert config["data"]["speaker"] == "roopa" and config["data"]["language_code"] == "en-IN"
     assert [m["type"] for m in received[1:]] == ["text", "text", "flush"]
 
 

@@ -32,6 +32,7 @@ import { settingsRouter } from "./routes/settings.js";
 import { aiCallsRouter } from "./routes/aiCalls.js";
 import { aiCallWebhookRouter } from "./routes/aiCallWebhook.js";
 import { callFlowsRouter } from "./routes/callFlows.js";
+import { voicesRouter } from "./routes/voices.js";
 import { aiCallCustomersRouter } from "./routes/aiCallCustomers.js";
 import { aiCallFollowupsRouter } from "./routes/aiCallFollowups.js";
 import { historyFilterRouter } from "./routes/historyFilter.js";
@@ -98,6 +99,7 @@ export function createApp() {
   app.use("/api/settings", settingsRouter);
   app.use("/api/ai-calls", aiCallsRouter);
   app.use("/api/call-flows", callFlowsRouter);
+  app.use("/api/voices", voicesRouter); // "Listen" voice previews (text-to-speech only, never a call)
   app.use("/api/ai-call-customers", aiCallCustomersRouter);
   app.use("/api/ai-call-followups", aiCallFollowupsRouter);
   app.use("/api/send-queue/filter", historyFilterRouter); // read-only "filter new data"

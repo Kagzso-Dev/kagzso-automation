@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.config import settings
 from app.core.security import rate_limit, require_api_key
+from app.core.voices import DEFAULT_VOICE, VOICES
 from app.flows.loader import BUILTIN_FLOWS, FlowError, parse_flow
 from app.flows.schema import BLOCK_GROUPS, FLOW_VARIABLES, LOCKED_BLOCKS, MAX_BLOCK_CHARS, MAX_PROMPT_CHARS, render_blocks
 from app.schemas.calls import normalize_gender
@@ -29,6 +30,9 @@ async def builtin_flows() -> Dict[str, Any]:
         "groups": list(BLOCK_GROUPS),
         "limits": {"max_duration_sec": settings.MAX_CALL_DURATION_SECONDS, "max_block_chars": MAX_BLOCK_CHARS,
                    "max_prompt_chars": MAX_PROMPT_CHARS},
+        # The voices a flow may pick (app/core/voices.py - the only list); any other voice plays as default_voice.
+        "voices": VOICES,
+        "default_voice": DEFAULT_VOICE,
     }
 
 

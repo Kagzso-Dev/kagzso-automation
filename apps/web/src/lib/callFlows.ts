@@ -42,6 +42,16 @@ export interface CallFlowCatalog {
   locked_blocks: Record<string, string>;
   variables: string[];
   limits: { max_duration_sec: number; max_block_chars: number; max_prompt_chars: number };
+  /** The voices a flow may pick (from the voice backend); absent on an older voice backend. */
+  voices?: VoiceOption[];
+  default_voice?: string;
+}
+
+export interface VoiceOption {
+  id: string;
+  name: string;
+  gender?: string;
+  language?: string;
 }
 
 export interface CallFlowPreview {

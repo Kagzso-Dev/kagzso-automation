@@ -59,7 +59,7 @@ async def test_tts(body: TestTextRequest = TestTextRequest()) -> dict:
             total += len(chunk)
     except TTSError as exc:
         raise _fail("sarvam_tts", exc) from None
-    return {"provider": "sarvam", "model": settings.SARVAM_TTS_MODEL, "speaker": settings.SARVAM_TTS_SPEAKER, "ok": total > 0,
+    return {"provider": "sarvam", "model": settings.SARVAM_TTS_MODEL, "speaker": settings.tts_speaker, "ok": total > 0,
             "first_audio_ms": first_byte_ms, "total_ms": int((time.monotonic() - t0) * 1000),
             "audio_bytes": total, "audio_seconds": round(audio.mulaw_duration_seconds(total), 2),
             "format": "pcm_mulaw 8000Hz (Plivo-ready)"}

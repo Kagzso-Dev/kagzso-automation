@@ -28,6 +28,7 @@ import { Badge, EmptyState, ErrorNote, Modal, Spinner } from "../components/ui";
 import { useConfirm } from "../components/confirm";
 import { useToast } from "../components/toast";
 import { Icon } from "../components/icons";
+import { VoicePicker } from "../components/VoicePicker";
 import { PhoneInput, phoneError } from "../components/PhoneInput";
 
 /**
@@ -522,13 +523,22 @@ function CallFlowEditor({
             </select>
           </div>
           <div>
-            <label className="label">Voice (Sarvam speaker, e.g. kavya)</label>
-            <input
-              className="input font-mono text-xs"
-              placeholder="Default voice (kavya)"
-              value={form.voice_id ?? ""}
-              onChange={(e) => update((f) => void (f.voice_id = e.target.value.trim() || null))}
-            />
+            <label className="label">Voice</label>
+            {catalog.voices?.length ? (
+              <VoicePicker
+                voices={catalog.voices}
+                defaultVoice={catalog.default_voice ?? catalog.voices[0]!.id}
+                value={form.voice_id}
+                onChange={(id) => update((f) => void (f.voice_id = id))}
+              />
+            ) : (
+              <input
+                className="input font-mono text-xs"
+                placeholder="Default voice"
+                value={form.voice_id ?? ""}
+                onChange={(e) => update((f) => void (f.voice_id = e.target.value.trim() || null))}
+              />
+            )}
             <span className="text-xs text-slate-550">Ignored while SARVAM_TTS_VOICE_ROTATION is set on the server.</span>
           </div>
           <div>

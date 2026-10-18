@@ -24,7 +24,6 @@ import asyncio
 import base64
 import io
 import json
-import re
 import wave
 from typing import AsyncIterator, Optional
 from urllib.parse import urlencode
@@ -33,15 +32,14 @@ import httpx
 
 from app.core.config import Settings, settings as default_settings
 from app.core.logging import get_logger
+from app.core.voices import offered_voice
 from app.services import audio_service as audio
 from app.services.tts import TTSError, TTSProvider, TTSStream, apply_pronunciations
 
 log = get_logger("tts.sarvam")
 
 SAMPLE_RATE = 8000
-# Bulbul speaker ids are lowercase names ("priya"); anything else (e.g. an old
-# voice UUID stored on an older agent or call flow) falls back to SARVAM_TTS_SPEAKER.
-_SPEAKER_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+PREVIEW_SAMPLE_RATE = 22050  # "Listen" previews play in a browser, not on a phone line
 
 
 def _http_error(status: int, detail: str) -> TTSError:
@@ -82,7 +80,9 @@ class SarvamTTS(TTSProvider):
     def __init__(self, cfg: Optional[Settings] = None, voice_id: Optional[str] = None,
                  client: Optional[httpx.AsyncClient] = None):
         self.cfg = cfg or default_settings
-        self.voice_id = voice_id if voice_id and _SPEAKER_RE.match(voice_id) else self.cfg.SARVAM_TTS_SPEAKER
+        # Only offered voices (app/core/voices.py); anything else - a voice no longer offered,
+        # or an old voice UUID on an older agent / call flow - plays as the main voice.
+        self.voice_id = offered_voice(voice_id) or self.cfg.tts_speaker
         self._client = client or httpx.AsyncClient(base_url=self.cfg.SARVAM_BASE_URL,
                                                    timeout=httpx.Timeout(20.0, connect=5.0),
                                                    limits=self.cfg.http_limits())
@@ -123,6 +123,39 @@ class SarvamTTS(TTSProvider):
             return b"".join(wav_to_mulaw(base64.b64decode(a)) for a in audios)
         except (ValueError, wave.Error) as exc:
             raise TTSError("provider", f"Sarvam TTS returned unreadable audio: {type(exc).__name__}") from None
+
+    async def synthesize_preview(self, text: str) -> bytes:
+        """One short line as a browser-playable 16-bit mono WAV (the "Listen" preview; no call)."""
+        key = self._check()
+        body = {**self._voice_settings(), "text": self._spoken(text),
+                "speech_sample_rate": PREVIEW_SAMPLE_RATE, "output_audio_codec": "wav"}
+        try:
+            resp = await self._client.post("/text-to-speech", headers={"api-subscription-key": key}, json=body)
+        except httpx.TimeoutException:
+            raise TTSError("timeout", "Sarvam TTS request timed out") from None
+        except httpx.HTTPError as exc:
+            raise TTSError("provider", f"Sarvam TTS connection error: {type(exc).__name__}") from None
+        if resp.status_code != 200:
+            raise _http_error(resp.status_code, resp.text)
+        try:
+            pcm, rate = b"", PREVIEW_SAMPLE_RATE
+            for a in resp.json().get("audios") or []:
+                with wave.open(io.BytesIO(base64.b64decode(a))) as w:
+                    if w.getsampwidth() != 2 or w.getnchannels() != 1:
+                        raise TTSError("provider", "Sarvam TTS returned unexpected audio (need 16-bit mono)")
+                    rate = w.getframerate()
+                    pcm += w.readframes(w.getnframes())
+        except (ValueError, wave.Error) as exc:
+            raise TTSError("provider", f"Sarvam TTS returned unreadable audio: {type(exc).__name__}") from None
+        if not pcm:
+            raise TTSError("provider", "Sarvam TTS returned no audio")
+        out = io.BytesIO()
+        with wave.open(out, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(pcm)
+        return out.getvalue()
 
     async def open_stream(self, pace: Optional[float] = None) -> "SarvamStream":
         key = self._check()

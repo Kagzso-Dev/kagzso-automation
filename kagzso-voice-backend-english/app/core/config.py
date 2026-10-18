@@ -91,7 +91,7 @@ class Settings(BaseSettings):
 
     # --- Sarvam TTS (Bulbul; uses SARVAM_API_KEY and CALL_LANGUAGE) ---
     SARVAM_TTS_MODEL: str = "bulbul:v3"
-    SARVAM_TTS_SPEAKER: str = "priya"  # lowercase Bulbul v3 speaker id
+    SARVAM_TTS_SPEAKER: str = "roopa"  # lowercase Bulbul v3 speaker id; must be in app/core/voices.py (else roopa)
     SARVAM_TTS_PACE: float = 1.0  # 0.5-2.0
     SARVAM_TTS_TEMPERATURE: float = 0.6  # 0.01-1.0
     SARVAM_TTS_WS_URL: str = "wss://api.sarvam.ai/text-to-speech/ws"
@@ -327,8 +327,19 @@ class Settings(BaseSettings):
         return bool(self.TWILIO_ACCOUNT_SID and self.TWILIO_AUTH_TOKEN.get_secret_value() and self.TWILIO_FROM_NUMBER)
 
     @property
+    def tts_speaker(self) -> str:
+        """The main voice: SARVAM_TTS_SPEAKER when Kagzso offers it, else the default (roopa)."""
+        from app.core.voices import voice_or_default
+
+        return voice_or_default(self.SARVAM_TTS_SPEAKER)
+
+    @property
     def voice_rotation(self) -> list:
-        return [v.strip() for v in self.SARVAM_TTS_VOICE_ROTATION.split(",") if v.strip()]
+        """SARVAM_TTS_VOICE_ROTATION limited to the offered voices (app/core/voices.py), in that order."""
+        from app.core.voices import VOICE_IDS
+
+        listed = {v.strip().lower() for v in self.SARVAM_TTS_VOICE_ROTATION.split(",") if v.strip()}
+        return [v for v in VOICE_IDS if v in listed]
 
     @property
     def voice_rotation_mode(self) -> str:

@@ -259,7 +259,7 @@ def test_plivo_requests_machine_detection():
 
 # ------------------------------------------------------------------ voice rotation
 def test_voice_rotation_cycles_per_call(client, auth, monkeypatch, sync_engine):
-    monkeypatch.setattr(settings, "SARVAM_TTS_VOICE_ROTATION", "voice-a, voice-b,voice-c")
+    monkeypatch.setattr(settings, "SARVAM_TTS_VOICE_ROTATION", "ritu, simran,ishita")
     monkeypatch.setattr(settings, "VOICE_ROTATION_MODE", "round_robin")
     agent_id = _nila_id(client, auth)
     for _ in range(4):
@@ -269,7 +269,7 @@ def test_voice_rotation_cycles_per_call(client, auth, monkeypatch, sync_engine):
         time.sleep(0.01)
     with sync_engine.connect() as c:
         used = [r[0] for r in c.execute(text("select voice_id from calls order by created_at, rowid"))]
-    assert used == ["voice-a", "voice-b", "voice-c", "voice-a"]
+    assert used == ["ritu", "simran", "ishita", "ritu"]
 
 
 def test_rotation_off_uses_agent_voice(client, auth, sync_engine):
@@ -283,12 +283,12 @@ def test_rotation_off_uses_agent_voice(client, auth, sync_engine):
 async def test_call_context_prefers_rotated_voice(client, auth, monkeypatch):
     from app.services.call_service import load_call_context
 
-    monkeypatch.setattr(settings, "SARVAM_TTS_VOICE_ROTATION", "voice-x")
+    monkeypatch.setattr(settings, "SARVAM_TTS_VOICE_ROTATION", "simran")
     monkeypatch.setattr(settings, "VOICE_ROTATION_MODE", "round_robin")
     call_id = client.post("/api/calls/outbound", headers=auth, json={
         "phone_number": PHONE, "customer_name": "Ragul", "agent_id": _nila_id(client, auth)}).json()["call_id"]
     ctx = await load_call_context(call_id)
-    assert ctx.voice_id == "voice-x" and ctx.first_message == "Hi {{title_to_use}}, {{time_greeting}}."
+    assert ctx.voice_id == "simran" and ctx.first_message == "Hi {{title_to_use}}, {{time_greeting}}."
 
 
 # ------------------------------------------------------------------ concurrent voices (VOICE_ROTATION_MODE=concurrent)
@@ -314,7 +314,7 @@ def _voice(sync_engine, call_id):
 def concurrent_voices(monkeypatch):
     monkeypatch.setattr(settings, "VOICE_ROTATION_MODE", "concurrent")
     monkeypatch.setattr(settings, "SARVAM_TTS_SPEAKER", "ishita")
-    monkeypatch.setattr(settings, "SARVAM_TTS_VOICE_ROTATION", "priya,ritu,simran,ishita,shreya")
+    monkeypatch.setattr(settings, "SARVAM_TTS_VOICE_ROTATION", "roopa,ritu,simran,ishita,shreya,tanya")
 
 
 def test_single_calls_always_use_the_main_voice(client, auth, sync_engine, concurrent_voices):
@@ -326,16 +326,16 @@ def test_single_calls_always_use_the_main_voice(client, auth, sync_engine, concu
 
 def test_calls_at_the_same_time_get_different_voices(client, auth, sync_engine, concurrent_voices):
     ids = [_place(client, auth) for _ in range(3)]
-    assert [_voice(sync_engine, i) for i in ids] == ["ishita", "priya", "ritu"]
+    assert [_voice(sync_engine, i) for i in ids] == ["ishita", "roopa", "ritu"]
     _end(client, ids[0])  # ishita is free again
     assert _voice(sync_engine, _place(client, auth)) == "ishita"
     assert _voice(sync_engine, _place(client, auth)) == "simran"
 
 
 def test_when_every_voice_is_busy_voices_are_shared(client, auth, sync_engine, concurrent_voices, monkeypatch):
-    monkeypatch.setattr(settings, "SARVAM_TTS_VOICE_ROTATION", "priya")
+    monkeypatch.setattr(settings, "SARVAM_TTS_VOICE_ROTATION", "roopa")
     ids = [_place(client, auth) for _ in range(3)]
-    assert [_voice(sync_engine, i) for i in ids] == ["ishita", "priya", "priya"]
+    assert [_voice(sync_engine, i) for i in ids] == ["ishita", "roopa", "roopa"]
 
 
 def test_stuck_old_call_does_not_block_the_main_voice(client, auth, sync_engine, concurrent_voices):

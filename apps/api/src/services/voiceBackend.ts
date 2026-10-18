@@ -122,6 +122,16 @@ export interface VoiceFlowCatalog {
   variables: string[];
   groups: string[];
   limits: { max_duration_sec: number; max_block_chars: number; max_prompt_chars: number };
+  /** The voices a flow may pick (the voice backend's list is the only one). */
+  voices?: VoiceOption[];
+  default_voice?: string;
+}
+
+export interface VoiceOption {
+  id: string;
+  name: string;
+  gender?: string;
+  language?: string;
 }
 
 export interface VoiceFlowPreview {
@@ -143,6 +153,30 @@ export function getBuiltinFlows(): Promise<VoiceFlowCatalog> {
 /** Validate a flow and render it exactly as a call would (the voice backend is the authority). */
 export function previewFlow(definition: unknown, sample: Record<string, unknown> = {}): Promise<VoiceFlowPreview> {
   return request<VoiceFlowPreview>("POST", "/api/flows/preview", { flow: definition, sample });
+}
+
+/** "Listen": a WAV of `voiceId` saying `text`. Text-to-speech only — the voice backend dials nothing. */
+export async function previewVoice(voiceId: string, text: string): Promise<Buffer> {
+  if (!isAiCallsConfigured()) {
+    throw new VoiceBackendError("Voice backend is not configured (VOICE_BACKEND_URL / VOICE_BACKEND_API_KEY)", null, false);
+  }
+  let res: Response;
+  try {
+    res = await fetch(`${aiCallsConfig.voiceBackendUrl}/api/voices/preview`, {
+      method: "POST",
+      headers: { "X-API-Key": aiCallsConfig.voiceBackendApiKey!, "Content-Type": "application/json" },
+      body: JSON.stringify({ voice_id: voiceId, text }),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    throw new VoiceBackendError(`Voice backend unreachable: ${why}`, null, true);
+  }
+  if (!res.ok) {
+    const msg = detailMessage(await res.json().catch(() => null), res.statusText);
+    throw new VoiceBackendError(`Voice backend ${res.status}: ${msg}`, res.status, res.status >= 500 || res.status === 429);
+  }
+  return Buffer.from(await res.arrayBuffer());
 }
 
 export function getVoiceCall(voiceCallId: string): Promise<VoiceCallDetail> {

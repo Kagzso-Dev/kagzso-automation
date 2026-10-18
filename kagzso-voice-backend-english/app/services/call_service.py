@@ -462,7 +462,7 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
         elif cfg.voice_rotation_mode == "concurrent":
             # Ignore calls stuck in a live status (e.g. a missed hangup webhook) after the max duration.
             since = utcnow() - timedelta(seconds=cfg.MAX_CALL_DURATION_SECONDS + 300)
-            voice_id = await repo.free_call_voice(db, cfg.SARVAM_TTS_SPEAKER, rotation, since)
+            voice_id = await repo.free_call_voice(db, cfg.tts_speaker, rotation, since)
         else:
             voice_id = await repo.next_rotation_voice(db, rotation)
         call = await repo.create_call(

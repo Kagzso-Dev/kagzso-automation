@@ -17,15 +17,14 @@ import sys
 from pathlib import Path
 
 from app.core.config import settings
+from app.core.voices import VOICE_IDS
 from app.services import audio_service as audio
 from app.services.sarvam_tts import SarvamTTS
 from app.services.tts import TTSError, apply_pronunciations
 from app.services.sarvam_stt import SarvamSTT
 
-# Female Bulbul v3 speakers (name -> speaker id).
-CANDIDATES = {v: v for v in (
-    "priya", "ritu", "simran", "ishita", "shreya", "roopa", "tanya", "shruti",
-)}
+# The offered voices (name -> speaker id) - the same list calls use.
+CANDIDATES = {v: v for v in VOICE_IDS}
 
 LINES = [
     "Hi, is this Raagul?",
