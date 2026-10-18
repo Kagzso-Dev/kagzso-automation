@@ -6,9 +6,9 @@
 //   npm run callflow:import -- deploy/callflows/thaara-natural.json         create the draft flow
 //
 // Validated twice before writing: the orchestrator's schema (what the editor saves) and the
-// voice backend's /api/flows/preview (what a call renders). Idempotent: a live flow with the
-// same name is left alone. To undo: Voice Call Flows → the flow → Remove (allowed while it
-// has never been published).
+// voice backend's /api/flows/preview (what a call renders). Re-running it updates the draft
+// of a same-named flow that was never published; a published flow is never touched. To undo:
+// Voice Call Flows → the flow → Remove (allowed while it has never been published).
 
 import "dotenv/config";
 import { readFileSync } from "node:fs";
@@ -54,9 +54,27 @@ async function main() {
     console.log("! VOICE_BACKEND_URL / VOICE_BACKEND_API_KEY not set — voice backend check skipped");
   }
 
-  const existing = await prisma.callFlow.findFirst({ where: { name: def.name, archivedAt: null }, select: { id: true } });
+  const existing = await prisma.callFlow.findFirst({
+    where: { name: def.name, archivedAt: null },
+    select: { id: true, versions: { select: { id: true, version: true, status: true }, orderBy: { version: "desc" } } },
+  });
   if (existing) {
-    console.log(`= A flow named "${def.name}" already exists (${existing.id}) — nothing written.`);
+    // A flow imported earlier and still only a draft: refresh that draft. Anything published is
+    // never touched here — edit it in the Voice Call Flows editor (that makes a new draft).
+    if (existing.versions.some((v) => v.status === "PUBLISHED")) {
+      console.log(`= "${def.name}" (${existing.id}) has a published version — not changed. Edit it in the Voice Call Flows editor instead.`);
+      return;
+    }
+    const draft = existing.versions[0]!;
+    if (!apply) {
+      console.log(`\nDRY RUN — would update the unpublished draft v${draft.version} of "${def.name}" (${existing.id}).`);
+      return;
+    }
+    await prisma.callFlowVersion.update({
+      where: { id: draft.id },
+      data: { definition: def as object, definitionHash: createHash("sha256").update(JSON.stringify(def)).digest("hex"), createdByEmail: "import-script" },
+    });
+    console.log(`\n✓ Updated the unpublished draft v${draft.version} of "${def.name}" (${existing.id}).`);
     return;
   }
   if (!apply) {

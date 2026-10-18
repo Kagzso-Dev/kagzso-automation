@@ -5,7 +5,7 @@
   "language": "en",
   "voice_id": null,
   "greeting": {
-    "text": "Hi {{title_to_use}}, {{time_greeting}}."
+    "text": "Hello, am I speaking with {{customer_name}}?"
   },
   "blocks": [
     {
@@ -25,7 +25,7 @@
     {
       "id": "first_turn",
       "group": "greeting",
-      "text": "# FIRST TURN\n\nThe system speaks the opening for you: \"Hi {{title_to_use}}, {{time_greeting}}.\" It is the first assistant message in the history.\nRight after it (after a short pause, or as soon as the customer says anything), the system also asks the identity question for you: \"Am I speaking with {{customer_name}}, {{title_to_use}}?\"\n\nNever say the opening again, never greet again, and never say good morning, good afternoon or good evening yourself.\nIf the identity question already appears in the conversation, never ask it again. If the customer is unsure, the system asks it again for you.\nWhatever the customer says to the opening is not an identity confirmation. Only a reply to the identity question confirms identity.\n\n---\n\n"
+      "text": "# FIRST TURN\n\nThe system speaks the opening for you: \"Hello, am I speaking with {{customer_name}}?\" It is the first assistant message in the history, and it is the identity question.\n\nNever say it again, never greet again, and never say good morning, good afternoon or good evening yourself.\nNever ask the identity question yourself. If the customer's answer is unclear, the system asks it again for you once.\n\n---\n\n"
     },
     {
       "id": "customer_unsure",
