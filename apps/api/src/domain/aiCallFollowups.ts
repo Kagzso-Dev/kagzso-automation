@@ -57,6 +57,14 @@ export function canWhatsApp(c: Pick<AiCallCustomer, "whatsappOptIn" | "phone">):
   return c.whatsappOptIn && normalizeWhatsAppPhone(c.phone, "91") !== null;
 }
 
+/** Why a draft was cancelled because a person confirmed the customer as Interested. */
+export const INTERESTED_CANCEL_REASON = "interested";
+
+/** A person confirmed Interested (not just suggested by a call): no automatic follow-ups. */
+export function isConfirmedInterested(c: Pick<AiCallCustomer, "stage" | "needsReview">): boolean {
+  return c.stage === "INTERESTED" && !c.needsReview;
+}
+
 /** Cancel drafts still waiting for approval (all of them, or only those from one call). */
 export async function cancelPendingFollowups(
   customerId: string,
@@ -80,12 +88,15 @@ export async function cancelPendingFollowups(
 /**
  * Create the follow-up drafts a stage calls for (see followupsForStage). A
  * channel that already has a draft waiting for approval is not duplicated.
+ * A customer a person confirmed as Interested gets none (a suggested Interested
+ * from a call still does, until someone reviews it).
  */
 export async function createFollowupDrafts(
   customer: AiCallCustomer,
   stage: AiCallStage,
   opts: { sourceCallLogId?: string | null; actorEmail?: string | null } = {},
 ): Promise<AiCallFollowup[]> {
+  if (isConfirmedInterested(customer)) return [];
   const noAnswerRetries = await prisma.aiCallFollowup.count({
     where: { customerId: customer.id, channel: "CALL", reason: REASON.NO_ANSWER, status: { not: "CANCELLED" } },
   });

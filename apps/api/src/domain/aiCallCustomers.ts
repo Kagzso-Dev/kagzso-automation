@@ -16,7 +16,7 @@ import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
 import { aiCallsConfig } from "../config/aiCalls.js";
 import { loadDoNotCallPhones } from "./aiCalls.js";
-import { addCustomerEvent, cancelPendingFollowups, createFollowupDrafts, deliveryFor } from "./aiCallFollowups.js";
+import { addCustomerEvent, cancelPendingFollowups, createFollowupDrafts, deliveryFor, INTERESTED_CANCEL_REASON } from "./aiCallFollowups.js";
 
 export class CustomerError extends Error {
   constructor(
@@ -156,6 +156,10 @@ export async function setCustomerStage(
     await cancelPendingFollowups(id, "marked do not call");
   } else if (stage === "NOT_INTERESTED" || stage === "REJECTED") {
     await cancelPendingFollowups(id, `marked ${stage === "REJECTED" ? "rejected" : "not interested"}`);
+  } else if (stage === "INTERESTED") {
+    // Confirmed Interested: no automatic follow-ups — the customer is handed to a person.
+    // Only drafts not yet approved are cancelled (kept, never deleted); "Call selected" still works.
+    await cancelPendingFollowups(id, INTERESTED_CANCEL_REASON);
   } else if (FOLLOW_UP_STAGES.includes(stage) || stage === "CALLBACK_REQUESTED") {
     await createFollowupDrafts(updated, stage, { actorEmail });
   }

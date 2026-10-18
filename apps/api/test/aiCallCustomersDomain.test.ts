@@ -247,6 +247,55 @@ describe("call result → stage (webhook / poll)", () => {
   });
 });
 
+describe("confirmed Interested: no automatic follow-ups", () => {
+  it("a suggested Interested (from the call) keeps its pending follow-up", async () => {
+    const { c, log } = await calledCustomer();
+    await applyVoiceUpdate(log.id, { status: "completed", outcome: "interested" });
+    expect(cust(c.id)).toMatchObject({ stage: "INTERESTED", needsReview: true });
+    expect(pending(c.id)).toHaveLength(1);
+  });
+
+  it("confirming Interested cancels only the pending drafts (kept, reason 'interested'); the customer stays listed", async () => {
+    const { c, log } = await calledCustomer();
+    await applyVoiceUpdate(log.id, { status: "completed", outcome: "interested" });
+    const [draft] = pending(c.id);
+    T("aiCallFollowup").push({ id: "f-approved", customerId: c.id, channel: "CALL", status: "APPROVED", createdAt: new Date() });
+    const before = { ...cust(c.id) };
+
+    await customers.setCustomerStage(c.id, "INTERESTED", ADMIN);
+
+    expect(pending(c.id)).toHaveLength(0);
+    expect(T("aiCallFollowup").find((f) => f.id === draft!.id)).toMatchObject({ status: "CANCELLED", error: "interested" });
+    expect(T("aiCallFollowup").find((f) => f.id === "f-approved")!.status).toBe("APPROVED"); // already handed over: untouched
+    expect(T("aiCallFollowup")).toHaveLength(2); // nothing deleted
+    expect(cust(c.id)).toMatchObject({ ...before, stage: "INTERESTED", needsReview: false });
+    const listed = (await customers.listCustomers({ page: 1, pageSize: 25 })).items.map((x: Row) => x.id);
+    expect(listed).toContain(c.id);
+    expect((await customers.callableCustomers()).map((x: Row) => x.id)).toContain(c.id); // still selectable for "Call selected"
+  });
+
+  it("no new automatic follow-ups while confirmed Interested", async () => {
+    const { c } = await calledCustomer();
+    await customers.setCustomerStage(c.id, "INTERESTED", ADMIN);
+    expect(await followups.createFollowupDrafts(cust(c.id) as any, "INTERESTED")).toEqual([]);
+    expect(pending(c.id)).toHaveLength(0);
+  });
+
+  it("back to Follow-up needed: queued again normally; old cancelled drafts are not revived", async () => {
+    const { c, log } = await calledCustomer();
+    await applyVoiceUpdate(log.id, { status: "completed", outcome: "interested" });
+    await customers.setCustomerStage(c.id, "INTERESTED", ADMIN);
+    const cancelled = T("aiCallFollowup").filter((f) => f.status === "CANCELLED").map((f) => f.id);
+
+    await customers.setCustomerStage(c.id, "FOLLOW_UP_NEEDED", ADMIN);
+
+    const now = pending(c.id);
+    expect(now).toHaveLength(1);
+    expect(cancelled).not.toContain(now[0]!.id);
+    expect(T("aiCallFollowup").filter((f) => cancelled.includes(f.id)).every((f) => f.status === "CANCELLED")).toBe(true);
+  });
+});
+
 describe("do not call", () => {
   it("is applied immediately from the call, permanently, and blocks future calls", async () => {
     const { c, log } = await calledCustomer();
