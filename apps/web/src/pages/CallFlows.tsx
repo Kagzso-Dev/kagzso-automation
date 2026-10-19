@@ -511,6 +511,11 @@ function CallFlowEditor({
       api(`/api/call-flows/${flowId}/versions/${version}/restore`, { method: "POST", notify: "Copied into the draft" }),
     onSuccess: invalidate,
   });
+  const removeVersion = useMutation({
+    mutationFn: (version: number) =>
+      api(`/api/call-flows/${flowId}/versions/${version}`, { method: "DELETE", notify: `v${version} deleted` }),
+    onSuccess: invalidate,
+  });
   const archive = useMutation({
     mutationFn: () => api(`/api/call-flows/${flowId}/archive`, { method: "POST", notify: "Call flow archived" }),
     onSuccess: () => {
@@ -725,7 +730,7 @@ function CallFlowEditor({
             ))}
           </div>
         )}
-        {[save.error, publish.error, discard.error, restore.error, archive.error].map(
+        {[save.error, publish.error, discard.error, restore.error, removeVersion.error, archive.error].map(
           (e, i) => e && <ErrorNote key={i} error={e} />,
         )}
         <div className="mt-3 flex flex-wrap justify-end gap-2">
@@ -799,11 +804,33 @@ function CallFlowEditor({
                     {v.createdByEmail ? ` · ${v.createdByEmail}` : ""}
                   </span>
                 </span>
-                {v.status === "PUBLISHED" && v.id !== published?.id && (
-                  <button className="btn-ghost py-1 text-xs" disabled={restore.isPending} onClick={() => restore.mutate(v.version)}>
-                    Restore into draft
-                  </button>
-                )}
+                <span className="flex items-center gap-1">
+                  {v.status === "PUBLISHED" && v.id !== published?.id && (
+                    <button className="btn-ghost py-1 text-xs" disabled={restore.isPending} onClick={() => restore.mutate(v.version)}>
+                      Restore into draft
+                    </button>
+                  )}
+                  {/* Never the live version or the only one (the API refuses both, and a version a run used). */}
+                  {v.id !== published?.id && versions.length > 1 && (
+                    <button
+                      className="btn-ghost py-1 text-xs text-crit"
+                      disabled={removeVersion.isPending}
+                      onClick={async () => {
+                        if (
+                          await confirm({
+                            title: `Delete v${v.version} permanently?`,
+                            body: "This cannot be undone.",
+                            confirmText: "Delete",
+                            tone: "danger",
+                          })
+                        )
+                          removeVersion.mutate(v.version);
+                      }}
+                    >
+                      Delete
+                    </button>
+                  )}
+                </span>
               </li>
             ))}
           </ul>
@@ -909,13 +936,60 @@ function PreviewPanel({ definition, valid }: { definition: CallFlowDefinition; v
             {showPrompt ? "Hide" : "Show"} the full prompt sent to the AI
           </button>
           {showPrompt && (
-            <pre className="mt-2 max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-lg bg-surface-muted p-2 text-[11px]">
-              {p.system_prompt}
-            </pre>
+            <div className="relative">
+              <pre className="mt-2 max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-lg bg-surface-muted p-2 pr-16 text-[11px]">
+                {p.system_prompt}
+              </pre>
+              <CopyPromptButton text={p.system_prompt ?? ""} />
+            </div>
           )}
         </div>
       )}
     </div>
+  );
+}
+
+/** Copies the full prompt exactly as shown; "Copied ✓" for 1.5 s. Own state, so the preview doesn't re-render. */
+function CopyPromptButton({ text }: { text: string }) {
+  const [label, setLabel] = useState<"Copy" | "Copied ✓" | "Copy failed">("Copy");
+  const timer = useRef<number>();
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  const copy = async () => {
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    } catch {
+      // No Clipboard API (e.g. plain http): fall back to a hidden textarea.
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      try {
+        ok = document.execCommand("copy");
+      } catch {
+        ok = false;
+      }
+      area.remove();
+    }
+    setLabel(ok ? "Copied ✓" : "Copy failed");
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setLabel("Copy"), 1500);
+  };
+
+  return (
+    <button
+      type="button"
+      className="absolute right-2 top-4 rounded bg-surface px-1.5 py-0.5 text-[11px] font-medium text-accent-ink shadow-sm transition-colors hover:bg-tint"
+      aria-label="Copy the full prompt"
+      onClick={copy}
+    >
+      {label}
+    </button>
   );
 }
 

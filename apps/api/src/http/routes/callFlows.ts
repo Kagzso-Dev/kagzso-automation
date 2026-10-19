@@ -10,6 +10,7 @@
 //   DELETE /api/call-flows/:id/draft                 discard the draft
 //   POST   /api/call-flows/:id/publish               validate with the voice backend, then DRAFT → PUBLISHED
 //   POST   /api/call-flows/:id/versions/:v/restore   copy an old version into the draft
+//   DELETE /api/call-flows/:id/versions/:v           delete one version (not the live one, not one a run used)
 //   POST   /api/call-flows/:id/archive               hide the flow (runs already pinned to it keep it)
 //   DELETE /api/call-flows/:id                       remove an unpublished flow (hidden instead if a run used it)
 //   POST   /api/call-flows/preview                   render a definition with sample customer data
@@ -40,7 +41,7 @@ import { prisma } from "../../prisma.js";
 import { logger } from "../../logger.js";
 import { aiCallsConfig, isAiCallsConfigured, isCallFlowEditorEnabled } from "../../config/aiCalls.js";
 import { callsCountedTowardDailyCap, loadDoNotCallPhones } from "../../domain/aiCalls.js";
-import { CallFlowError, definitionHash, latestPublished, publishDraft, removeFlow, saveDraft } from "../../domain/callFlows.js";
+import { CallFlowError, definitionHash, deleteVersion, latestPublished, publishDraft, removeFlow, saveDraft } from "../../domain/callFlows.js";
 import { addTestNumber, listTestNumbers, removeTestNumber, resolveTestNumber, TestNumberError } from "../../domain/callFlowTestNumbers.js";
 import { enqueueAiCallRun } from "../../queue/queues.js";
 import { getBuiltinFlows, previewFlow, VoiceBackendError, type VoiceFlowCatalog } from "../../services/voiceBackend.js";
@@ -303,6 +304,18 @@ callFlowsRouter.post(
     const parsed = callFlowDefinition.safeParse(old.definition);
     if (!parsed.success) throw badRequest("That version no longer passes validation and can't be restored");
     res.json(await saveDraft(id, parsed.data, req.user!.email).catch(flowError));
+  }),
+);
+
+callFlowsRouter.delete(
+  "/:id/versions/:version",
+  adminOnly,
+  writeLimiter,
+  wrap(async (req, res) => {
+    const { id, version } = callFlowVersionParam.parse(req.params);
+    await deleteVersion(id, version).catch(flowError);
+    logger.info({ flowId: id, version, by: req.user!.email }, "call flow version deleted");
+    res.json({ ok: true });
   }),
 );
 

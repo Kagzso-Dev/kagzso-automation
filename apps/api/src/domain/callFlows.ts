@@ -116,3 +116,30 @@ export async function removeFlow(flowId: string, opts: { confirm?: string } = {}
     return "deleted";
   });
 }
+
+/**
+ * Permanently delete one version of a flow, in one transaction. Never the live version
+ * (the newest PUBLISHED one), never the flow's only version, and never a version a call
+ * run used (ai_call_run_flows pins it, so the run's history keeps it). Only that one row
+ * is deleted: the flow and its other versions are untouched.
+ */
+export async function deleteVersion(flowId: string, version: number): Promise<void> {
+  return prisma.$transaction(async (tx) => {
+    const flow = await tx.callFlow.findUnique({
+      where: { id: flowId },
+      include: { versions: { select: { id: true, version: true, status: true, _count: { select: { runs: true } } } } },
+    });
+    if (!flow || flow.archivedAt) throw new CallFlowError("Call flow not found", 404);
+    const target = flow.versions.find((v) => v.version === version);
+    if (!target) throw new CallFlowError("Version not found", 404);
+    const live = flow.versions.filter((v) => v.status === "PUBLISHED").sort((a, b) => b.version - a.version)[0];
+    if (live?.id === target.id) throw new CallFlowError(`v${version} is the live version. Publish a newer version first.`, 409);
+    if (flow.versions.length === 1) throw new CallFlowError("This is the flow's only version. Remove the flow instead.", 409);
+    if (target._count.runs > 0) {
+      throw new CallFlowError(`v${version} was used by a call run (or a test call), so call history keeps it. It can't be deleted.`, 409);
+    }
+    // Filtered on flowId and "no runs" again, so a run pinned meanwhile is never orphaned.
+    const { count } = await tx.callFlowVersion.deleteMany({ where: { id: target.id, flowId, runs: { none: {} } } });
+    if (count !== 1) throw new CallFlowError(`v${version} was just used by a call run, so it can't be deleted.`, 409);
+  });
+}
