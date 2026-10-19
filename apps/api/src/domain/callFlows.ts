@@ -82,22 +82,31 @@ export async function pinnedFlowForRun(runId: string): Promise<PinnedFlow | null
   return { flowId: v.flowId, version: v.version, draft: v.status === "DRAFT", definition: v.definition };
 }
 
+/** What an admin types to remove a live (published) flow. */
+export const REMOVE_LIVE_CONFIRM = "DELETE";
+
 /**
- * Remove a flow from "Your call flows". Published flows are refused (Archive them
- * instead). A flow whose versions were used by a run (e.g. a test call) is only
- * hidden (archivedAt) so run history keeps its pinned version; anything else is
- * deleted together with its versions.
+ * Remove a flow from "Your call flows", in one transaction. A live (published) flow
+ * needs `confirm: "DELETE"`. A flow a running call run uses is refused. A flow whose
+ * versions were used by a run (e.g. a test call) is only hidden (archivedAt): it can no
+ * longer be picked for a new run (versionForNewRun refuses it) and run history keeps
+ * its pinned version untouched. Anything else is deleted together with its versions.
  */
-export async function removeFlow(flowId: string): Promise<"deleted" | "archived"> {
+export async function removeFlow(flowId: string, opts: { confirm?: string } = {}): Promise<"deleted" | "archived"> {
   return prisma.$transaction(async (tx) => {
     const flow = await tx.callFlow.findUnique({
       where: { id: flowId },
-      include: { versions: { select: { status: true, _count: { select: { runs: true } } } } },
+      include: { versions: { select: { id: true, version: true, status: true, _count: { select: { runs: true } } } } },
     });
     if (!flow || flow.archivedAt) throw new CallFlowError("Call flow not found", 404);
-    if (flow.versions.some((v) => v.status === "PUBLISHED")) {
-      throw new CallFlowError("Published flows can't be removed — use Archive in the editor instead", 409);
+    const live = flow.versions.filter((v) => v.status === "PUBLISHED").sort((a, b) => b.version - a.version)[0];
+    if (live && opts.confirm !== REMOVE_LIVE_CONFIRM) {
+      throw new CallFlowError(`"${flow.name}" is live (v${live.version}). Type ${REMOVE_LIVE_CONFIRM} to confirm removing it.`, 400);
     }
+    const running = await tx.aiCallRunFlow.count({
+      where: { flowVersionId: { in: flow.versions.map((v) => v.id) }, run: { status: "RUNNING" } },
+    });
+    if (running > 0) throw new CallFlowError("A call run is using this flow right now. Try again when it finishes.", 409);
     if (flow.versions.some((v) => v._count.runs > 0)) {
       await tx.callFlow.update({ where: { id: flowId }, data: { archivedAt: new Date() } });
       return "archived";

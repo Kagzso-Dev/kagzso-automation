@@ -20,6 +20,7 @@ import {
   useCallFlows,
   type CallFlowCatalog,
   type CallFlowDetail,
+  type CallFlowListItem,
   type CallFlowPreview,
   type CallFlowVersion,
 } from "../lib/callFlows";
@@ -66,25 +67,7 @@ export function CallFlowsPage() {
   const catalog = useCallFlowCatalog();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const qc = useQueryClient();
-  const confirm = useConfirm();
-  const toast = useToast();
-  const remove = useMutation({
-    mutationFn: (f: { id: string; name: string }) =>
-      api<{ ok: true; result: "deleted" | "archived" }>(`/api/call-flows/${f.id}`, { method: "DELETE", notify: false }),
-    onSuccess: (_res, f) => {
-      if (selectedId === f.id) setSelectedId(null);
-      void qc.invalidateQueries({ queryKey: ["call-flows"] });
-      qc.removeQueries({ queryKey: ["call-flow", f.id] });
-      toast.success(`Removed “${f.name}”`);
-    },
-    onError: (err) => toast.fromError(err, "Couldn't remove the call flow"),
-  });
-  const askRemove = async (f: { id: string; name: string }) => {
-    if (await confirm({ title: `Remove “${f.name}”? This can't be undone.`, confirmText: "Remove", tone: "danger" })) {
-      remove.mutate(f);
-    }
-  };
+  const [removing, setRemoving] = useState<CallFlowListItem | null>(null);
 
   if (config.isLoading) return <Spinner />;
   if (!enabled) {
@@ -144,12 +127,11 @@ export function CallFlowsPage() {
                   <button
                     type="button"
                     aria-label={`Remove ${f.name}`}
-                    title={f.published ? "Published flows can't be removed — use Archive in the editor instead" : "Remove"}
-                    disabled={!!f.published || remove.isPending}
-                    className="mr-1 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-400"
+                    title={f.published ? `Remove (live v${f.published.version})` : "Remove"}
+                    className="mr-1 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"
                     onClick={(e) => {
                       e.stopPropagation();
-                      void askRemove(f);
+                      setRemoving(f);
                     }}
                   >
                     <Icon name="trash" size={16} />
@@ -178,7 +160,106 @@ export function CallFlowsPage() {
           setSelectedId(id);
         }}
       />
+      <RemoveFlowDialog
+        flow={removing}
+        onClose={() => setRemoving(null)}
+        onRemoved={(id) => {
+          if (selectedId === id) setSelectedId(null);
+          setRemoving(null);
+        }}
+      />
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ remove a flow */
+
+const REMOVE_CONFIRM_WORD = "DELETE";
+
+/**
+ * Remove a custom flow. A live (published) one needs DELETE typed exactly (case-sensitive);
+ * a draft only needs the button. The server's reason is shown here when it refuses.
+ */
+function RemoveFlowDialog({
+  flow,
+  onClose,
+  onRemoved,
+}: {
+  flow: CallFlowListItem | null;
+  onClose: () => void;
+  onRemoved: (id: string) => void;
+}) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [typed, setTyped] = useState("");
+  const live = flow?.published ?? null;
+  const remove = useMutation({
+    mutationFn: (f: CallFlowListItem) =>
+      api<{ ok: true; result: "deleted" | "archived" }>(`/api/call-flows/${f.id}`, {
+        method: "DELETE",
+        json: f.published ? { confirm: typed } : {},
+        notify: false,
+      }),
+    onSuccess: (_res, f) => {
+      void qc.invalidateQueries({ queryKey: ["call-flows"] }); // the list here and the AI Call window's picker
+      qc.removeQueries({ queryKey: ["call-flow", f.id] });
+      toast.success(`Removed “${f.name}”`);
+      onRemoved(f.id);
+    },
+  });
+  useEffect(() => {
+    setTyped("");
+    remove.reset();
+  }, [flow?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const close = () => {
+    if (!remove.isPending) onClose();
+  };
+  return (
+    <Modal open={!!flow} onClose={close} title={flow ? `Remove “${flow.name}”?` : "Remove flow"}>
+      {flow && (
+        <div className="space-y-3 text-sm">
+          {live ? (
+            <>
+              <p>
+                Remove “{flow.name}”? It is <b>LIVE (v{live.version})</b>, so it will stop being available in the AI Call
+                window. Past call logs and transcripts are kept. This can't be undone.
+              </p>
+              <div>
+                <label className="label" htmlFor="remove-flow-confirm">
+                  Type {REMOVE_CONFIRM_WORD} to confirm
+                </label>
+                <input
+                  id="remove-flow-confirm"
+                  className="input font-mono"
+                  autoComplete="off"
+                  autoFocus
+                  value={typed}
+                  disabled={remove.isPending}
+                  onChange={(e) => setTyped(e.target.value)}
+                />
+              </div>
+            </>
+          ) : (
+            <p>This draft flow will be removed. Past call logs and transcripts are kept. This can't be undone.</p>
+          )}
+          {remove.error && <ErrorNote error={remove.error} />}
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" className="btn-ghost" disabled={remove.isPending} onClick={close}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn-danger"
+              disabled={remove.isPending || (!!live && typed !== REMOVE_CONFIRM_WORD)}
+              onClick={() => remove.mutate(flow)}
+            >
+              {remove.isPending ? "Removing…" : "Remove"}
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }
 

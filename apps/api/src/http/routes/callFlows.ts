@@ -20,6 +20,7 @@
 
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { rateLimit } from "express-rate-limit";
+import { z } from "zod";
 import {
   addTestCallNumberInput,
   CALL_FLOW_BASES,
@@ -90,7 +91,9 @@ function voiceError(err: unknown): never {
 }
 
 function flowError(err: unknown): never {
-  if (err instanceof CallFlowError) throw new AppError(err.status, err.message, err.status === 404 ? "not_found" : "conflict");
+  if (err instanceof CallFlowError) {
+    throw new AppError(err.status, err.message, err.status === 404 ? "not_found" : err.status === 400 ? "bad_request" : "conflict");
+  }
   throw err;
 }
 
@@ -111,6 +114,9 @@ function testNumberError(err: unknown): never {
 }
 
 const asJson = (d: unknown) => d as Prisma.InputJsonValue;
+
+/** DELETE /api/call-flows/:id body: a live flow needs { confirm: "DELETE" }. */
+const removeFlowBody = z.object({ confirm: z.string().max(32).optional() });
 
 async function liveFlow(id: string) {
   const flow = await prisma.callFlow.findUnique({ where: { id } });
@@ -320,8 +326,10 @@ callFlowsRouter.delete(
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     if ((CALL_FLOW_BASES as readonly string[]).includes(id)) throw forbidden("Built-in scripts can't be removed");
-    const result = await removeFlow(id).catch(flowError);
-    logger.info({ flowId: id, result, by: req.user!.email }, "call flow removed");
+    // A live flow needs { confirm: "DELETE" } (the UI's type-to-confirm box).
+    const { confirm } = removeFlowBody.parse(req.body ?? {});
+    const result = await removeFlow(id, { confirm }).catch(flowError);
+    logger.info({ flowId: id, result, byUserId: req.user!.id }, "call flow removed");
     res.json({ ok: true, result });
   }),
 );
