@@ -258,6 +258,41 @@ def identity_after_greeting(first_message: Optional[str]) -> bool:
             and not _NAME_ALIAS_RE.search(first))
 
 
+_QUESTION_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_WORDS_RE = re.compile(r"[a-z0-9']+")
+
+
+def _question_words(text: str) -> List[str]:
+    return _WORDS_RE.findall(text.lower())
+
+
+def asked_questions(lines: List[str]) -> List[List[str]]:
+    """The questions (sentences ending in "?") in the agent's lines, as word lists."""
+    out = []
+    for line in lines:
+        for sentence in _QUESTION_SPLIT_RE.split(line or ""):
+            if sentence.strip().endswith("?"):
+                out.append(_question_words(sentence))
+    return out
+
+
+def is_repeated_question(sentence: str, asked: List[List[str]], min_words: int = 4, overlap: float = 0.8) -> bool:
+    """`sentence` is a question the agent already asked: most words of the shorter of the two
+    questions appear in the other ("Do you have just one minute?" ~ "Do you have just a minute
+    to hear more?"). Short questions ("Is that okay?") never count."""
+    if not sentence.strip().endswith("?"):
+        return False
+    new = set(_question_words(sentence))
+    if len(new) < min_words:
+        return False
+    for prev in asked:
+        old = set(prev)
+        shorter = new if len(new) <= len(old) else old
+        if len(shorter) >= min_words and len(new & old) / len(shorter) >= overlap:
+            return True
+    return False
+
+
 def _ms(a: Optional[float], b: Optional[float]) -> Optional[int]:
     return int((b - a) * 1000) if a is not None and b is not None else None
 
@@ -1652,6 +1687,8 @@ class CallSession:
         async def produce() -> None:
             chunker = SentenceChunker()
             m.t3 = time.monotonic()
+            # REPEAT_QUESTION_GUARD: questions the agent already asked in this call.
+            asked = asked_questions([h["content"] for h in self.history if h["role"] == "assistant"])
 
             async def push(sentence: str) -> None:
                 sentence, end = extract_end_call(sentence)
@@ -1659,6 +1696,12 @@ class CallSession:
                     self.end_call_requested = True
                 sentence = clean_spoken_text(sentence)
                 if not sentence:
+                    return
+                if (st.scripted is None and self.cfg.REPEAT_QUESTION_GUARD and st.spoken
+                        and is_repeated_question(sentence, asked + asked_questions(st.spoken))):
+                    # Something was already said in this reply; don't tack on a question asked before.
+                    log.info("Skipped a question already asked in this call")
+                    self._event("repeat_question_skipped", {"turn": self.turn_index})
                     return
                 if m.t5 is None:
                     waited = time.monotonic()

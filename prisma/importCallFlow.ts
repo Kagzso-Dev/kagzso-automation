@@ -6,9 +6,9 @@
 //   npm run callflow:import -- deploy/callflows/thaara-natural.json         create the draft flow
 //
 // Validated twice before writing: the orchestrator's schema (what the editor saves) and the
-// voice backend's /api/flows/preview (what a call renders). Re-running it updates the draft
-// of a same-named flow that was never published; a published flow is never touched. To undo:
-// Voice Call Flows → the flow → Remove (allowed while it has never been published).
+// voice backend's /api/flows/preview (what a call renders). Re-running it works like "Save" in
+// the editor: it refreshes the flow's newest draft, or adds a new draft version next to a live
+// one. A published version is never changed. To undo a new draft: the flow → Discard draft.
 
 import "dotenv/config";
 import { readFileSync } from "node:fs";
@@ -59,22 +59,32 @@ async function main() {
     select: { id: true, versions: { select: { id: true, version: true, status: true }, orderBy: { version: "desc" } } },
   });
   if (existing) {
-    // A flow imported earlier and still only a draft: refresh that draft. Anything published is
-    // never touched here — edit it in the Voice Call Flows editor (that makes a new draft).
-    if (existing.versions.some((v) => v.status === "PUBLISHED")) {
-      console.log(`= "${def.name}" (${existing.id}) has a published version — not changed. Edit it in the Voice Call Flows editor instead.`);
+    // Same as "Save" in the Voice Call Flows editor: the newest version is a draft → refresh it;
+    // the newest is published → add a new draft version next to it. A published version is never
+    // changed, so the live flow keeps running until someone clicks Publish on the new draft.
+    const latest = existing.versions[0]!;
+    const hash = createHash("sha256").update(JSON.stringify(def)).digest("hex");
+    if (latest.status === "DRAFT") {
+      if (!apply) {
+        console.log(`\nDRY RUN — would update the unpublished draft v${latest.version} of "${def.name}" (${existing.id}).`);
+        return;
+      }
+      await prisma.callFlowVersion.update({
+        where: { id: latest.id },
+        data: { definition: def as object, definitionHash: hash, createdByEmail: "import-script" },
+      });
+      console.log(`\n✓ Updated the unpublished draft v${latest.version} of "${def.name}" (${existing.id}).`);
       return;
     }
-    const draft = existing.versions[0]!;
+    const next = latest.version + 1;
     if (!apply) {
-      console.log(`\nDRY RUN — would update the unpublished draft v${draft.version} of "${def.name}" (${existing.id}).`);
+      console.log(`\nDRY RUN — "${def.name}" is live (v${latest.version}); would add draft v${next}. v${latest.version} stays live until you Publish v${next}.`);
       return;
     }
-    await prisma.callFlowVersion.update({
-      where: { id: draft.id },
-      data: { definition: def as object, definitionHash: createHash("sha256").update(JSON.stringify(def)).digest("hex"), createdByEmail: "import-script" },
+    await prisma.callFlowVersion.create({
+      data: { flowId: existing.id, version: next, status: "DRAFT", definition: def as object, definitionHash: hash, createdByEmail: "import-script" },
     });
-    console.log(`\n✓ Updated the unpublished draft v${draft.version} of "${def.name}" (${existing.id}).`);
+    console.log(`\n✓ Added draft v${next} to "${def.name}" (${existing.id}). v${latest.version} stays live until you Publish v${next} in the editor.`);
     return;
   }
   if (!apply) {

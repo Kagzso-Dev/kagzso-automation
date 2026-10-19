@@ -137,6 +137,11 @@ class Settings(BaseSettings):
     # delay, reply source) and a per-call summary log line. Numbers only, written off the
     # audio path like the existing metrics. false = only the original five columns.
     LATENCY_DETAIL_METRICS: bool = True
+    # Don't speak a question the agent already asked earlier in this call (e.g. the same
+    # interest or permission question tacked onto every answer). Only drops a repeated
+    # question after something else was said in the same reply, so a reply is never empty.
+    # false = speak the model's reply exactly as before.
+    REPEAT_QUESTION_GUARD: bool = True
 
     # --- Provider connections ---
     # Keep idle HTTPS connections to Sarvam / the LLM open this long between turns
