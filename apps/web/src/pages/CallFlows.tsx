@@ -577,7 +577,7 @@ function CallFlowEditor({
       : form.blocks.filter((b): b is CallFlowTextBlock => !isLockedBlock(b) && b.group === tab);
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+    <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
       <div className="card min-w-0">
         <div className="mb-3 flex items-start justify-between gap-4">
           <div>
@@ -793,27 +793,35 @@ function CallFlowEditor({
 
         <div className="mt-6 border-t border-line pt-4">
           <div className="mb-2 text-sm font-semibold">Versions</div>
-          <ul className="flex flex-col gap-1 text-sm">
+          <ul className="divide-y divide-line/70 rounded-lg border border-line/70 px-3 text-sm">
             {versions.map((v) => (
-              <li key={v.id} className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-2">
-                  <span className="font-mono">v{v.version}</span>
-                  <Badge tone={v.status === "PUBLISHED" ? "ok" : "warn"}>{v.status.toLowerCase()}</Badge>
-                  <span className="text-xs text-slate-550">
-                    {v.status === "PUBLISHED" ? `published ${fmtDate(v.publishedAt)}` : `saved ${fmtDate(v.updatedAt)}`}
-                    {v.createdByEmail ? ` · ${v.createdByEmail}` : ""}
+              <li key={v.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 py-3">
+                <span className="flex min-w-0 flex-1 basis-60 items-center gap-3">
+                  <span className="w-9 shrink-0 font-mono">v{v.version}</span>
+                  <span className="w-20 shrink-0">
+                    <Badge tone={v.status === "PUBLISHED" ? "ok" : "warn"}>{v.status.toLowerCase()}</Badge>
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-xs text-ink">
+                      {v.status === "PUBLISHED" ? `published ${fmtDate(v.publishedAt)}` : `saved ${fmtDate(v.updatedAt)}`}
+                    </span>
+                    {v.createdByEmail && (
+                      <span className="block truncate text-[11px] text-slate-550" title={v.createdByEmail}>
+                        {v.createdByEmail}
+                      </span>
+                    )}
                   </span>
                 </span>
-                <span className="flex items-center gap-1">
+                <span className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
                   {v.status === "PUBLISHED" && v.id !== published?.id && (
-                    <button className="btn-ghost py-1 text-xs" disabled={restore.isPending} onClick={() => restore.mutate(v.version)}>
+                    <button className="btn-ghost h-8 whitespace-nowrap px-3 py-0 text-xs" disabled={restore.isPending} onClick={() => restore.mutate(v.version)}>
                       Restore into draft
                     </button>
                   )}
                   {/* Never the live version or the only one (the API refuses both, and a version a run used). */}
                   {v.id !== published?.id && versions.length > 1 && (
                     <button
-                      className="btn-ghost py-1 text-xs text-crit"
+                      className="btn h-8 whitespace-nowrap border-crit-line bg-transparent px-3 py-0 text-xs text-crit hover:border-crit/40 hover:bg-crit-soft"
                       disabled={removeVersion.isPending}
                       onClick={async () => {
                         if (
@@ -936,11 +944,13 @@ function PreviewPanel({ definition, valid }: { definition: CallFlowDefinition; v
             {showPrompt ? "Hide" : "Show"} the full prompt sent to the AI
           </button>
           {showPrompt && (
-            <div className="relative">
-              <pre className="mt-2 max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-lg bg-surface-muted p-2 pr-16 text-[11px]">
+            <div className="mt-2 overflow-hidden rounded-lg border border-line bg-surface-muted">
+              <div className="flex justify-end border-b border-line/70 px-2 py-1.5">
+                <CopyPromptButton text={p.system_prompt ?? ""} />
+              </div>
+              <pre className="scroll-thin max-h-[50vh] overflow-auto whitespace-pre-wrap break-words p-3 text-[11px] leading-relaxed">
                 {p.system_prompt}
               </pre>
-              <CopyPromptButton text={p.system_prompt ?? ""} />
             </div>
           )}
         </div>
@@ -984,7 +994,7 @@ function CopyPromptButton({ text }: { text: string }) {
   return (
     <button
       type="button"
-      className="absolute right-2 top-4 rounded bg-surface px-1.5 py-0.5 text-[11px] font-medium text-accent-ink shadow-sm transition-colors hover:bg-tint"
+      className="btn-ghost h-7 whitespace-nowrap px-2.5 py-0 text-[11px] text-accent-ink"
       aria-label="Copy the full prompt"
       onClick={copy}
     >
