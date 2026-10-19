@@ -1,5 +1,6 @@
-// Call Flows editor ("Call Flows" page). ADMIN and EDITOR, and 404 unless both
-// ENABLE_AI_CALLS and ENABLE_CALL_FLOW_EDITOR are on.
+// Call Flows editor ("Voice Call Flows" page). Reads: ADMIN and EDITOR (the AI Call window's
+// flow picker). Changes (create, save, publish, archive, remove, trial numbers): ADMIN only.
+// 404 unless both ENABLE_AI_CALLS and ENABLE_CALL_FLOW_EDITOR are on.
 //
 //   GET    /api/call-flows/builtin                   built-in flows to copy + locked block text (from the voice backend)
 //   GET    /api/call-flows                           flows with their latest published / draft version
@@ -65,6 +66,9 @@ const limiter = (limit: number) =>
     message: { error: "Too many call flow requests — wait a minute and try again.", code: "rate_limited" },
   });
 const writeLimiter = limiter(60);
+/** Changing call flows (create, save, publish, archive, remove, trial numbers): admins only. Editors keep the
+ *  reads the AI Call window uses (the flow picker); they don't get the Voice Call Flows page (web lib/navAccess). */
+const adminOnly = requireRole("ADMIN");
 const previewLimiter = limiter(120);
 const testCallLimiter = limiter(3);
 /** 3 placed test calls per hour per user. Refused requests (4xx/5xx) don't use up the hour. */
@@ -147,6 +151,7 @@ callFlowsRouter.get(
 
 callFlowsRouter.post(
   "/",
+  adminOnly,
   writeLimiter,
   wrap(async (req, res) => {
     const body = createCallFlowInput.parse(req.body);
@@ -195,6 +200,7 @@ callFlowsRouter.get(
 
 callFlowsRouter.post(
   "/test-numbers",
+  adminOnly,
   writeLimiter,
   wrap(async (req, res) => {
     const body = addTestCallNumberInput.parse(req.body);
@@ -206,6 +212,7 @@ callFlowsRouter.post(
 
 callFlowsRouter.delete(
   "/test-numbers/:numberId",
+  adminOnly,
   writeLimiter,
   wrap(async (req, res) => {
     const { phone } = await removeTestNumber(String(req.params.numberId ?? "")).catch(testNumberError);
@@ -229,6 +236,7 @@ callFlowsRouter.get(
 
 callFlowsRouter.put(
   "/:id/draft",
+  adminOnly,
   writeLimiter,
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
@@ -245,6 +253,7 @@ callFlowsRouter.put(
 
 callFlowsRouter.delete(
   "/:id/draft",
+  adminOnly,
   writeLimiter,
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
@@ -259,6 +268,7 @@ callFlowsRouter.delete(
 
 callFlowsRouter.post(
   "/:id/publish",
+  adminOnly,
   writeLimiter,
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
@@ -277,6 +287,7 @@ callFlowsRouter.post(
 
 callFlowsRouter.post(
   "/:id/versions/:version/restore",
+  adminOnly,
   writeLimiter,
   wrap(async (req, res) => {
     const { id, version } = callFlowVersionParam.parse(req.params);
@@ -291,6 +302,7 @@ callFlowsRouter.post(
 
 callFlowsRouter.post(
   "/:id/archive",
+  adminOnly,
   writeLimiter,
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
@@ -303,6 +315,7 @@ callFlowsRouter.post(
 
 callFlowsRouter.delete(
   "/:id",
+  adminOnly,
   writeLimiter,
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);

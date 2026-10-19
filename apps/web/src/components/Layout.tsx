@@ -5,6 +5,7 @@ import { useAiCallsConfig } from "../lib/aiCalls";
 import { useInboxUnread } from "../lib/whatsappInbox";
 import { useSidebarHiddenItems } from "../lib/sidebar";
 import { useBranding, useDocumentTitle } from "../lib/branding";
+import { navForRole } from "../lib/navAccess";
 import type { HideableNavItem } from "@dispatch/shared";
 import { Icon, type IconName } from "./icons";
 import { Logo } from "./Logo";
@@ -84,17 +85,20 @@ export function Layout({ children }: { children: ReactNode }) {
   // App name from Settings → Branding ("Dispatch" until an admin changes it).
   const { appName } = useBranding();
   useDocumentTitle(appName);
-  const groups = NAV_GROUPS.map((g) => ({
-    ...g,
-    items: g.items.filter(
-      (n) =>
-        (n.to !== "/call-flows" || showCallFlows) &&
-        (n.to !== "/ai-call-customers" || showAiCustomers) &&
-        (n.to !== "/whatsapp-inbox" || user?.role === "ADMIN") && // customer messages: admins only
-        // Settings hidden "for editors" never hides from admins (they must be able to turn it back on).
-        !(n.hideKey && hidden.has(n.hideKey) && !(n.hideKey === "settings-editors" && user?.role === "ADMIN")),
-    ),
-  })).filter((g) => g.items.length > 0); // a group with nothing left loses its label too
+  const groups = navForRole(
+    NAV_GROUPS.map((g) => ({
+      ...g,
+      items: g.items.filter(
+        (n) =>
+          (n.to !== "/call-flows" || showCallFlows) &&
+          (n.to !== "/ai-call-customers" || showAiCustomers) &&
+          (n.to !== "/whatsapp-inbox" || user?.role === "ADMIN") && // customer messages: admins only
+          // Settings hidden "for editors" never hides from admins (they must be able to turn it back on).
+          !(n.hideKey && hidden.has(n.hideKey) && !(n.hideKey === "settings-editors" && user?.role === "ADMIN")),
+      ),
+    })),
+    user?.role, // editors don't see the template and call-flow editors (lib/navAccess)
+  ); // a group with nothing left loses its label too
 
   // Desktop icon-rail state — persisted across reloads.
   const [collapsed, setCollapsed] = useState<boolean>(() => {

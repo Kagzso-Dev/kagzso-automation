@@ -108,6 +108,30 @@ describe("/api/call-flows", () => {
     expect(((await res.json()) as { error: string }).error).toMatch(/saved trial number/);
   });
 
+  it("editors can't change call flows (admin-only), but keep the reads they need", async () => {
+    const writes: [string, string, unknown][] = [
+      ["POST", "/api/call-flows", { name: "A", base: "nila" }],
+      ["PUT", "/api/call-flows/f1/draft", { definition: { name: "A" } }],
+      ["DELETE", "/api/call-flows/f1/draft", undefined],
+      ["POST", "/api/call-flows/f1/publish", {}],
+      ["POST", "/api/call-flows/f1/versions/1/restore", {}],
+      ["POST", "/api/call-flows/f1/archive", {}],
+      ["DELETE", "/api/call-flows/f1", undefined],
+      ["POST", "/api/call-flows/test-numbers", { phone: "+919812345678" }],
+      ["DELETE", "/api/call-flows/test-numbers/x1", undefined],
+    ];
+    for (const [method, path, body] of writes) {
+      const res = await call(path, { method, role: "EDITOR", ...(body ? { body: JSON.stringify(body) } : {}) });
+      expect([method, path, res.status]).toEqual([method, path, 403]);
+    }
+    // Reads stay open to editors: the catalog / flow picker, the preview, and the send pickers.
+    expect((await call("/api/call-flows/builtin", { role: "EDITOR" })).status).toBe(200);
+    for (const path of ["/api/call-flows", "/api/templates", "/api/whatsapp/templates", "/api/whatsapp/templates/verify"]) {
+      const res = await call(path, { role: "EDITOR" });
+      expect([path, [401, 403].includes(res.status)]).toEqual([path, false]);
+    }
+  });
+
   it("serves the built-in catalog", async () => {
     const res = await call("/api/call-flows/builtin", { role: "ADMIN" });
     expect(res.status).toBe(200);

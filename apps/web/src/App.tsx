@@ -18,6 +18,14 @@ import { CampaignDetailPage } from "./pages/CampaignDetail";
 import { SendQueuePage } from "./pages/SendQueue";
 import { TriggersPage } from "./pages/Triggers";
 import { SettingsPage } from "./pages/Settings";
+import { canSeePath } from "./lib/navAccess";
+import type { ReactNode } from "react";
+
+/** A page editors don't get (lib/navAccess): a typed-in URL goes to the Dashboard instead. */
+function RoleRoute({ path, children }: { path: string; children: ReactNode }) {
+  const { user } = useAuth();
+  return canSeePath(path, user?.role) ? <>{children}</> : <Navigate to="/" replace />;
+}
 
 export function App() {
   const { user, loading } = useAuth();
@@ -42,13 +50,13 @@ export function App() {
         <Route path="/insights" element={<InsightsPage />} />
         <Route path="/contacts" element={<ContactsPage />} />
         <Route path="/whatsapp-contacts" element={<WhatsAppContactsPage />} />
-        <Route path="/whatsapp-templates" element={<WhatsAppTemplatesPage />} />
+        <Route path="/whatsapp-templates" element={<RoleRoute path="/whatsapp-templates"><WhatsAppTemplatesPage /></RoleRoute>} />
         <Route path="/whatsapp-inbox" element={<WhatsAppInboxPage />} />
         <Route path="/lists" element={<ListsPage />} />
         <Route path="/lists/:id" element={<ListDetailPage />} />
-        <Route path="/templates" element={<TemplatesPage />} />
+        <Route path="/templates" element={<RoleRoute path="/templates"><TemplatesPage /></RoleRoute>} />
         <Route path="/ai-call-customers" element={<AiCallCustomersPage />} />
-        <Route path="/call-flows" element={<CallFlowsPage />} />
+        <Route path="/call-flows" element={<RoleRoute path="/call-flows"><CallFlowsPage /></RoleRoute>} />
         <Route path="/campaigns" element={<CampaignsPage />} />
         <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
         <Route path="/send-queue" element={<SendQueuePage />} />
