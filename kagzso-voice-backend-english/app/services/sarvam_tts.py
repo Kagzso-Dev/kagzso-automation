@@ -203,8 +203,9 @@ class SarvamStream(TTSStream):
             **self.tts._voice_settings(self._pace),
             "speech_sample_rate": str(SAMPLE_RATE),
             "output_audio_codec": "linear16",
-            # We push whole sentences; start speaking the first one as soon as possible.
-            "min_buffer_size": 30,
+            # We push whole sentences; SARVAM_TTS_MIN_BUFFER_CHARS (default 30) = start speaking
+            # the first one as soon as possible.
+            "min_buffer_size": min(200, max(30, self.tts.cfg.SARVAM_TTS_MIN_BUFFER_CHARS)),
         }})
 
     async def set_pace(self, pace: float) -> None:

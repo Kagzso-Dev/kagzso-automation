@@ -209,7 +209,26 @@ async def test_sarvam_tts_websocket_stream(monkeypatch):
     assert config["type"] == "config"
     assert config["data"]["output_audio_codec"] == "linear16" and config["data"]["speech_sample_rate"] == "8000"
     assert config["data"]["speaker"] == "roopa" and config["data"]["language_code"] == "en-IN"
+    assert config["data"]["min_buffer_size"] == 30  # SARVAM_TTS_MIN_BUFFER_CHARS default = the old fixed value
     assert [m["type"] for m in received[1:]] == ["text", "text", "flush"]
+
+
+async def test_sarvam_tts_min_buffer_setting_is_used_and_clamped(monkeypatch):
+    from app.services.sarvam_tts import SarvamStream, SarvamTTS
+
+    sent = []
+    for value, expected in ((60, 60), (5, 30), (999, 200)):
+        monkeypatch.setattr(settings, "SARVAM_TTS_MIN_BUFFER_CHARS", value)
+        stream = SarvamStream(SarvamTTS(settings), "k")
+
+        async def capture(payload, _sent=sent):
+            _sent.append(payload)
+
+        monkeypatch.setattr(stream, "_send", capture)
+        await stream._send_config()
+        assert sent[-1]["data"]["min_buffer_size"] == expected
+        # nothing else in the voice config changes
+        assert sent[-1]["data"]["speaker"] == "roopa" and sent[-1]["data"]["output_audio_codec"] == "linear16"
 
 
 async def test_sarvam_tts_websocket_error(monkeypatch):

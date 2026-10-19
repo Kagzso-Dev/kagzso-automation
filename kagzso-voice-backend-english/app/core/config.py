@@ -94,6 +94,10 @@ class Settings(BaseSettings):
     SARVAM_TTS_SPEAKER: str = "roopa"  # lowercase Bulbul v3 speaker id; must be in app/core/voices.py (else roopa)
     SARVAM_TTS_PACE: float = 1.0  # 0.5-2.0
     SARVAM_TTS_TEMPERATURE: float = 0.6  # 0.01-1.0
+    # Streamed calls: characters Sarvam collects before it starts speaking (its min_buffer_size).
+    # 30 = today's value (fastest first audio). Higher joins sentences more smoothly but the
+    # first audio starts a little later. Clamped to 30-200.
+    SARVAM_TTS_MIN_BUFFER_CHARS: int = 30
     SARVAM_TTS_WS_URL: str = "wss://api.sarvam.ai/text-to-speech/ws"
     # Comma-separated speaker ids: each new call uses the next one in turn (empty = SARVAM_TTS_SPEAKER)
     SARVAM_TTS_VOICE_ROTATION: str = ""
