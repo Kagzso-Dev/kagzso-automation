@@ -328,7 +328,11 @@ export function Layout({ children }: { children: ReactNode }) {
             without remounting anything a route change wouldn't already remount. */}
         <div
           key={location.pathname.split("/")[1]}
-          className="page-enter mx-auto max-w-[1120px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8"
+          className={cx(
+            "page-enter mx-auto px-4 py-6 sm:px-6 lg:px-8 lg:py-8",
+            // Voice Call Flows needs room for list + editor + live preview; every other page keeps 1120px.
+            location.pathname.startsWith("/call-flows") ? "max-w-[1400px]" : "max-w-[1120px]",
+          )}
         >
           {children}
         </div>

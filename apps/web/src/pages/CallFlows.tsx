@@ -98,8 +98,8 @@ export function CallFlowsPage() {
       {catalog.error && <ErrorNote error={catalog.error} />}
       {catalog.data && <BuiltinScripts catalog={catalog.data} onCustomized={setSelectedId} />}
       <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.06em] text-slate-550">Your call flows</h2>
-      <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
-        <div>
+      <div className={selectedId ? "grid gap-6 min-[1600px]:grid-cols-[280px_minmax(0,1fr)]" : "flex flex-col gap-4"}>
+        <div className="min-w-0">
           {flows.isLoading ? (
             <Spinner />
           ) : flows.error ? (
@@ -109,16 +109,23 @@ export function CallFlowsPage() {
               No custom flows yet. Press <b>Customize</b> on a built-in script above to make an editable copy.
             </EmptyState>
           ) : (
-            <ul className="flex flex-col gap-1">
+            <ul
+              className={
+                selectedId
+                  ? // A flow is open: a strip above the editor, a sticky column beside it from 1600px.
+                    "scroll-thin flex gap-2 overflow-x-auto pb-1 min-[1600px]:sticky min-[1600px]:top-4 min-[1600px]:flex-col min-[1600px]:overflow-visible min-[1600px]:pb-0"
+                  : "grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
+              }
+            >
               {flows.data!.items.map((f) => (
                 <li
                   key={f.id}
-                  className={`flex items-center gap-1 rounded-lg ${
-                    selectedId === f.id ? "bg-accent-soft text-accent-ink" : "hover:bg-tint"
-                  }`}
+                  className={`flex items-center gap-1 rounded-lg border transition-colors ${
+                    selectedId ? "w-60 shrink-0 min-[1600px]:w-auto" : "bg-surface shadow-sm"
+                  } ${selectedId === f.id ? "border-accent/40 bg-accent-soft text-accent-ink" : "border-line/70 hover:bg-tint"}`}
                 >
-                  <button className="min-w-0 flex-1 px-3 py-2 text-left text-sm" onClick={() => setSelectedId(f.id)}>
-                    <div className="truncate font-medium">{f.name}</div>
+                  <button className="min-w-0 flex-1 px-3 py-2.5 text-left text-sm" onClick={() => setSelectedId(f.id)}>
+                    <div className="truncate font-medium" title={f.name}>{f.name}</div>
                     <div className="mt-0.5 flex flex-wrap gap-1">
                       {f.published ? <Badge tone="ok">v{f.published.version} live</Badge> : <Badge>not published</Badge>}
                       {f.draft && <Badge tone="warn">draft v{f.draft.version}</Badge>}
@@ -577,12 +584,12 @@ function CallFlowEditor({
       : form.blocks.filter((b): b is CallFlowTextBlock => !isLockedBlock(b) && b.group === tab);
 
   return (
-    <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+    <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
       <div className="card min-w-0">
-        <div className="mb-3 flex items-start justify-between gap-4">
-          <div>
-            <div className="text-sm font-semibold">{form.name}</div>
-            <div className="text-xs text-slate-550">
+        <div className="-mx-5 -mt-5 mb-5 flex items-start justify-between gap-4 border-b border-line/70 px-5 py-4">
+          <div className="min-w-0">
+            <div className="truncate text-base font-semibold" title={form.name}>{form.name}</div>
+            <div className="mt-0.5 text-xs text-slate-550">
               {BASE_LABELS[form.base]} ·{" "}
               {draft ? `editing draft v${draft.version}` : published ? `editing v${published.version} (saving makes a new draft)` : ""}
             </div>
@@ -591,24 +598,24 @@ function CallFlowEditor({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="-m-1.5 grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-ink"
+            className="-m-1.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-ink"
           >
             <Icon name="close" size={18} />
           </button>
         </div>
 
-        <div className="mb-3 grid gap-3 sm:grid-cols-2">
-          <div>
+        <div className="mb-6 grid gap-4 sm:grid-cols-2">
+          <div className="min-w-0">
             <label className="label">Name</label>
             <input className="input" maxLength={100} value={form.name} onChange={(e) => update((f) => void (f.name = e.target.value))} />
           </div>
-          <div>
+          <div className="min-w-0">
             <label className="label">Language</label>
-            <select className="input" value={form.language} disabled>
+            <select className="input truncate" value={form.language} disabled title="English (the only language this voice backend supports)">
               <option value="en">English (the only language this voice backend supports)</option>
             </select>
           </div>
-          <div>
+          <div className="min-w-0 sm:col-span-2">
             <label className="label">Voice</label>
             {catalog.voices?.length ? (
               <VoicePicker
@@ -625,9 +632,9 @@ function CallFlowEditor({
                 onChange={(e) => update((f) => void (f.voice_id = e.target.value.trim() || null))}
               />
             )}
-            <span className="text-xs text-slate-550">Ignored while SARVAM_TTS_VOICE_ROTATION is set on the server.</span>
+            <span className="mt-1 block text-xs text-slate-550">Ignored while SARVAM_TTS_VOICE_ROTATION is set on the server.</span>
           </div>
-          <div>
+          <div className="min-w-0">
             <label className="label">Max call duration (seconds)</label>
             <input
               type="number"
@@ -637,12 +644,12 @@ function CallFlowEditor({
               value={form.limits.max_duration_sec}
               onChange={(e) => update((f) => void (f.limits.max_duration_sec = Number(e.target.value) || 0))}
             />
-            <span className="text-xs text-slate-550">Server maximum {catalog.limits.max_duration_sec}s.</span>
+            <span className="mt-1 block text-xs text-slate-550">Server maximum {catalog.limits.max_duration_sec}s.</span>
           </div>
         </div>
 
-        <label className="label">Insert a variable (into the field you last clicked)</label>
-        <div className="mb-3 mt-1 flex flex-wrap gap-1">
+        <label className="label border-t border-line/70 pt-5">Insert a variable (into the field you last clicked)</label>
+        <div className="mb-4 mt-1 flex flex-wrap gap-1">
           {CALL_FLOW_VARIABLES.map((v) => (
             <button
               key={v}
@@ -658,18 +665,18 @@ function CallFlowEditor({
 
         <label className="label">Greeting (spoken word for word, before the AI takes over)</label>
         <input className="input mb-1" maxLength={300} {...bind("greeting")} />
-        <p className="mb-3 text-xs text-slate-550">
+        <p className="mb-5 text-xs text-slate-550">
           If it uses {"{{name}}"} or {"{{customer_name}}"}, customers without a name are not called. Keep the
           “Greeting” blocks below consistent with this line.
         </p>
 
-        <div className="mb-3 flex flex-wrap gap-1 rounded-lg bg-surface-muted p-1">
+        <div className="mb-4 flex flex-wrap gap-1 rounded-lg bg-surface-muted p-1">
           {TABS.map((t) => (
             <button
               key={t.key}
               type="button"
               onClick={() => setTab(t.key)}
-              className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+              className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
                 tab === t.key ? "bg-white text-ink shadow-sm" : "text-slate-550 hover:text-ink"
               }`}
             >
@@ -698,27 +705,27 @@ function CallFlowEditor({
           ),
         )}
 
-        <div className="mb-3 grid gap-3 sm:grid-cols-2">
-          <div>
+        <div className="mb-4 grid gap-4 border-t border-line/70 pt-5 sm:grid-cols-2">
+          <div className="min-w-0">
             <label className="label">No response: first re-prompt</label>
             <input className="input" maxLength={200} {...bind("silence.reprompt")} />
           </div>
-          <div>
+          <div className="min-w-0">
             <label className="label">No response: closing line</label>
             <input className="input" maxLength={200} {...bind("silence.closing")} />
           </div>
         </div>
-        <div className="mb-3 rounded-lg bg-surface-muted px-3 py-2 text-xs text-slate-550">
+        <div className="mb-4 rounded-lg bg-surface-muted px-3 py-2 text-xs text-slate-550">
           <b>Not answered, busy or voicemail:</b> the call is hung up and the outcome recorded (no retry, no voicemail
           message). This is fixed in the voice backend.
         </div>
-        <div className="mb-3">
+        <div className="mb-4">
           <label className="label">Transfer number (saved, not used yet)</label>
           <PhoneInput
             value={form.transfer.number ?? ""}
             onChange={(v) => update((f) => void (f.transfer.number = v || null))}
           />
-          <span className="text-xs text-slate-550">Live call transfer isn't implemented yet; the number is stored with the flow.</span>
+          <span className="mt-1 block text-xs text-slate-550">Live call transfer isn't implemented yet; the number is stored with the flow.</span>
         </div>
 
         {check && !check.success && (
@@ -733,7 +740,8 @@ function CallFlowEditor({
         {[save.error, publish.error, discard.error, restore.error, removeVersion.error, archive.error].map(
           (e, i) => e && <ErrorNote key={i} error={e} />,
         )}
-        <div className="mt-3 flex flex-wrap justify-end gap-2">
+        {/* Sticky action bar: stays at the bottom of the screen while the editor scrolls. */}
+        <div className="sticky bottom-0 z-10 -mx-5 mt-4 flex flex-wrap justify-end gap-2 border-t border-line/70 bg-surface/95 px-5 py-3 backdrop-blur">
           <button
             className="btn-ghost text-crit"
             disabled={archive.isPending}
@@ -890,8 +898,11 @@ function PreviewPanel({ definition, valid }: { definition: CallFlowDefinition; v
   const p = preview.data;
 
   return (
-    <div className="card h-fit xl:sticky xl:top-4">
-      <div className="mb-2 text-sm font-semibold">Live preview</div>
+    // Fold-open below xl (it sits under the editor there); always open beside the editor from xl.
+    <details open className="card h-fit xl:sticky xl:top-4">
+      <summary className="mb-2 cursor-pointer text-sm font-semibold xl:pointer-events-none xl:cursor-default xl:list-none xl:[&::-webkit-details-marker]:hidden">
+        Live preview
+      </summary>
       <div className="mb-2 flex flex-wrap gap-1">
         {SAMPLES.map(({ label, ...s }) => (
           <button
@@ -955,7 +966,7 @@ function PreviewPanel({ definition, valid }: { definition: CallFlowDefinition; v
           )}
         </div>
       )}
-    </div>
+    </details>
   );
 }
 

@@ -91,25 +91,30 @@ export function VoicePicker({
 
   return (
     <div>
-      <ul role="radiogroup" aria-label="Voice" className="space-y-1.5">
+      <ul role="radiogroup" aria-label="Voice" className="grid grid-cols-[repeat(auto-fill,minmax(10rem,1fr))] gap-2">
         {voices.map((v) => {
           const on = v.id === selected;
+          const meta = [v.language, v.gender].filter(Boolean).join(" · ") + (v.id === defaultVoice ? " · default" : "");
           return (
             <li
               key={v.id}
-              className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-sm ${on ? "border-accent bg-tint" : "border-line"}`}
+              className={`flex min-w-0 flex-col gap-2 rounded-lg border p-3 text-sm transition-colors ${
+                on ? "border-accent bg-tint ring-1 ring-accent" : "border-line hover:border-accent/50"
+              }`}
             >
-              <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
-                <input type="radio" name="flow-voice" checked={on} onChange={() => onChange(v.id)} />
-                <span className="font-medium">{v.name}</span>
-                <span className="truncate text-xs text-slate-550">
-                  {[v.language, v.gender].filter(Boolean).join(" · ")}
-                  {v.id === defaultVoice ? " · default" : ""}
+              <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-2">
+                <input type="radio" name="flow-voice" className="mt-0.5 shrink-0" checked={on} onChange={() => onChange(v.id)} />
+                <span className="min-w-0">
+                  <span className="block truncate font-medium" title={v.name}>{v.name}</span>
+                  <span className="block truncate text-xs text-slate-550" title={meta}>
+                    {[v.language, v.gender].filter(Boolean).join(" · ")}
+                    {v.id === defaultVoice ? " · default" : ""}
+                  </span>
                 </span>
               </label>
               <button
                 type="button"
-                className="btn-ghost shrink-0 px-2.5 py-1 text-xs"
+                className="btn-ghost w-full whitespace-nowrap px-2.5 py-1 text-xs"
                 aria-label={`${playing === v.id ? "Stop" : "Listen to"} ${v.name}`}
                 disabled={loading !== null && loading !== v.id}
                 onClick={() => void listen(v.id)}
@@ -121,9 +126,9 @@ export function VoicePicker({
         })}
       </ul>
       {!known && <p className="mt-1.5 text-xs text-warn">Previous voice is no longer available, using {defaultName}.</p>}
-      <label className="label mt-2">Sample line to listen to</label>
+      <label className="label mt-3">Sample line to listen to</label>
       <input className="input" maxLength={200} value={sample} onChange={(e) => setSample(e.target.value)} placeholder={DEFAULT_SAMPLE} />
-      <span className="text-xs text-slate-550">{sample.length}/200 · only plays a sample — nothing is called or saved.</span>
+      <span className="mt-1 block text-xs text-slate-550">{sample.length}/200 · only plays a sample — nothing is called or saved.</span>
       {error && <p className="mt-1 text-xs text-crit">{error}</p>}
     </div>
   );
