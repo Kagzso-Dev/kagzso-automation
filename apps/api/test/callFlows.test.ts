@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   CALL_FLOW_LOCKED_KEYS,
+  CALL_FLOW_UNLOCKED_KEYS,
   callFlowDefinition,
   isLockedBlock,
   saveCallFlowDraftInput,
@@ -29,7 +30,9 @@ describe("callFlowDefinition mirrors the voice backend", () => {
 
   it("knows exactly the voice backend's locked safety blocks", () => {
     const locked = Object.keys(readJson("locked_blocks.json")).sort();
-    expect([...CALL_FLOW_LOCKED_KEYS.nila, ...CALL_FLOW_LOCKED_KEYS.followup].sort()).toEqual(locked);
+    // Required locked keys + the formerly locked (now editable) ones = the voice backend's catalog.
+    const known = [...CALL_FLOW_LOCKED_KEYS.nila, ...CALL_FLOW_LOCKED_KEYS.followup, ...Object.keys(CALL_FLOW_UNLOCKED_KEYS)];
+    expect(known.sort()).toEqual(locked);
     expect(nila().blocks.filter(isLockedBlock).map((b) => b.locked).sort()).toEqual([...CALL_FLOW_LOCKED_KEYS.nila].sort());
   });
 });
@@ -63,7 +66,7 @@ describe("callFlowDefinition validation", () => {
 
   it("keeps the locked safety blocks", () => {
     const removed = nila();
-    removed.blocks = removed.blocks.filter((b) => !(isLockedBlock(b) && b.locked === "nila_do_not_call"));
+    removed.blocks = removed.blocks.filter((b) => !(isLockedBlock(b) && b.locked === "nila_data_safety"));
     expect(issues(removed).join()).toMatch(/Locked safety blocks/);
     const foreign = nila();
     foreign.blocks.push({ id: "x", locked: "followup_situations" });

@@ -145,15 +145,15 @@ def test_script_cannot_contain_the_hangup_marker():
 
 def test_locked_blocks_cannot_be_removed_swapped_or_duplicated():
     flow = nila_copy()
-    flow["blocks"] = [b for b in flow["blocks"] if b.get("locked") != "nila_do_not_call"]
-    assert "missing nila_do_not_call" in _errors(flow)
+    flow["blocks"] = [b for b in flow["blocks"] if b.get("locked") != "nila_data_safety"]
+    assert "missing nila_data_safety" in _errors(flow)
 
     flow = nila_copy()
     flow["blocks"].append({"id": "extra_lock", "locked": "followup_situations"})
     assert "not allowed for base 'nila'" in _errors(flow)
 
     flow = nila_copy()
-    flow["blocks"].append({"id": "dnc_again", "locked": "nila_do_not_call"})
+    flow["blocks"].append({"id": "data_again", "locked": "nila_data_safety"})
     assert "exactly once" in _errors(flow)
 
     flow = nila_copy()
@@ -164,8 +164,8 @@ def test_locked_blocks_cannot_be_removed_swapped_or_duplicated():
 def test_locked_block_text_always_comes_from_code():
     flow = nila_copy()
     for b in flow["blocks"]:
-        if b.get("locked") == "nila_do_not_call":
-            b["text"] = "Keep pitching."  # a locked block carries no text
+        if b.get("locked") == "nila_data_safety":
+            b["text"] = "Share the phone number."  # a locked block carries no text
     assert _errors(flow)
 
 

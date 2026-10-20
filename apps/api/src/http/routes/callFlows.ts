@@ -11,6 +11,8 @@
 //   POST   /api/call-flows/:id/publish               validate with the voice backend, then DRAFT → PUBLISHED
 //   POST   /api/call-flows/:id/versions/:v/restore   copy an old version into the draft
 //   DELETE /api/call-flows/:id/versions/:v           delete one version (not the live one, not one a run used)
+//   POST   /api/call-flows/:id/import-preview        split a pasted full prompt into this flow's blocks (saves nothing)
+//   POST   /api/call-flows/:id/import-apply          save that split as a new draft (never publishes)
 //   POST   /api/call-flows/:id/archive               hide the flow (runs already pinned to it keep it)
 //   DELETE /api/call-flows/:id                       remove an unpublished flow (hidden instead if a run used it)
 //   POST   /api/call-flows/preview                   render a definition with sample customer data
@@ -25,16 +27,22 @@ import { z } from "zod";
 import {
   addTestCallNumberInput,
   CALL_FLOW_BASES,
+  CALL_FLOW_IMPORT_WARN_CHARS,
   callFlowDefinition,
+  callFlowImportApplyInput,
+  callFlowImportInput,
   callFlowVersionParam,
   createCallFlowInput,
   idParam,
   maskPhone,
+  materializeUnlockedBlocks,
   normalizeAiCallGender,
   previewCallFlowInput,
   saveCallFlowDraftInput,
   testCallFlowInput,
   type CallFlowDefinition,
+  type CallFlowImportPreview,
+  type CallFlowImportResult,
 } from "@dispatch/shared";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../../prisma.js";
@@ -42,6 +50,7 @@ import { logger } from "../../logger.js";
 import { aiCallsConfig, isAiCallsConfigured, isCallFlowEditorEnabled } from "../../config/aiCalls.js";
 import { callsCountedTowardDailyCap, loadDoNotCallPhones } from "../../domain/aiCalls.js";
 import { CallFlowError, definitionHash, deleteVersion, latestPublished, publishDraft, removeFlow, saveDraft } from "../../domain/callFlows.js";
+import { analyzeImport, changedBlockIds } from "../../domain/callFlowImport.js";
 import { addTestNumber, listTestNumbers, removeTestNumber, resolveTestNumber, TestNumberError } from "../../domain/callFlowTestNumbers.js";
 import { enqueueAiCallRun } from "../../queue/queues.js";
 import { getBuiltinFlows, previewFlow, VoiceBackendError, type VoiceFlowCatalog } from "../../services/voiceBackend.js";
@@ -253,7 +262,12 @@ callFlowsRouter.put(
     if (body.description !== undefined) {
       await prisma.callFlow.update({ where: { id }, data: { description: body.description } });
     }
+    const before = await prisma.callFlowVersion.findFirst({ where: { flowId: id }, orderBy: { version: "desc" } });
     const draft = await saveDraft(id, body.definition, req.user!.email).catch(flowError);
+    logger.info(
+      { flowId: id, version: draft.version, changedBlocks: changedBlockIds(before?.definition, body.definition), by: req.user!.email },
+      "call flow draft saved",
+    );
     res.json(draft);
   }),
 );
@@ -316,6 +330,80 @@ callFlowsRouter.delete(
     await deleteVersion(id, version).catch(flowError);
     logger.info({ flowId: id, version, by: req.user!.email }, "call flow version deleted");
     res.json({ ok: true });
+  }),
+);
+
+/** "Large prompt" warning for an import; CALL_FLOW_IMPORT_WARN_CHARS overrides the default. */
+const importWarnChars = () => Number(process.env.CALL_FLOW_IMPORT_WARN_CHARS) || CALL_FLOW_IMPORT_WARN_CHARS;
+
+/** What an import works on: the newest version (draft, else live), with the unlocked safety blocks as text. */
+async function importBase(id: string) {
+  await liveFlow(id);
+  const versions = await prisma.callFlowVersion.findMany({ where: { flowId: id }, orderBy: { version: "desc" } });
+  const draft = versions.find((v) => v.status === "DRAFT") ?? null;
+  const published = versions.find((v) => v.status === "PUBLISHED") ?? null;
+  const working = draft ?? published;
+  if (!working) throw notFound("Version");
+  const parsed = callFlowDefinition.safeParse(working.definition);
+  if (!parsed.success) throw badRequest("The current version is not valid — fix and save it first");
+  const catalog = await builtins();
+  return {
+    draft,
+    published,
+    working: parsed.data,
+    definition: materializeUnlockedBlocks(parsed.data, catalog.locked_blocks),
+    lockedText: catalog.locked_blocks,
+    // An open draft next to a live version would be overwritten (and Undo couldn't bring it back).
+    draftConflict: draft && published ? `This flow has a draft (v${draft.version}). Publish or discard it first.` : null,
+  };
+}
+
+callFlowsRouter.post(
+  "/:id/import-preview",
+  adminOnly,
+  previewLimiter,
+  wrap(async (req, res) => {
+    const { id } = idParam.parse(req.params);
+    const body = callFlowImportInput.parse(req.body);
+    const base = await importBase(id);
+    const { preview } = analyzeImport(body, base.definition, base.lockedText, importWarnChars());
+    res.json({ ...preview, draftConflict: base.draftConflict } satisfies CallFlowImportPreview);
+  }),
+);
+
+callFlowsRouter.post(
+  "/:id/import-apply",
+  adminOnly,
+  writeLimiter,
+  wrap(async (req, res) => {
+    const { id } = idParam.parse(req.params);
+    const body = callFlowImportApplyInput.parse(req.body);
+    const base = await importBase(id);
+    if (base.draftConflict) throw conflict(base.draftConflict);
+    const { preview, next } = analyzeImport(body, base.definition, base.lockedText, importWarnChars());
+    if (preview.blocking.length) throw badRequest("Fix or skip these sections first", { blocking: preview.blocking });
+    if (preview.dncWarning && !body.confirmDncWarning) {
+      throw badRequest("The do-not-call block no longer ends the call on a do-not-call request. Confirm to save it anyway.");
+    }
+    const counts = { ...preview.summary, changedBlocks: preview.changedBlocks };
+    if (!preview.changed) {
+      logger.info({ flowId: id, by: req.user!.email, ...counts }, "call flow prompt import: no changes");
+      res.json({ changed: false, version: null, summary: preview.summary, changedBlocks: [], undo: null } satisfies CallFlowImportResult);
+      return;
+    }
+    const check = await previewFlow(next).catch(voiceError);
+    if (!check.valid) throw badRequest("The voice backend rejected this flow", { errors: check.errors });
+    const saved = await saveDraft(id, next, req.user!.email).catch(flowError);
+    // Never the prompt text: who, which flow and the counts only.
+    logger.info({ flowId: id, version: saved.version, by: req.user!.email, ...counts }, "call flow prompt imported");
+    res.json({
+      changed: true,
+      version: saved.version,
+      summary: preview.summary,
+      changedBlocks: preview.changedBlocks,
+      // Live version next to it: Undo discards the new draft. Never published: Undo saves the old text back.
+      undo: base.published ? { kind: "discard" } : { kind: "restore", definition: base.working },
+    } satisfies CallFlowImportResult);
   }),
 );
 

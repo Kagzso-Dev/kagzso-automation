@@ -6,8 +6,10 @@ silence lines and a duration limit. Dispatch stores and versions flows; this
 module is the authoritative validator.
 
 Locked blocks carry only a key. Their text comes from builtin/locked_blocks.json
-(do-not-call, wrong person, data safety, outcome rules ...), so an editor can
-reorder the rest of the script but can never change or drop the safety parts.
+(runtime customer data, customer data safety), so an editor can reorder the rest of
+the script but can never change or drop them. Do-not-call, wrong person, outcome
+rules, callback and safety rules 21-31 are editable text now (see UNLOCKED_KEYS);
+the fixed rules appended in llm_service always apply on top of any flow.
 """
 from __future__ import annotations
 
@@ -34,8 +36,20 @@ _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _FORBIDDEN = ("[[END_CALL]]",)  # the hang-up marker belongs to the fixed rules, never to a script
 
 
+# Safety blocks that are editable text now. Published and older versions still carry them as
+# {id, locked: key}: those keep loading and render byte for byte from LOCKED_BLOCKS, but they are
+# optional (at most once) instead of required. The system's own rules (VOICE_RULES / SAFETY_RULES in
+# llm_service) are appended after every flow and stay out of reach of any edit.
+UNLOCKED_KEYS = ("nila_callback_request", "nila_do_not_call", "nila_outcome_rules", "nila_rules_safety",
+                 "nila_wrong_person")
+
+
 def required_locked_keys(base: str) -> List[str]:
-    return sorted(k for k in LOCKED_BLOCKS if k.startswith(f"{base}_"))
+    return sorted(k for k in LOCKED_BLOCKS if k.startswith(f"{base}_") and k not in UNLOCKED_KEYS)
+
+
+def optional_locked_keys(base: str) -> List[str]:
+    return sorted(k for k in UNLOCKED_KEYS if k.startswith(f"{base}_"))
 
 
 def check_text(value: str, *, multiline: bool) -> str:
@@ -130,12 +144,14 @@ class CallFlow(_Strict):
             raise ValueError(f"duplicate block id(s): {', '.join(dupes)}")
         locked = [b.locked for b in self.blocks if isinstance(b, LockedBlock)]
         required = required_locked_keys(self.base)
-        if sorted(locked) != required:
-            missing = sorted(set(required) - set(locked))
-            extra = sorted(set(locked) - set(required))
+        optional = optional_locked_keys(self.base)
+        missing = sorted(set(required) - set(locked))
+        extra = sorted(set(locked) - set(required) - set(optional))
+        twice = sorted({k for k in locked if locked.count(k) > 1})
+        if missing or extra or twice:
             parts = ([f"missing {', '.join(missing)}"] if missing else []) + \
                     ([f"not allowed for base '{self.base}': {', '.join(extra)}"] if extra else []) + \
-                    ([] if missing or extra else ["each locked block must appear exactly once"])
+                    (["each locked block must appear exactly once"] if twice else [])
             raise ValueError("locked blocks: " + "; ".join(parts))
         if len(render_blocks(self)) > MAX_PROMPT_CHARS:
             raise ValueError(f"the script is longer than {MAX_PROMPT_CHARS} characters")

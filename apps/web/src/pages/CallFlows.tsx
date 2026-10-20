@@ -2,9 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CALL_FLOW_BASES,
+  CALL_FLOW_SAFETY_BLOCK_IDS,
   CALL_FLOW_VARIABLES,
   callFlowDefinition,
   isLockedBlock,
+  lacksDoNotCallHandling,
+  materializeUnlockedBlocks,
   type CallFlowBase,
   type CallFlowDefinition,
   type CallFlowGroup,
@@ -31,6 +34,7 @@ import { useToast } from "../components/toast";
 import { Icon } from "../components/icons";
 import { VoicePicker } from "../components/VoicePicker";
 import { PhoneInput, phoneError } from "../components/PhoneInput";
+import { ImportPromptModal } from "../components/ImportPromptModal";
 
 /**
  * "Call Flows": edit what the AI voice agent says. A flow is a copy of a built-in
@@ -59,6 +63,9 @@ type Sample = Omit<(typeof SAMPLES)[number], "label">;
 
 const blockTitle = (text: string) => text.split("\n").find((l) => l.trim())?.replace(/^#+\s*/, "") ?? "Untitled";
 const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleString() : "—");
+/** Names for blocks whose text starts without a heading. */
+const BLOCK_LABELS: Record<string, string> = { rules_safety: "Safety rules 21–31", rules_style: "Rules 32 onward" };
+const SAFETY_IDS = new Set<string>(CALL_FLOW_SAFETY_BLOCK_IDS);
 
 export function CallFlowsPage() {
   const config = useAiCallsConfig();
@@ -492,8 +499,15 @@ function CallFlowEditor({
 
   // (Re)load the form whenever the version being edited changes (after save / publish / restore).
   const workingKey = working ? `${working.id}:${working.definitionHash}` : "";
+  // Older versions carry do-not-call, wrong person, outcome rules, callback and safety rules 21-31 as
+  // locked references: shown (and saved) as editable text with the same words, so nothing changes until edited.
+  const baseDefinition = useMemo(
+    () => (working ? materializeUnlockedBlocks(working.definition, catalog.locked_blocks) : null),
+    [workingKey], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const [importing, setImporting] = useState(false);
   useEffect(() => {
-    if (working) setForm(structuredClone(working.definition));
+    if (baseDefinition) setForm(structuredClone(baseDefinition));
   }, [workingKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const invalidate = () => {
@@ -532,7 +546,25 @@ function CallFlowEditor({
   });
 
   const check = useMemo(() => (form ? callFlowDefinition.safeParse(form) : null), [form]);
-  const dirty = !!form && !!working && JSON.stringify(form) !== JSON.stringify(working.definition);
+  const dirty = !!form && !!baseDefinition && JSON.stringify(form) !== JSON.stringify(baseDefinition);
+  const textOf = (d: CallFlowDefinition | null, id: string) => {
+    const b = d?.blocks.find((x) => x.id === id);
+    return b && !isLockedBlock(b) ? b.text : null;
+  };
+  /** Save, after a confirm when the edited do-not-call block no longer ends the call on a do-not-call request. */
+  const saveChecked = async (definition: CallFlowDefinition) => {
+    const dnc = textOf(definition, "do_not_call");
+    if (dnc !== null && dnc !== textOf(baseDefinition, "do_not_call") && lacksDoNotCallHandling(dnc)) {
+      const ok = await confirm({
+        title: "Save without do-not-call handling?",
+        body: "The DO NOT CALL block no longer says to end the call when the customer asks not to be called. The system's own rules still apply, but this script would no longer say it. Save anyway?",
+        confirmText: "Save anyway",
+        tone: "danger",
+      });
+      if (!ok) return;
+    }
+    save.mutate(definition);
+  };
 
   if (detail.isLoading || !form) return detail.error ? <ErrorNote error={detail.error} /> : <Spinner />;
 
@@ -594,14 +626,25 @@ function CallFlowEditor({
               {draft ? `editing draft v${draft.version}` : published ? `editing v${published.version} (saving makes a new draft)` : ""}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="-m-1.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-ink"
-          >
-            <Icon name="close" size={18} />
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              className="btn-ghost h-8 whitespace-nowrap px-3 py-0 text-xs"
+              disabled={dirty}
+              title={dirty ? "Save or undo your changes first" : "Paste a whole prompt and split it into these blocks"}
+              onClick={() => setImporting(true)}
+            >
+              Import full prompt
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="-m-1.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-ink"
+            >
+              <Icon name="close" size={18} />
+            </button>
+          </div>
         </div>
 
         <div className="mb-6 grid gap-4 sm:grid-cols-2">
@@ -695,12 +738,20 @@ function CallFlowEditor({
             </div>
           ) : (
             <div key={b.id} className="mb-3">
-              <label className="label">{blockTitle(b.text)}</label>
+              <label className="label">{BLOCK_LABELS[b.id] ?? blockTitle(b.text)}</label>
               <textarea
                 className="input h-40 font-mono text-xs"
                 maxLength={catalog.limits.max_block_chars}
                 {...bind(`block:${b.id}`)}
               />
+              {SAFETY_IDS.has(b.id) && (
+                <p className="mt-1 text-xs text-slate-550">The system's own safety rules are always added after this prompt and can't be edited.</p>
+              )}
+              {b.id === "do_not_call" && lacksDoNotCallHandling(b.text) && (
+                <p className="mt-1 rounded-lg border border-crit-line bg-crit-soft px-3 py-2 text-xs text-crit">
+                  Warning: this block no longer says to end the call when the customer asks not to be called.
+                </p>
+              )}
             </div>
           ),
         )}
@@ -769,13 +820,13 @@ function CallFlowEditor({
               <Icon name="phone" size={16} /> Test call to my number
             </button>
           )}
-          <button className="btn-ghost" disabled={!dirty} onClick={() => working && setForm(structuredClone(working.definition))}>
+          <button className="btn-ghost" disabled={!dirty} onClick={() => baseDefinition && setForm(structuredClone(baseDefinition))}>
             Undo changes
           </button>
           <button
             className="btn-primary"
             disabled={!dirty || !check?.success || save.isPending}
-            onClick={() => check?.success && save.mutate(check.data)}
+            onClick={() => check?.success && void saveChecked(check.data)}
           >
             {save.isPending ? "Saving…" : "Save draft"}
           </button>
@@ -854,6 +905,9 @@ function CallFlowEditor({
       </div>
 
       <PreviewPanel definition={form} valid={!!check?.success} />
+
+      <ImportPromptModal open={importing} onClose={() => setImporting(false)} flowId={flowId} onChanged={invalidate} />
+
 
       {working && (
         <TestCallModal
