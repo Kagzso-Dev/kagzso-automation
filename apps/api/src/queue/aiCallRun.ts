@@ -26,6 +26,12 @@ const POLL_MS = 5000;
 
 const deferFor = (ms: number) => new DeferJobError(new Date(Date.now() + ms));
 
+/** The run's "AI Greeting Delay" (kept in its skipped JSON); null for runs started before it existed. */
+export function greetingDelayOf(skipped: unknown): number | null {
+  const v = (skipped as { greetingDelaySec?: unknown } | null)?.greetingDelaySec;
+  return typeof v === "number" && v >= 0 && v <= 10 ? v : null;
+}
+
 async function finish(runId: string): Promise<Record<string, number>> {
   await prisma.aiCallRun.update({ where: { id: runId }, data: { status: "DONE", nextCallAt: null } });
   const rows = await prisma.aiCallLog.groupBy({ by: ["status"], where: { runId }, _count: { _all: true } });
@@ -130,7 +136,10 @@ export async function processAiCallRun(payload: Record<string, unknown>): Promis
   await markCustomerCalling(next.id);
   try {
     const flow = await pinnedFlowForRun(runId);
+    const greetingDelaySec = greetingDelayOf(run.skipped);
     const { callId, providerCallId } = await placeVoiceCall({
+      // Runs without the setting (older runs, test calls) call exactly as before.
+      ...(greetingDelaySec != null ? { greetingDelaySec } : {}),
       customerName: next.customerName,
       gender: next.gender,
       followUpDetail: next.followUpDetail,

@@ -141,6 +141,18 @@ def identity_silence_action(now: float, last_activity: float, playback_until: fl
     return None
 
 
+def greeting_delay_of(variables: Mapping[str, Any]) -> Optional[float]:
+    """The call's "AI Greeting Delay" in seconds (0-10), or None = the configured timing."""
+    raw = variables.get("greeting_delay_sec")
+    if raw in (None, ""):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if 0 <= value <= 10 else None
+
+
 def first_speech_greeting_due(now: float, started: float, wait: float, hold_max: float,
                               in_speech: bool, transcribing: bool) -> Optional[str]:
     """When the first-speech wait (started = stream start) should give way to the greeting:
@@ -549,6 +561,8 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
         log_id=req.log_id,
     )
     variables.update(flow_vars)
+    if req.greeting_delay_sec is not None:
+        variables["greeting_delay_sec"] = str(req.greeting_delay_sec)
     rotation = cfg.voice_rotation
     async with _VOICE_ROTATION_LOCK:  # pick + insert together so concurrent calls get different voices
         if not rotation:
@@ -925,6 +939,8 @@ class CallSession:
         self.pauses = pauses_from_variables(ctx.variables)  # lengths of {{short_delay}} etc. in system lines
         self.recorder: Optional[recording.CallRecorder] = None  # CALL_RECORDING_ENABLED, from stream start
         self._notice_spoken = False
+        self.greeting_delay = greeting_delay_of(ctx.variables)  # seconds after answer; None = configured timing
+        self._answered_mono: Optional[float] = None  # the answer, on the monotonic clock (set at stream start)
         self._bg_tasks: Set[asyncio.Task] = set()
         self._last_prewarm = 0.0
         self._db_queue: "asyncio.Queue[Callable[[AsyncSession], Awaitable[None]]]" = asyncio.Queue()
@@ -936,6 +952,9 @@ class CallSession:
         self._db_worker = asyncio.create_task(self._run_db_worker())
         await self._set_state(CallStatus.listening.value)
         self._stream_started = time.monotonic()
+        # The greeting delay counts from the answer (webhook time), not from when the media stream connected.
+        since_answer = (utcnow() - self.ctx.answered_at).total_seconds() if self.ctx.answered_at else 0.0
+        self._answered_mono = self._stream_started - max(0.0, min(since_answer, 30.0))
         self.recorder = recording.start(self.call_id, self.cfg)  # None unless recording is on
         self._greeting_task = asyncio.create_task(
             self._greet_after_first_wait() if self._first_speech_mode else self._greet_if_silent())
@@ -1313,7 +1332,9 @@ class CallSession:
                 or (self._greeting_task is not None and not self._greeting_task.done())):
             return
         log.info("That was only noise - the greeting will still play")
-        self._greeting_task = asyncio.create_task(self._greet_if_silent(self.cfg.GREETING_PRERENDERED_DELAY_MS))
+        # With an "AI Greeting Delay" the greeting still waits for the rest of it (counted from the answer).
+        self._greeting_task = asyncio.create_task(
+            self._greet_if_silent(None if self.greeting_delay is not None else self.cfg.GREETING_PRERENDERED_DELAY_MS))
 
     async def barge_in(self) -> None:
         log.info("Barge-in: customer interrupted, stopping playback")
@@ -1449,11 +1470,19 @@ class CallSession:
         return self._at_opening()
 
     async def _greet_if_silent(self, delay_ms: Optional[int] = None) -> None:
-        if delay_ms is None:
-            delay_ms = self.cfg.GREETING_DELAY_MS
-            if has_greeting_audio(self.call_id):  # ready to play instantly - don't leave dead air
-                delay_ms = min(delay_ms, self.cfg.GREETING_PRERENDERED_DELAY_MS)
-        await asyncio.sleep(delay_ms / 1000)
+        if delay_ms is None and self.greeting_delay is not None:
+            # "AI Greeting Delay" from Dispatch: counted from the answer, the same for every greeting.
+            due = (self._answered_mono or time.monotonic()) + self.greeting_delay
+            await asyncio.sleep(max(0.0, due - time.monotonic()))
+            log.info("AI greeting delay %.1fs after answer", self.greeting_delay)
+        else:
+            if delay_ms is None:
+                delay_ms = self.cfg.GREETING_DELAY_MS
+                if has_greeting_audio(self.call_id):  # ready to play instantly - don't leave dead air
+                    delay_ms = min(delay_ms, self.cfg.GREETING_PRERENDERED_DELAY_MS)
+            await asyncio.sleep(delay_ms / 1000)
+        if self._closed:  # hung up during the wait: never speak after that
+            return
         if not self._customer_spoke and not self.ai_busy and not self.endpointer.in_speech:
             log.info("Customer silent after answer - agent greets first")
             if self.ctx.first_message:
@@ -1472,19 +1501,22 @@ class CallSession:
         wait ends - but never on top of the customer: while they are speaking, wait (at most
         FIRST_SPEECH_HOLD_MAX_SECONDS) for them to stop."""
         with call_context(self.call_id):
-            start = self._stream_started or time.monotonic()
+            if self.greeting_delay is not None:  # "AI Greeting Delay" from Dispatch, counted from the answer
+                start, wait = self._answered_mono or time.monotonic(), self.greeting_delay
+            else:
+                start, wait = self._stream_started or time.monotonic(), self.cfg.FIRST_SPEECH_WAIT_SECONDS
             while not self._closed:
                 await asyncio.sleep(0.05)
                 if self._greeted or self._opening_taken:
                     return
                 due = first_speech_greeting_due(
-                    time.monotonic(), start, self.cfg.FIRST_SPEECH_WAIT_SECONDS, self.FIRST_SPEECH_HOLD_MAX_SECONDS,
+                    time.monotonic(), start, wait, self.FIRST_SPEECH_HOLD_MAX_SECONDS,
                     self.endpointer.in_speech, self._turn_task is not None and not self._turn_task.done())
                 if due is None:
                     continue
                 self._opening_taken = True
                 self._greeting_trigger = due
-                log.info("No words in the first %.1fs - greeting", self.cfg.FIRST_SPEECH_WAIT_SECONDS)
+                log.info("No words in the first %.1fs - greeting", wait)
                 self._start_turn(scripted=self.greeting_text())
                 return
 

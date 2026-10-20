@@ -283,3 +283,17 @@ describe("callback signature", () => {
     expect(isValidAiCallSignature(raw, ts, sig, secret, now + 301)).toBe(false);
   });
 });
+
+describe("AI greeting delay (Start AI Calls)", () => {
+  it("defaults to 2 seconds and allows 0 to 10 in whole or half seconds", async () => {
+    const { startAiCallsInput, callAiCallCustomersInput } = await import("@dispatch/shared");
+    const base = { rows: [{ phone: "+919876543210" }], mode: "all" };
+    expect(startAiCallsInput.parse(base).greetingDelaySec).toBe(2);
+    for (const ok of [0, 0.5, 2, 10]) expect(startAiCallsInput.parse({ ...base, greetingDelaySec: ok }).greetingDelaySec).toBe(ok);
+    for (const bad of [-1, 10.5, 1.25, "x"]) expect(startAiCallsInput.safeParse({ ...base, greetingDelaySec: bad }).success).toBe(false);
+    const saved = { customerIds: ["c1"], mode: "all" };
+    expect(callAiCallCustomersInput.parse(saved).greetingDelaySec).toBe(2);
+    expect(callAiCallCustomersInput.safeParse({ ...saved, greetingDelaySec: 11 }).success).toBe(false);
+    expect(startAiCallsInput.parse({ ...base, gapSeconds: 45, greetingDelaySec: 3 })).toMatchObject({ gapSeconds: 45, greetingDelaySec: 3 });
+  });
+});

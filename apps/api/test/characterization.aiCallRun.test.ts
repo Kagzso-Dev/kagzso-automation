@@ -134,6 +134,27 @@ describe("processAiCallRun (characterization)", () => {
     expect(db.aiCallLog.update).toHaveBeenLastCalledWith({ where: { id: "l2" }, data: { voiceCallId: "v1", providerCallId: "p1" } });
   });
 
+  it("passes the run's AI greeting delay to each call; the gap between calls is unchanged", async () => {
+    db.aiCallRun.findUnique.mockResolvedValue({ ...run, skipped: { invalid: 0, greetingDelaySec: 2 } });
+    await deferredMs(processAiCallRun({ runId: "r1" }));
+    expect(voice.placeVoiceCall).toHaveBeenCalledWith(expect.objectContaining({ greetingDelaySec: 2, logId: "l2" }));
+
+    // The gap still counts from when the previous call ended, as before.
+    vi.clearAllMocks();
+    db.aiCallRun.findUnique.mockResolvedValue({ ...run, skipped: { greetingDelaySec: 10 } });
+    db.aiCallRun.update.mockResolvedValue({});
+    const endedAt = new Date(Date.now() - 10_000);
+    logs({ lastEnded: { endedAt } });
+    const err = (await processAiCallRun({ runId: "r1" }).catch((e) => e)) as InstanceType<typeof DeferJobError>;
+    expect(err.runAt.getTime()).toBe(endedAt.getTime() + 30_000);
+    expect(voice.placeVoiceCall).not.toHaveBeenCalled();
+  });
+
+  it("a run without the setting (older runs, test calls) sends no greeting delay", async () => {
+    await deferredMs(processAiCallRun({ runId: "r1" }));
+    expect(voice.placeVoiceCall.mock.calls[0]![0]).not.toHaveProperty("greetingDelaySec");
+  });
+
   it("no providerCallId: only voiceCallId stored", async () => {
     voice.placeVoiceCall.mockResolvedValueOnce({ callId: "v1" });
     await deferredMs(processAiCallRun({ runId: "r1" }));

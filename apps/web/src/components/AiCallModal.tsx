@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CallRecording, RecordingBadge, useRecordingStatuses, type RecordingStatusName } from "./CallRecording";
 import {
+  AI_CALL_DEFAULT_GREETING_DELAY_SEC,
   AI_CALL_FIELDS,
+  AI_CALL_MAX_GREETING_DELAY_SEC,
   checkAiCallRow,
   type AiCallColumnMapping,
   type AiCallField,
@@ -122,6 +124,8 @@ function SetupFlow({
   const [mode, setMode] = useState<AiCallMode>("random");
   const [randomCount, setRandomCount] = useState(1);
   const [gapSeconds, setGapSeconds] = useState(config.defaultGapSec);
+  // After the customer answers, wait this long before the AI greets (separate from the gap between calls).
+  const [greetingDelay, setGreetingDelay] = useState(String(AI_CALL_DEFAULT_GREETING_DELAY_SEC));
   const [maxCalls, setMaxCalls] = useState(Math.min(10, config.maxPerRun));
   const [plan, setPlan] = useState<AiCallPlanSummary | null>(null);
   // "" = the default flow (whatever agent the server is configured with), exactly as before.
@@ -220,6 +224,7 @@ function SetupFlow({
     randomCount,
     selectedIndexes: [...selected].sort((a, b) => a - b),
     gapSeconds,
+    greetingDelaySec: Number(greetingDelay),
     maxCalls,
     ...(flowId ? { flowId } : {}),
   };
@@ -255,6 +260,8 @@ function SetupFlow({
         ? "Tick at least one row in the table, or pick another mode."
         : gapSeconds < config.minGapSec
           ? `Gap between calls must be at least ${config.minGapSec} seconds.`
+          : !greetingDelayValid(greetingDelay)
+            ? `AI greeting delay must be 0 to ${AI_CALL_MAX_GREETING_DELAY_SEC} seconds (whole or half seconds).`
           : maxCalls < 1 || maxCalls > config.maxPerRun
             ? `Max calls per run must be between 1 and ${config.maxPerRun}.`
             : mode === "random" && randomCount < 1
@@ -552,6 +559,24 @@ function SetupFlow({
             />
             <span className="text-xs text-slate-550">Hard limit {config.maxPerRun}</span>
           </div>
+          <div>
+            <label className="label" htmlFor="ai-greeting-delay">
+              AI Greeting Delay (seconds)
+            </label>
+            <input
+              id="ai-greeting-delay"
+              type="number"
+              className={`input ${greetingDelayValid(greetingDelay) ? "" : "border-crit"}`}
+              min={0}
+              max={AI_CALL_MAX_GREETING_DELAY_SEC}
+              step={0.5}
+              value={greetingDelay}
+              onChange={(e) => setGreetingDelay(e.target.value)}
+            />
+            <span className="text-xs text-slate-550">
+              After the customer answers. 0 = speak at once. If they speak first, the AI greets right away.
+            </span>
+          </div>
         </div>
       </div>
 
@@ -720,6 +745,12 @@ function RunStatus({ runId, onNewRun, onClose }: { runId: string; onNewRun: () =
       </div>
     </div>
   );
+}
+
+/** 0-10 seconds, whole or half seconds. */
+function greetingDelayValid(v: string): boolean {
+  const n = Number(v);
+  return v.trim() !== "" && Number.isFinite(n) && n >= 0 && n <= AI_CALL_MAX_GREETING_DELAY_SEC && Number.isInteger(n * 2);
 }
 
 function LogRow({ log: l, recording }: { log: AiCallLog; recording?: RecordingStatusName }) {

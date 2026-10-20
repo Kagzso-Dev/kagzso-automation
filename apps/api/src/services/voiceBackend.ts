@@ -26,6 +26,8 @@ export interface PlaceCallInput {
   logId: string;
   /** Pinned call flow version (absent = the default agent, exactly as before). */
   flow?: PinnedFlow | null;
+  /** Seconds after answer before the greeting (Start AI Calls); absent = the voice backend's own timing. */
+  greetingDelaySec?: number | null;
 }
 
 export interface PinnedFlow {
@@ -100,6 +102,7 @@ export async function placeVoiceCall(input: PlaceCallInput): Promise<{ callId: s
       follow_up_detail: input.followUpDetail || undefined,
       run_id: input.runId,
       log_id: input.logId,
+      ...(input.greetingDelaySec != null ? { greeting_delay_sec: input.greetingDelaySec } : {}),
       ...(input.flow
         ? {
             flow_id: input.flow.flowId,

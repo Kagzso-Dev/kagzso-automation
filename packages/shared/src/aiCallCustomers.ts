@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { normalizeAiCallGender, normalizePhoneE164, type AiCallGender } from "./aiCalls.js";
+import { aiCallGreetingDelay, normalizeAiCallGender, normalizePhoneE164, type AiCallGender } from "./aiCalls.js";
 
 /* ------------------------------------------------------------------ AI Call Customers (isolated) */
 // Saved customers for AI voice calls, their call stage and follow-up rules.
@@ -314,6 +314,7 @@ export const callAiCallCustomersInput = z
     randomCount: z.coerce.number().int().min(1).max(500).default(1),
     selectedIndexes: z.array(z.number().int().min(0)).max(5000).default([]),
     gapSeconds: z.coerce.number().int().min(5).max(3600).default(30),
+    greetingDelaySec: aiCallGreetingDelay,
     maxCalls: z.coerce.number().int().min(1).max(500).default(10),
     dryRun: z.boolean().default(false),
     flowId: z.string().min(1).max(64).optional().nullable(),

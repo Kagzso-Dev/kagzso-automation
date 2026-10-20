@@ -46,6 +46,9 @@ class OutboundCallRequest(BaseModel):
     agent_name: Optional[str] = Field(None, min_length=1, max_length=100)
     # Follow-up calls from Dispatch: the reason for the call, rendered into the prompt.
     follow_up_detail: Optional[str] = Field(None, max_length=500)
+    # Dispatch "AI Greeting Delay": seconds after the answer before the agent greets (0 = at once).
+    # Absent = the configured timing (FIRST_SPEECH_WAIT_SECONDS / GREETING_DELAY_MS), exactly as before.
+    greeting_delay_sec: Optional[float] = Field(None, ge=0, le=10)
     # Dispatch's ids, echoed back on status callbacks (STATUS_CALLBACK_URL).
     run_id: Optional[str] = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     log_id: Optional[str] = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")

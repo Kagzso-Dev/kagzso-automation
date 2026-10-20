@@ -147,7 +147,8 @@ export async function planAndStartAiCallRun(
       total: plan.targets.length,
       createdById: user.id,
       createdByEmail: user.email,
-      skipped: plan.skipped,
+      // greetingDelaySec rides along in this JSON (like a test call's testCall flag): no schema change.
+      skipped: { ...plan.skipped, greetingDelaySec: body.greetingDelaySec },
       ...(flowVersion ? { flow: { create: { flowVersionId: flowVersion.id } } } : {}),
       logs: {
         create: plan.targets.map((t, i) => ({
@@ -179,6 +180,7 @@ export async function planAndStartAiCallRun(
       skipped: plan.skipped,
       flowId: body.flowId ?? null,
       flowVersion: flowVersion?.version ?? null,
+      greetingDelaySec: body.greetingDelaySec,
       savedCustomers: !!customerIdByRow,
     },
     "ai call run started",

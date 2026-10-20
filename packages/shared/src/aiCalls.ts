@@ -148,6 +148,17 @@ export type AiCallRow = z.infer<typeof aiCallRow>;
 export const aiCallMode = z.enum(["random", "selected", "all"]);
 export type AiCallMode = z.infer<typeof aiCallMode>;
 
+/** "AI Greeting Delay (seconds)" in the Start AI Calls window: default and maximum. */
+export const AI_CALL_DEFAULT_GREETING_DELAY_SEC = 2;
+export const AI_CALL_MAX_GREETING_DELAY_SEC = 10;
+/** Seconds after the customer answers before the AI greets (if they speak first it greets at once). */
+export const aiCallGreetingDelay = z.coerce
+  .number()
+  .min(0, "AI greeting delay must be 0 to 10 seconds")
+  .max(AI_CALL_MAX_GREETING_DELAY_SEC, "AI greeting delay must be 0 to 10 seconds")
+  .refine((v) => Number.isInteger(v * 2), "Use whole or half seconds (e.g. 1.5)")
+  .default(AI_CALL_DEFAULT_GREETING_DELAY_SEC);
+
 export const startAiCallsInput = z
   .object({
     rows: z.array(aiCallRow).min(1, "No rows to call").max(5000),
@@ -157,6 +168,7 @@ export const startAiCallsInput = z
     /** selected mode: indexes into `rows`. */
     selectedIndexes: z.array(z.number().int().min(0)).max(5000).default([]),
     gapSeconds: z.coerce.number().int().min(5).max(3600).default(30),
+    greetingDelaySec: aiCallGreetingDelay,
     maxCalls: z.coerce.number().int().min(1).max(500).default(10),
     /** true: validate and report what would happen, create nothing. */
     dryRun: z.boolean().default(false),
