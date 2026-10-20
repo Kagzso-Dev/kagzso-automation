@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "../lib/api";
 import { Badge, ErrorNote, Spinner } from "./ui";
 import { CallRecording, RecordingBadge, type RecordingStatusName } from "./CallRecording";
+import { useConfirm } from "./confirm";
+import { useToast } from "./toast";
 
 /**
  * Settings > Call recordings (admins): whether calls are recorded, how many recordings there are,
@@ -37,6 +39,8 @@ const mb = (b: number) => (b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GB` :
 
 export function CallRecordingsSection() {
   const qc = useQueryClient();
+  const confirm = useConfirm();
+  const toast = useToast();
   const settings = useQuery({
     queryKey: ["recording-settings"],
     queryFn: () => api<RecordingSettings>("/api/ai-calls/recordings/settings", { notify: false }),
@@ -70,6 +74,22 @@ export function CallRecordingsSection() {
       qc.setQueryData(["recording-settings"], v);
       setDirty(false);
     },
+  });
+
+  // Delete one recording: the same API (and voice backend helper) the retention job's deletion uses.
+  // Only the audio goes; the call, transcript and summary stay.
+  const removeRecording = useMutation({
+    mutationFn: (logId: string) =>
+      api(`/api/ai-calls/logs/${logId}/recording`, { method: "DELETE", notify: "Recording deleted" }),
+    onSuccess: (_res, logId) => {
+      qc.setQueryData<{ items: RecentRecording[] }>(["recent-recordings"], (d) =>
+        d ? { items: d.items.map((i) => (i.logId === logId ? { ...i, status: "deleted" } : i)) } : d,
+      );
+      void qc.invalidateQueries({ queryKey: ["ai-call-recording", logId] });
+      void qc.invalidateQueries({ queryKey: ["ai-call-recordings"] });
+      void qc.invalidateQueries({ queryKey: ["recording-settings"] });
+    },
+    onError: (err) => toast.error("Couldn't delete the recording", [err instanceof Error ? err.message : String(err)]),
   });
 
   // AI calls off (404): the section isn't shown at all.
@@ -187,8 +207,32 @@ export function CallRecordingsSection() {
                         {r.recordingMs != null && <span className="text-xs text-slate-550">{(r.recordingMs / 1000).toFixed(0)}s</span>}
                         <RecordingBadge status={r.status} />
                         <span className="ml-auto text-xs text-slate-550">{new Date(r.at).toLocaleString()}</span>
+                        {r.status === "completed" && (
+                          <button
+                            type="button"
+                            className="text-action-danger text-xs"
+                            aria-label={`Delete the recording of ${r.customerName || "this call"}`}
+                            disabled={removeRecording.isPending}
+                            onClick={async () => {
+                              const ok = await confirm({
+                                title: "Delete this recording?",
+                                body: "This permanently deletes the audio recording. The call, transcript and summary will be kept. This cannot be undone.",
+                                confirmText: "Delete",
+                                tone: "danger",
+                              });
+                              if (ok) removeRecording.mutate(r.logId);
+                            }}
+                          >
+                            {removeRecording.isPending && removeRecording.variables === r.logId ? "Deleting…" : "Delete"}
+                          </button>
+                        )}
                       </div>
-                      <CallRecording logId={r.logId} status={r.status} />
+                      {r.status === "deleted" ? (
+                        // The player (and any audio playing) is gone with it.
+                        <p className="mt-1 text-xs text-slate-550">This recording was deleted.</p>
+                      ) : (
+                        <CallRecording logId={r.logId} status={r.status} />
+                      )}
                     </li>
                   ))}
                 </ul>
