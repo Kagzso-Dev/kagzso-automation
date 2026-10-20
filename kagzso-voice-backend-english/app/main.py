@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import agents, calls, dev_tests, flows, health, twilio_webhooks, voices, webhooks
+from app.api import agents, calls, dev_tests, flows, health, recordings, twilio_webhooks, voices, webhooks
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.db import repositories as repo
@@ -45,8 +45,25 @@ async def lifespan(app: FastAPI):
         log.warning("Could not seed default agent (%s). Is MySQL up and have you run 'alembic upgrade head'?",
                     type(exc).__name__)
 
+    # Call recording: recordings a restart interrupted can't be completed; expired ones are removed hourly.
+    retention: "asyncio.Task | None" = None
+    if settings.CALL_RECORDING_ENABLED or settings.RECORDINGS_DIR:
+        from app.services import recording
+
+        try:
+            await recording.mark_interrupted()
+        except Exception as exc:
+            log.warning("Recording startup check skipped (%s). Has 'alembic upgrade head' run?", type(exc).__name__)
+        if settings.RECORDINGS_DIR:
+            retention = asyncio.create_task(recording.retention_loop(settings))
+        if settings.CALL_RECORDING_ENABLED and not settings.RECORDINGS_DIR:
+            log.warning("CALL_RECORDING_ENABLED is on but RECORDINGS_DIR is empty: recordings will fail")
+
     log.info("%s started (env=%s, llm=%s)", settings.APP_NAME, settings.APP_ENV, settings.LLM_PROVIDER)
     yield
+
+    if retention is not None:
+        retention.cancel()
 
     from app.services import call_service
 
@@ -80,6 +97,7 @@ app.include_router(calls.router)
 app.include_router(agents.router)
 app.include_router(flows.router)
 app.include_router(voices.router)
+app.include_router(recordings.router)
 app.include_router(webhooks.router)
 app.include_router(dev_tests.router)
 app.include_router(plivo_stream.router)

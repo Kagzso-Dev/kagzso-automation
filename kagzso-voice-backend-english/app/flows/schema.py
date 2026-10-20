@@ -145,6 +145,14 @@ class CallFlow(_Strict):
     limits: FlowLimits
     transfer: FlowTransfer = Field(default_factory=FlowTransfer)
     pauses: Optional[FlowPauses] = None  # None = DEFAULT pause lengths (flows saved before pauses existed)
+    # Spoken word for word right after the greeting while CALL_RECORDING_ENABLED; None = no notice.
+    recording_notice: Optional[str] = Field(None, max_length=300)
+
+    @field_validator("recording_notice")
+    @classmethod
+    def _notice(cls, v: Optional[str]) -> Optional[str]:
+        v = (v or "").strip()
+        return check_text(v, multiline=False) if v else None
 
     @model_validator(mode="after")
     def _blocks(self) -> "CallFlow":

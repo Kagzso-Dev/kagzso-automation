@@ -21,3 +21,7 @@ apps/web/dist/
 
 # Undo files written by npm run contacts:restore
 restore-logs/
+
+# Call recordings (RECORDINGS_DIR belongs outside the project; never commit audio)
+recordings/
+*.wav.enc

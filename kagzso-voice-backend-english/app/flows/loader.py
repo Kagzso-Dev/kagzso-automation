@@ -58,8 +58,9 @@ def parse_flow(raw: Mapping[str, Any]) -> CallFlow:
 
 def flow_hash(flow: CallFlow) -> str:
     data = flow.model_dump(mode="json")
-    if data.get("pauses") is None:
-        data.pop("pauses", None)  # flows without pause settings keep the hash they always had
+    for optional in ("pauses", "recording_notice"):  # flows without them keep the hash they always had
+        if data.get(optional) is None:
+            data.pop(optional, None)
     canonical = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

@@ -62,7 +62,7 @@ function detailMessage(body: unknown, fallback: string): string {
   return fallback;
 }
 
-async function request<T>(method: "GET" | "POST", path: string, json?: unknown): Promise<T> {
+async function request<T>(method: "GET" | "POST" | "DELETE", path: string, json?: unknown): Promise<T> {
   if (!isAiCallsConfigured()) {
     throw new VoiceBackendError("Voice backend is not configured (VOICE_BACKEND_URL / VOICE_BACKEND_API_KEY)", null, false);
   }
@@ -125,6 +125,8 @@ export interface VoiceFlowCatalog {
   /** The voices a flow may pick (the voice backend's list is the only one). */
   voices?: VoiceOption[];
   default_voice?: string;
+  /** CALL_RECORDING_ENABLED on the voice backend (absent on an older one = off). */
+  recording_enabled?: boolean;
 }
 
 export interface VoiceOption {
@@ -185,4 +187,47 @@ export async function previewVoice(
 
 export function getVoiceCall(voiceCallId: string): Promise<VoiceCallDetail> {
   return request<VoiceCallDetail>("GET", `/api/calls/${encodeURIComponent(voiceCallId)}`);
+}
+
+/* ------------------------------------------------------------------ call recordings */
+
+/** One call's recording as the voice backend describes it (never a path or URL). */
+export interface VoiceRecording {
+  call_id: string;
+  status: "processing" | "completed" | "failed" | "deleted";
+  format: string;
+  duration_ms: number | null;
+  size_bytes: number | null;
+  error: string | null;
+  created_at: string | null;
+  completed_at: string | null;
+  deleted_at: string | null;
+}
+
+export function getRecording(voiceCallId: string): Promise<{ enabled: boolean; recording: VoiceRecording | null }> {
+  return request("GET", `/api/recordings/${encodeURIComponent(voiceCallId)}`);
+}
+
+export function listRecordings(voiceCallIds: string[]): Promise<{ enabled: boolean; items: VoiceRecording[] }> {
+  return request("GET", `/api/recordings?call_ids=${voiceCallIds.map(encodeURIComponent).join(",")}`);
+}
+
+export function deleteRecording(voiceCallId: string): Promise<{ ok: true; recording: VoiceRecording | null }> {
+  return request("DELETE", `/api/recordings/${encodeURIComponent(voiceCallId)}`);
+}
+
+/** The recording's WAV as a raw response (status, headers and body are passed through, Range included). */
+export async function fetchRecordingAudio(voiceCallId: string, range?: string): Promise<Response> {
+  if (!isAiCallsConfigured()) {
+    throw new VoiceBackendError("Voice backend is not configured (VOICE_BACKEND_URL / VOICE_BACKEND_API_KEY)", null, false);
+  }
+  try {
+    return await fetch(`${aiCallsConfig.voiceBackendUrl}/api/recordings/${encodeURIComponent(voiceCallId)}/audio`, {
+      headers: { "X-API-Key": aiCallsConfig.voiceBackendApiKey!, ...(range ? { Range: range } : {}) },
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    throw new VoiceBackendError(`Voice backend unreachable: ${why}`, null, true);
+  }
 }

@@ -143,6 +143,19 @@ class Settings(BaseSettings):
     # false = speak the model's reply exactly as before.
     REPEAT_QUESTION_GUARD: bool = True
 
+    # --- Call recording (app/services/recording.py) - off unless switched on ---
+    # Stereo WAV per answered call: left = the customer as heard on the line (before noise
+    # suppression), right = only the agent audio that actually played (cut at barge-in / hang-up).
+    CALL_RECORDING_ENABLED: bool = False
+    # Private directory outside the source tree (created 0700, files 0600). Required to record.
+    RECORDINGS_DIR: str = ""
+    # Completed recordings older than this are deleted (file removed, row marked deleted). 0 = keep.
+    RECORDING_RETENTION_DAYS: int = 90
+    # Recording stops (the call doesn't) after this long; bounds memory per call.
+    RECORDING_MAX_SECONDS: int = 900
+    # Optional AES-256-GCM encryption at rest: base64 of 32 random bytes. Empty = plain WAV files.
+    RECORDING_ENCRYPTION_KEY: SecretStr = SecretStr("")
+
     # --- Provider connections ---
     # Keep idle HTTPS connections to Sarvam / the LLM open this long between turns
     # (httpx default is 5 s, so most turns paid a fresh TLS handshake).
@@ -394,7 +407,7 @@ class Settings(BaseSettings):
         vals = [
             self.PLIVO_AUTH_TOKEN, self.SARVAM_API_KEY, self.LLM_API_KEY,
             self.MYSQL_PASSWORD, self.ADMIN_API_KEY, self.APP_SECRET_KEY, self.TWILIO_AUTH_TOKEN,
-            self.STATUS_CALLBACK_SECRET,
+            self.STATUS_CALLBACK_SECRET, self.RECORDING_ENCRYPTION_KEY,
         ]
         return [v.get_secret_value() for v in vals if v.get_secret_value() and len(v.get_secret_value()) >= 4]
 

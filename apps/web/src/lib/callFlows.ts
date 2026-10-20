@@ -45,6 +45,8 @@ export interface CallFlowCatalog {
   /** The voices a flow may pick (from the voice backend); absent on an older voice backend. */
   voices?: VoiceOption[];
   default_voice?: string;
+  /** The voice backend records calls (CALL_RECORDING_ENABLED); absent on an older voice backend. */
+  recording_enabled?: boolean;
 }
 
 export interface VoiceOption {

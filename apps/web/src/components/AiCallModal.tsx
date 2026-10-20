@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CallRecording, RecordingBadge, useRecordingStatuses, type RecordingStatusName } from "./CallRecording";
 import {
   AI_CALL_FIELDS,
   checkAiCallRow,
@@ -653,6 +654,7 @@ function RunStatus({ runId, onNewRun, onClose }: { runId: string; onNewRun: () =
       return !d || d.status === "RUNNING" || d.logs.some((l) => IN_FLIGHT.includes(l.status)) ? 3000 : false;
     },
   });
+  const recordings = useRecordingStatuses(run.data?.logs.map((l) => l.id) ?? []); // admins only
   const cancel = useMutation({
     mutationFn: () => api(`/api/ai-calls/runs/${runId}/cancel`, { method: "POST", notify: "AI call run cancelled" }),
     onSuccess: () => {
@@ -695,7 +697,7 @@ function RunStatus({ runId, onNewRun, onClose }: { runId: string; onNewRun: () =
           </thead>
           <tbody>
             {r.logs.map((l) => (
-              <LogRow key={l.id} log={l} />
+              <LogRow key={l.id} log={l} recording={recordings[l.id]} />
             ))}
           </tbody>
         </table>
@@ -720,7 +722,7 @@ function RunStatus({ runId, onNewRun, onClose }: { runId: string; onNewRun: () =
   );
 }
 
-function LogRow({ log: l }: { log: AiCallLog }) {
+function LogRow({ log: l, recording }: { log: AiCallLog; recording?: RecordingStatusName }) {
   const detail = l.error || l.summary || l.transcript;
   return (
     <tr className="border-b border-line-subtle align-top last:border-0">
@@ -733,6 +735,11 @@ function LogRow({ log: l }: { log: AiCallLog }) {
       <td className="px-3 py-2">
         <Badge tone={STATUS_TONE[l.status]}>{STATUS_LABEL[l.status]}</Badge>
         {l.durationSec != null && <div className="mt-0.5 text-xs text-slate-550">{l.durationSec}s</div>}
+        {recording && (
+          <div className="mt-0.5">
+            <RecordingBadge status={recording} />
+          </div>
+        )}
       </td>
       <td className="px-3 py-2 text-xs">
         {l.outcome && <div className="font-medium">{l.outcome.replace(/_/g, " ")}</div>}
@@ -744,6 +751,7 @@ function LogRow({ log: l }: { log: AiCallLog }) {
             <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap font-sans text-slate-550">{l.transcript}</pre>
           </details>
         )}
+        <CallRecording logId={l.id} status={recording} />
         {!detail && !l.outcome && <span className="text-slate-550">—</span>}
       </td>
     </tr>

@@ -102,6 +102,27 @@ class Contact(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class CallRecording(Base):
+    """One stereo recording per answered call (CALL_RECORDING_ENABLED). The file lives in
+    RECORDINGS_DIR under `storage_key`; the row is `completed` only after the file is written,
+    synced, renamed into place and checked."""
+    __tablename__ = "call_recordings"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: uuid.uuid4().hex)
+    call_id: Mapped[str] = mapped_column(ForeignKey("calls.id", ondelete="CASCADE"), unique=True)
+    storage_key: Mapped[str] = mapped_column(String(128))  # file name inside RECORDINGS_DIR, never a path
+    format: Mapped[str] = mapped_column(String(16), default="wav")  # wav | wav+aesgcm
+    status: Mapped[str] = mapped_column(String(16), default="processing")  # processing | completed | failed | deleted
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # short reason, never a path or number
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (Index("ix_call_recordings_status_created", "status", "created_at"),)
+
+
 class Call(Base):
     __tablename__ = "calls"
 

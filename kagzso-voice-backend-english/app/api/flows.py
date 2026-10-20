@@ -21,11 +21,23 @@ from app.services.llm_service import build_call_variables, build_system_prompt, 
 router = APIRouter(prefix="/api/flows", tags=["flows"], dependencies=[Depends(require_api_key)])
 
 
+def _catalog_flow(flow: Any) -> Dict[str, Any]:
+    """A built-in flow as JSON. Optional settings it doesn't use are left out (not null), so a copy
+    made from it validates in Dispatch exactly like flows saved before those settings existed."""
+    data = flow.model_dump(mode="json")
+    for optional in ("pauses", "recording_notice"):
+        if data.get(optional) is None:
+            data.pop(optional, None)
+    return data
+
+
 @router.get("/builtin")
 async def builtin_flows() -> Dict[str, Any]:
     return {
-        "flows": {base: flow.model_dump(mode="json") for base, flow in BUILTIN_FLOWS.items()},
+        "flows": {base: _catalog_flow(flow) for base, flow in BUILTIN_FLOWS.items()},
         "locked_blocks": LOCKED_BLOCKS,
+        # The editor warns when calls are recorded and a flow has no recording notice.
+        "recording_enabled": settings.CALL_RECORDING_ENABLED,
         "variables": list(FLOW_VARIABLES),
         "groups": list(BLOCK_GROUPS),
         "limits": {"max_duration_sec": settings.MAX_CALL_DURATION_SECONDS, "max_block_chars": MAX_BLOCK_CHARS,

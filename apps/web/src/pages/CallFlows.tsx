@@ -816,6 +816,34 @@ function CallFlowEditor({
             <input className="input" maxLength={200} {...bind("silence.closing")} />
           </div>
         </div>
+        <div className="mb-4">
+          <label className="label" htmlFor="recording-notice">
+            Recording notice (spoken right after the greeting while calls are recorded)
+          </label>
+          <input
+            id="recording-notice"
+            className="input"
+            maxLength={300}
+            placeholder="e.g. This call may be recorded for quality purposes."
+            value={form.recording_notice ?? ""}
+            onChange={(e) =>
+              update((f) => {
+                if (e.target.value.trim()) f.recording_notice = e.target.value;
+                else delete f.recording_notice;
+              })
+            }
+          />
+          {catalog.recording_enabled && !form.recording_notice?.trim() ? (
+            <p className="mt-1 rounded-lg border border-warn/40 bg-warn-soft px-3 py-2 text-xs text-warn">
+              Call recording is on, but this flow has no recording notice. Customers won't hear that the call is recorded.
+              A spoken notice alone may not meet every legal requirement — check your consent process.
+            </p>
+          ) : (
+            <span className="mt-1 block text-xs text-slate-550">
+              {catalog.recording_enabled ? "Calls are being recorded." : "Call recording is off; the notice is only spoken while it's on."} Empty = no notice.
+            </span>
+          )}
+        </div>
         <div className="mb-4 rounded-lg bg-surface-muted px-3 py-2 text-xs text-slate-550">
           <b>Not answered, busy or voicemail:</b> the call is hung up and the outcome recorded (no retry, no voicemail
           message). This is fixed in the voice backend.

@@ -92,6 +92,20 @@ describe("Voice Call Flows layout", () => {
     for (const chip of ["{{short_delay}}", "{{medium_delay}}", "{{long_delay}}"]) expect(screen.getByRole("button", { name: chip })).toBeTruthy();
   });
 
+  it("warns when calls are recorded and the flow has no recording notice", async () => {
+    const catalog = responses["/api/call-flows/builtin"] as Record<string, unknown>;
+    catalog.recording_enabled = true;
+    try {
+      renderPage();
+      fireEvent.click(await screen.findByText("Thaara natural"));
+      expect(await screen.findByText(/Call recording is on, but this flow has no recording notice/)).toBeTruthy();
+      fireEvent.change(screen.getByLabelText(/Recording notice/), { target: { value: "This call may be recorded." } });
+      expect(screen.queryByText(/Call recording is on, but this flow has no recording notice/)).toBeNull();
+    } finally {
+      delete catalog.recording_enabled;
+    }
+  });
+
   it("shows the flow list and no editor before a flow is selected", async () => {
     renderPage();
     expect(await screen.findByText("Thaara natural")).toBeTruthy();

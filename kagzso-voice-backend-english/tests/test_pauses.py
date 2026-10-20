@@ -83,6 +83,7 @@ def test_old_flows_get_the_defaults_and_keep_their_hash():
     assert loader.flow_hash(flow) != loader.flow_hash(with_pauses)
     data = flow.model_dump(mode="json")
     data.pop("pauses")
+    data.pop("recording_notice")  # also new and optional: left out when empty
     import hashlib
     canonical = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     assert loader.flow_hash(flow) == hashlib.sha256(canonical.encode("utf-8")).hexdigest()  # same as before pauses

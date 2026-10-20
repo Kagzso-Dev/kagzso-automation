@@ -34,6 +34,7 @@ from app.flows.loader import FlowError, resolve_flow_agent
 from app.schemas.calls import OutboundCallRequest
 from app.services import audio_service as audio
 from app.services import status_callback
+from app.services import recording
 from app.services.noise_suppression import InputCleaner
 from app.services.sarvam_tts import SarvamTTS
 from app.services.tts import TTSError, TTSProvider, create_tts_provider
@@ -517,6 +518,8 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
             agent = resolved.agent
             flow_vars = {**resolved.info, "flow_silence_reprompt": resolved.flow.silence.reprompt,
                          "flow_silence_closing": resolved.flow.silence.closing}
+            if resolved.flow.recording_notice:
+                flow_vars["flow_recording_notice"] = resolved.flow.recording_notice
             if resolved.flow.pauses is not None:  # else the default pause lengths
                 flow_vars.update({f"flow_pause_{k}": str(v) for k, v in resolved.flow.pauses.model_dump().items()})
             time_limit = min(resolved.flow.limits.max_duration_sec, cfg.MAX_CALL_DURATION_SECONDS)
@@ -763,6 +766,8 @@ class CallContextData:
     # Call-flow silence lines (already rendered); None = the built-in lines.
     silence_reprompt: Optional[str] = None
     silence_closing: Optional[str] = None
+    # Call-flow recording notice (already rendered); spoken after the greeting while recording is on.
+    recording_notice: Optional[str] = None
     answered_at: Optional[datetime] = None  # UTC, from the answer webhook (timing log only)
 
 
@@ -918,6 +923,8 @@ class CallSession:
         self._stt_stream: Optional[STTStream] = None  # streaming STT for the utterance in progress
         self._line_audio: Dict[str, bytes] = {}  # pre-rendered fixed lines (PRERENDER_FIXED_LINES)
         self.pauses = pauses_from_variables(ctx.variables)  # lengths of {{short_delay}} etc. in system lines
+        self.recorder: Optional[recording.CallRecorder] = None  # CALL_RECORDING_ENABLED, from stream start
+        self._notice_spoken = False
         self._bg_tasks: Set[asyncio.Task] = set()
         self._last_prewarm = 0.0
         self._db_queue: "asyncio.Queue[Callable[[AsyncSession], Awaitable[None]]]" = asyncio.Queue()
@@ -929,6 +936,7 @@ class CallSession:
         self._db_worker = asyncio.create_task(self._run_db_worker())
         await self._set_state(CallStatus.listening.value)
         self._stream_started = time.monotonic()
+        self.recorder = recording.start(self.call_id, self.cfg)  # None unless recording is on
         self._greeting_task = asyncio.create_task(
             self._greet_after_first_wait() if self._first_speech_mode else self._greet_if_silent())
         self._silence_task = asyncio.create_task(self._watch_silence())
@@ -970,6 +978,8 @@ class CallSession:
                 await self._db_worker
             except BaseException:
                 pass
+        if self.recorder is not None:
+            await recording.finalize(self.recorder, self.cfg)  # never raises
         await finalize_conversation(self.call_id, self.providers.llm, reason)
         await self.store.delete(self.call_id)
 
@@ -1027,10 +1037,29 @@ class CallSession:
         if stream is not None:
             self._spawn(stream.aclose())
 
+    def recording_notice_text(self) -> Optional[str]:
+        """The flow's recording notice, only while calls are recorded."""
+        return self.ctx.recording_notice if self.cfg.CALL_RECORDING_ENABLED else None
+
+    async def _speak_recording_notice(self, st: _TurnState) -> None:
+        """Spoken word for word right after the greeting; a TTS failure only skips it."""
+        self._notice_spoken = True
+        line = self.recording_notice_text() or ""
+        try:
+            mulaw = self._line_audio.get(line) or await synthesize_line(self.tts, line, self.pauses)
+        except Exception as exc:
+            log.warning("Recording notice not spoken (%s)", type(exc).__name__)
+            return
+        st.spoken.append(clean_spoken_text(line))
+        await self._play(mulaw, st)
+        self._event("recording_notice", {"turn": self.turn_index})
+
     def _fixed_lines(self) -> List[str]:
         lang = self.cfg.CALL_LANGUAGE
         lines = [fallback_reply(lang), self.ctx.silence_reprompt or silence_reprompt(lang),
                  self.ctx.silence_closing or silence_closing(lang)]
+        if self.recording_notice_text():
+            lines.append(self.recording_notice_text())
         first = (self.ctx.first_message or "").strip()
         if "customer_name" in first and first.endswith("?") and self.identity_reask_text():
             lines.append(self.identity_reask_text())
@@ -1070,6 +1099,8 @@ class CallSession:
     async def on_media(self, mulaw: bytes) -> None:
         if self._closed:
             return
+        if self.recorder is not None:
+            self.recorder.add_customer(mulaw)
         pcm = audio.mulaw_to_pcm16(mulaw)
         if self.cleaner is not None:
             pcm, raw = self._clean(pcm)
@@ -1296,6 +1327,8 @@ class CallSession:
         if self._audio_since_clear:
             await self.sender.clear()
             self._audio_since_clear = False
+            if self.recorder is not None:
+                self.recorder.cut_agent()  # the cleared audio never played
         self._playback_until = 0.0
         self._agent_audio_end = time.monotonic()
         self._checkpoint = None
@@ -1673,6 +1706,8 @@ class CallSession:
                 if st.scripted is None:
                     m.t4 = m.t4 or time.monotonic()
                     log.info("LLM completed: %dms", _ms(m.t3, m.t4) or 0)
+                if st.is_greeting and self.recording_notice_text() and not self._notice_spoken:
+                    await self._speak_recording_notice(st)
                 self._commit_turn(st, interrupted=False)
                 if m.t6:
                     log.info("Total response latency: %dms", _ms(m.t1, m.t6))
@@ -1844,6 +1879,8 @@ class CallSession:
             await self._set_state(CallStatus.speaking.value)
         for piece in audio.chunk_bytes(mulaw, self.SEND_CHUNK_BYTES):
             await self.sender.send_audio(piece)
+            if self.recorder is not None:
+                self.recorder.add_agent(piece)
             self._audio_since_clear = True
             self._playback_done.clear()
             now = time.monotonic()
@@ -2041,5 +2078,7 @@ async def load_call_context(call_id: str) -> Optional[CallContextData]:
             telephony_provider=call.telephony_provider or "plivo",
             silence_reprompt=flow_lines.get("reprompt"),
             silence_closing=flow_lines.get("closing"),
+            recording_notice=render_first_message(variables["flow_recording_notice"], variables) or None
+            if variables.get("flow_recording_notice") else None,
             answered_at=call.answered_at,
         )

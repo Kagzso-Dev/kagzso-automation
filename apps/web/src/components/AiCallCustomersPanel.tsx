@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CallRecording, RecordingBadge, useRecordingStatuses } from "./CallRecording";
 import {
   AI_CALL_CUSTOMER_FIELDS,
   AI_CALL_MANUAL_STAGES,
@@ -714,6 +715,7 @@ function DetailBody({ id, onClose }: { id: string; onClose: () => void }) {
   const qc = useQueryClient();
   const confirm = useConfirm();
   const detail = useAiCallCustomerDetail(id);
+  const recordings = useRecordingStatuses(detail.data?.calls.map((l) => l.id) ?? []); // admins only
   const d = detail.data!;
   const c = d.customer;
   const [pick, setPick] = useState<AiCallStage>(c.stage === "QUEUED" || c.stage === "CALLING" ? "FOLLOW_UP_NEEDED" : c.stage);
@@ -814,6 +816,7 @@ function DetailBody({ id, onClose }: { id: string; onClose: () => void }) {
                   <Badge tone={l.status === "COMPLETED" ? "ok" : l.status === "FAILED" ? "crit" : "neutral"}>{l.status.toLowerCase().replace(/_/g, " ")}</Badge>
                   {l.outcome && <span className="font-medium">{l.outcome.replace(/_/g, " ")}</span>}
                   {l.durationSec != null && <span className="text-xs text-slate-550">{l.durationSec}s</span>}
+                  <RecordingBadge status={recordings[l.id]} />
                   <span className="ml-auto text-xs text-slate-550">{formatDateTime(l.startedAt ?? l.createdAt)}</span>
                 </div>
                 {l.summary && <p className="mt-1 text-slate-550">{l.summary}</p>}
@@ -824,6 +827,7 @@ function DetailBody({ id, onClose }: { id: string; onClose: () => void }) {
                     <pre className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap font-sans text-xs text-slate-550">{l.transcript}</pre>
                   </details>
                 )}
+                <CallRecording logId={l.id} status={recordings[l.id]} />
               </div>
             ))}
           </div>

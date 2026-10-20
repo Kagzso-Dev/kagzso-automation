@@ -30,6 +30,7 @@ import { statsRouter } from "./routes/stats.js";
 import { jobsRouter } from "./routes/jobs.js";
 import { settingsRouter } from "./routes/settings.js";
 import { aiCallsRouter } from "./routes/aiCalls.js";
+import { aiCallRecordingsRouter } from "./routes/aiCallRecordings.js";
 import { aiCallWebhookRouter } from "./routes/aiCallWebhook.js";
 import { callFlowsRouter } from "./routes/callFlows.js";
 import { voicesRouter } from "./routes/voices.js";
@@ -97,6 +98,7 @@ export function createApp() {
     }),
   );
   app.use("/api/settings", settingsRouter);
+  app.use("/api/ai-calls", aiCallRecordingsRouter); // recordings: ADMIN only, own paths
   app.use("/api/ai-calls", aiCallsRouter);
   app.use("/api/call-flows", callFlowsRouter);
   app.use("/api/voices", voicesRouter); // "Listen" voice previews (text-to-speech only, never a call)

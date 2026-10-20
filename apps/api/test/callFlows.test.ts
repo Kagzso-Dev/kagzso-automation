@@ -126,3 +126,13 @@ describe("pause markers and lengths", () => {
     expect(issues({ ...nila(), pauses: { short_ms: 3001, medium_ms: 700, long_ms: 1200 } }).join()).toMatch(/0 to 3000 ms/);
   });
 });
+
+describe("recording notice", () => {
+  it("is optional, one line of at most 300 characters, with the usual variables", () => {
+    expect(issues(nila())).toEqual([]); // absent on old flows
+    expect(issues({ ...nila(), recording_notice: "This call may be recorded, {{title_to_use}}." })).toEqual([]);
+    expect(issues({ ...nila(), recording_notice: "Line one\nline two" }).join()).toMatch(/single line/);
+    expect(issues({ ...nila(), recording_notice: "x".repeat(301) })).not.toEqual([]);
+    expect(issues({ ...nila(), recording_notice: "Call {{phone_number}}" }).join()).toMatch(/Unknown variable/);
+  });
+});

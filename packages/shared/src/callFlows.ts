@@ -167,6 +167,8 @@ export const callFlowDefinition = z
     limits: z.object({ max_duration_sec: z.number().int().min(30).max(600) }).strict(),
     /** Absent on flows saved before pauses existed: CALL_FLOW_PAUSE_DEFAULTS apply. */
     pauses: z.object({ short_ms: pauseMs, medium_ms: pauseMs, long_ms: pauseMs }).strict().optional(),
+    /** Spoken word for word right after the greeting while the voice backend records calls. Absent = none. */
+    recording_notice: flowText(300, { multiline: false }).optional(),
     transfer: z
       .object({
         // Live transfer is not implemented yet: the number is stored only.
