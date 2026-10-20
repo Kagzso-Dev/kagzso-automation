@@ -44,6 +44,9 @@ from app.services.llm_service import (
     SentenceChunker,
     build_call_variables,
     clean_spoken_text,
+    has_pause_markers,
+    pauses_from_variables,
+    split_pauses,
     create_llm_provider,
     extract_end_call,
     parse_outcome,
@@ -401,26 +404,58 @@ async def transition(
 # The fixed first sentence is synthesized while the phone is still ringing and
 # played the moment the call is answered. Without this, the customer hears
 # silence for the greeting delay plus a full TTS round-trip, and often hangs up.
-_GREETING_AUDIO: Dict[str, Tuple[str, Optional[float], bytes]] = {}  # call_id -> (text, pace, audio)
+# call_id -> (text, pace, pause lengths, audio)
+_GREETING_AUDIO: Dict[str, Tuple[str, Optional[float], Tuple[Tuple[str, int], ...], bytes]] = {}
 _PRERENDER_TASKS: Set[asyncio.Task] = set()
 
 
-async def prerender_greeting(call_id: str, text: str, voice_id: Optional[str], pace: Optional[float] = None) -> None:
+def pause_key(pauses: Optional[Mapping[str, int]]) -> Tuple[Tuple[str, int], ...]:
+    """Part of the pre-rendered audio's cache key: the same line with other pause lengths sounds different."""
+    return tuple(sorted((pauses or {}).items()))
+
+
+def silence_mulaw(ms: int) -> bytes:
+    """`ms` of 8 kHz mu-law silence, in whole 20 ms frames (160 bytes each)."""
+    return b"\xff" * (max(0, ms) // 20 * 160)
+
+
+async def synthesize_line(tts: TTSProvider, text: str, pauses: Optional[Mapping[str, int]] = None,
+                          pace: Optional[float] = None) -> bytes:
+    """One-shot audio for a line the system speaks. Pause markers become silence between parts
+    synthesized separately (same voice and speed); a line without markers is synthesized as before."""
+    if not has_pause_markers(text):
+        return await (tts.synthesize(text) if pace is None else tts.synthesize(text, pace=pace))
+    parts = split_pauses(text, pauses or {})
+    if len(parts) < 2:  # markers only at the start or the end: ignored
+        line = parts[0][0] if parts else ""
+        return await (tts.synthesize(line) if pace is None else tts.synthesize(line, pace=pace)) if line else b""
+    audios = await asyncio.gather(*(tts.synthesize(p) if pace is None else tts.synthesize(p, pace=pace)
+                                    for p, _, _ in parts))
+    out = b""
+    for (_, requested, inserted), mulaw in zip(parts, audios):
+        out += mulaw
+        if inserted:
+            out += silence_mulaw(inserted)
+            log.info("Pause inserted: requested %d ms, actual %d ms", requested, inserted)
+    return out
+
+
+async def prerender_greeting(call_id: str, text: str, voice_id: Optional[str], pace: Optional[float] = None,
+                             pauses: Optional[Mapping[str, int]] = None) -> None:
     tts = get_providers().tts_for_voice(voice_id)
     try:
-        mulaw = await asyncio.wait_for(tts.synthesize(text) if pace is None else tts.synthesize(text, pace=pace),
-                                       timeout=15)
+        mulaw = await asyncio.wait_for(synthesize_line(tts, text, pauses, pace), timeout=15)
     except Exception as exc:  # live TTS still works; never fail the call over this
         log.warning("Greeting pre-render failed (%s) - it will be streamed live", type(exc).__name__)
         return
     if mulaw:
-        _GREETING_AUDIO[call_id] = (text, pace, mulaw)
+        _GREETING_AUDIO[call_id] = (text, pace, pause_key(pauses), mulaw)
         log.info("Greeting pre-rendered (%.1fs of audio)", audio.mulaw_duration_seconds(len(mulaw)))
 
 
 def schedule_greeting_prerender(call_id: str, text: str, voice_id: Optional[str],
-                                pace: Optional[float] = None) -> None:
-    task = asyncio.get_running_loop().create_task(prerender_greeting(call_id, text, voice_id, pace))
+                                pace: Optional[float] = None, pauses: Optional[Mapping[str, int]] = None) -> None:
+    task = asyncio.get_running_loop().create_task(prerender_greeting(call_id, text, voice_id, pace, pauses))
     _PRERENDER_TASKS.add(task)
     task.add_done_callback(_PRERENDER_TASKS.discard)
 
@@ -429,10 +464,11 @@ def has_greeting_audio(call_id: str) -> bool:
     return call_id in _GREETING_AUDIO
 
 
-def take_greeting_audio(call_id: str, text: str, pace: Optional[float] = None) -> Optional[bytes]:
-    """The pre-rendered greeting, if it matches the text and speed about to be spoken (used once)."""
+def take_greeting_audio(call_id: str, text: str, pace: Optional[float] = None,
+                        pauses: Optional[Mapping[str, int]] = None) -> Optional[bytes]:
+    """The pre-rendered greeting, if it matches the text, speed and pause lengths about to be spoken (used once)."""
     entry = _GREETING_AUDIO.pop(call_id, None)
-    return entry[2] if entry and entry[0] == text and entry[1] == pace else None
+    return entry[3] if entry and entry[0] == text and entry[1] == pace and entry[2] == pause_key(pauses) else None
 
 
 def greeting_pace(first_message: Optional[str], cfg: Settings = default_settings) -> Optional[float]:
@@ -481,6 +517,8 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
             agent = resolved.agent
             flow_vars = {**resolved.info, "flow_silence_reprompt": resolved.flow.silence.reprompt,
                          "flow_silence_closing": resolved.flow.silence.closing}
+            if resolved.flow.pauses is not None:  # else the default pause lengths
+                flow_vars.update({f"flow_pause_{k}": str(v) for k, v in resolved.flow.pauses.model_dump().items()})
             time_limit = min(resolved.flow.limits.max_duration_sec, cfg.MAX_CALL_DURATION_SECONDS)
             flow_event = ("flow:selected", {**resolved.info, "agent_id": agent.id, "time_limit": time_limit})
 
@@ -553,7 +591,7 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
             greeting = render_first_message(agent.first_message, variables)
             if greeting:
                 schedule_greeting_prerender(call.id, greeting, call.voice_id or agent.voice_id,
-                                            greeting_pace(agent.first_message, cfg))
+                                            greeting_pace(agent.first_message, cfg), pauses_from_variables(variables))
     return call
 
 
@@ -879,6 +917,7 @@ class CallSession:
         self._speech_near_agent = False  # current utterance started over / right after the agent
         self._stt_stream: Optional[STTStream] = None  # streaming STT for the utterance in progress
         self._line_audio: Dict[str, bytes] = {}  # pre-rendered fixed lines (PRERENDER_FIXED_LINES)
+        self.pauses = pauses_from_variables(ctx.variables)  # lengths of {{short_delay}} etc. in system lines
         self._bg_tasks: Set[asyncio.Task] = set()
         self._last_prewarm = 0.0
         self._db_queue: "asyncio.Queue[Callable[[AsyncSession], Awaitable[None]]]" = asyncio.Queue()
@@ -1003,7 +1042,7 @@ class CallSession:
         with call_context(self.call_id):
             for line in self._fixed_lines():
                 try:
-                    mulaw = await asyncio.wait_for(self.tts.synthesize(line), timeout=15)
+                    mulaw = await asyncio.wait_for(synthesize_line(self.tts, line, self.pauses), timeout=15)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # live TTS still works for that line
@@ -1550,7 +1589,8 @@ class CallSession:
             # Open the TTS stream early to hide the handshake behind STT - unless the
             # pre-rendered greeting is about to play and no TTS is needed at all.
             tts_connect: Optional[asyncio.Task] = None
-            if not (st.is_greeting and has_greeting_audio(self.call_id)) and scripted not in self._line_audio:
+            if (not (st.is_greeting and has_greeting_audio(self.call_id)) and scripted not in self._line_audio
+                    and not has_pause_markers(scripted)):  # a line with pauses is synthesized in parts
                 tts_connect = asyncio.create_task(self.tts.open_stream())
             try:
                 # ---------------- STT ----------------
@@ -1608,8 +1648,9 @@ class CallSession:
                         self._identity_reasked = True
 
                 # ---------------- LLM -> TTS (streamed) ----------------
-                cached = (take_greeting_audio(self.call_id, st.scripted, self.greeting_pace())
+                cached = (take_greeting_audio(self.call_id, st.scripted, self.greeting_pace(), self.pauses)
                           if st.is_greeting and st.scripted else None)
+                paused = split_pauses(st.scripted, self.pauses) if has_pause_markers(st.scripted) else []
                 line_audio = self._line_audio.get(st.scripted) if st.scripted is not None and not cached else None
                 m.source = "prerendered" if (cached or line_audio) else "scripted" if st.scripted is not None else "llm"
                 if cached or line_audio:
@@ -1617,6 +1658,8 @@ class CallSession:
                     m.t5 = m.t6 = time.monotonic()
                     st.spoken.append(clean_spoken_text(st.scripted))
                     await self._play(cached or line_audio, st)
+                elif len(paused) > 1:
+                    await self._speak_with_pauses(st, m, paused)
                 else:
                     if tts_connect is None:
                         tts_connect = asyncio.create_task(self.tts.open_stream())
@@ -1763,6 +1806,32 @@ class CallSession:
                     except BaseException:
                         pass
 
+    async def _speak_with_pauses(self, st: _TurnState, m: TurnMetrics, parts: List[Tuple[str, int, int]]) -> None:
+        """A system line with pause markers: its parts are synthesized in parallel (same voice and
+        speed) and queued as part, silence, part. The silence is ordinary audio for Plivo, so
+        barge-in clears it like speech, and the silence timers start after the whole line."""
+        pace = self.greeting_pace() if st.is_greeting else None
+        jobs = [asyncio.create_task(self.tts.synthesize(p) if pace is None else self.tts.synthesize(p, pace=pace))
+                for p, _, _ in parts]
+        try:
+            m.t5 = time.monotonic()
+            for (text, requested, inserted), job in zip(parts, jobs):
+                mulaw = await job
+                if m.t6 is None:
+                    m.t6 = time.monotonic()
+                    log.info("TTS first audio: %dms", _ms(m.t5, m.t6) or 0)
+                st.spoken.append(text)
+                await self._play(mulaw, st)
+                if inserted:
+                    await self._play(silence_mulaw(inserted), st)
+                    log.info("Pause inserted: requested %d ms, actual %d ms", requested, inserted)
+                    self._event("pause_inserted", {"turn": self.turn_index, "requested_ms": requested,
+                                                   "actual_ms": inserted})
+        finally:
+            for job in jobs:
+                if not job.done():
+                    job.cancel()
+
     async def _play(self, mulaw: bytes, st: Optional[_TurnState] = None) -> None:
         self._agent_spoke = True
         if st is not None and not st.audio_started:
@@ -1855,9 +1924,9 @@ class CallSession:
     async def _speak_fallback(self, st: _TurnState, reason: str) -> None:
         text, close = self._next_fallback_line(reason)
         try:
-            pcm = self._line_audio.get(text) or await self.tts.synthesize(text)
+            pcm = self._line_audio.get(text) or await synthesize_line(self.tts, text, self.pauses)
             st.is_greeting = False
-            st.spoken = [text]
+            st.spoken = [clean_spoken_text(text)]
             await self._play(pcm, st)
             # Recorded like any reply, so the LLM knows it already asked once and the
             # customer's words are kept in history instead of piling up unanswered.

@@ -26,7 +26,9 @@ LOCKED_BLOCKS: Dict[str, str] = json.loads((BUILTIN_DIR / "locked_blocks.json").
 FLOW_BASES = ("nila", "followup")
 # Variables a flow may use. phone_number is deliberately absent: it is never spoken.
 FLOW_VARIABLES = ("customer_name", "name", "honorific", "title", "gender", "addressed_name",
-                  "follow_up_detail", "company_name", "business_type", "title_to_use", "time_greeting")
+                  "follow_up_detail", "company_name", "business_type", "title_to_use", "time_greeting",
+                  # pause markers: silence inside a line the system speaks (see FlowPauses)
+                  "short_delay", "medium_delay", "long_delay")
 BLOCK_GROUPS = ("greeting", "main_script", "questions", "objections", "closing", "tone", "rules")
 MAX_BLOCK_CHARS = 8000
 MAX_PROMPT_CHARS = 50000  # same ceiling as AgentCreate.system_prompt
@@ -118,6 +120,13 @@ class FlowLimits(_Strict):
     max_duration_sec: int = Field(..., ge=30, le=600)
 
 
+class FlowPauses(_Strict):
+    """Length of {{short_delay}} / {{medium_delay}} / {{long_delay}} in ms. A flow without it uses these defaults."""
+    short_ms: int = Field(300, ge=0, le=3000)
+    medium_ms: int = Field(700, ge=0, le=3000)
+    long_ms: int = Field(1200, ge=0, le=3000)
+
+
 class FlowTransfer(_Strict):
     # Stored only: live transfer is not implemented, so it cannot be switched on yet.
     enabled: Literal[False] = False
@@ -135,6 +144,7 @@ class CallFlow(_Strict):
     silence: FlowSilence
     limits: FlowLimits
     transfer: FlowTransfer = Field(default_factory=FlowTransfer)
+    pauses: Optional[FlowPauses] = None  # None = DEFAULT pause lengths (flows saved before pauses existed)
 
     @model_validator(mode="after")
     def _blocks(self) -> "CallFlow":

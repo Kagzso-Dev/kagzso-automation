@@ -48,9 +48,9 @@ def test_config_defaults_and_ranges():
 
 
 def test_prerendered_greeting_cache_key_includes_the_speed():
-    call_service._GREETING_AUDIO["c1"] = ("Hi sir, Good morning.", 0.95, b"audio")
+    call_service._GREETING_AUDIO["c1"] = ("Hi sir, Good morning.", 0.95, call_service.pause_key(None), b"audio")
     assert take_greeting_audio("c1", "Hi sir, Good morning.", None) is None  # other speed: not used
-    call_service._GREETING_AUDIO["c1"] = ("Hi sir, Good morning.", 0.95, b"audio")
+    call_service._GREETING_AUDIO["c1"] = ("Hi sir, Good morning.", 0.95, call_service.pause_key(None), b"audio")
     assert take_greeting_audio("c1", "Hi sir, Good morning.", 0.95) == b"audio"
 
 

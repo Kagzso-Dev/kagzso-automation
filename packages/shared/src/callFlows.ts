@@ -22,7 +22,23 @@ export const CALL_FLOW_VARIABLES = [
   "business_type",
   "title_to_use",
   "time_greeting",
+  // Pause markers: real silence inside a line the system speaks (lengths in `pauses`).
+  "short_delay",
+  "medium_delay",
+  "long_delay",
 ] as const;
+
+/** {{short_delay}} / {{medium_delay}} / {{long_delay}} lengths (ms) for a flow without its own `pauses`. */
+export const CALL_FLOW_PAUSE_DEFAULTS = { short_ms: 300, medium_ms: 700, long_ms: 1200 } as const;
+export const CALL_FLOW_MAX_PAUSE_MS = 3000;
+export const CALL_FLOW_PAUSE_MARKERS = { short_delay: "short_ms", medium_delay: "medium_ms", long_delay: "long_ms" } as const;
+export type CallFlowPauses = { short_ms: number; medium_ms: number; long_ms: number };
+
+const pauseMs = z
+  .number({ invalid_type_error: "Enter a number of milliseconds" })
+  .int("Use a whole number of milliseconds")
+  .min(0, `Use 0 to ${CALL_FLOW_MAX_PAUSE_MS} ms`)
+  .max(CALL_FLOW_MAX_PAUSE_MS, `Use 0 to ${CALL_FLOW_MAX_PAUSE_MS} ms`);
 
 export const CALL_FLOW_GROUPS = ["greeting", "main_script", "questions", "objections", "closing", "tone", "rules"] as const;
 export type CallFlowGroup = (typeof CALL_FLOW_GROUPS)[number];
@@ -149,6 +165,8 @@ export const callFlowDefinition = z
       .object({ reprompt: flowText(200, { multiline: false }), closing: flowText(200, { multiline: false }) })
       .strict(),
     limits: z.object({ max_duration_sec: z.number().int().min(30).max(600) }).strict(),
+    /** Absent on flows saved before pauses existed: CALL_FLOW_PAUSE_DEFAULTS apply. */
+    pauses: z.object({ short_ms: pauseMs, medium_ms: pauseMs, long_ms: pauseMs }).strict().optional(),
     transfer: z
       .object({
         // Live transfer is not implemented yet: the number is stored only.

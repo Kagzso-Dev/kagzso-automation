@@ -85,6 +85,11 @@ describe("Voice Call Flows layout", () => {
     expect(screen.getByText("Live preview")).toBeTruthy();
     await waitFor(() => expect(screen.getByText("“Hello, am I speaking with Ragul?”")).toBeTruthy()); // preview rendered
     expect(screen.getByRole("radiogroup", { name: "Voice" })).toBeTruthy();
+    // pause settings next to Max call duration (an old flow shows the defaults) and their chips
+    expect((screen.getByLabelText("Short delay (ms)") as HTMLInputElement).value).toBe("300");
+    expect((screen.getByLabelText("Medium delay (ms)") as HTMLInputElement).value).toBe("700");
+    expect((screen.getByLabelText("Long delay (ms)") as HTMLInputElement).value).toBe("1200");
+    for (const chip of ["{{short_delay}}", "{{medium_delay}}", "{{long_delay}}"]) expect(screen.getByRole("button", { name: chip })).toBeTruthy();
   });
 
   it("shows the flow list and no editor before a flow is selected", async () => {

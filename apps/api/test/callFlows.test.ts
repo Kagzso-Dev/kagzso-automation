@@ -99,3 +99,30 @@ describe("inputs", () => {
     expect(startAiCallsInput.parse({ ...base, flowId: "cf_1" }).flowId).toBe("cf_1");
   });
 });
+
+describe("pause markers and lengths", () => {
+  it("accepts {{short_delay}}, {{medium_delay}} and {{long_delay}} in every editable line; other unknown variables stay rejected", () => {
+    const f = nila();
+    f.greeting = { text: "Hi {{title_to_use}}, {{short_delay}} {{time_greeting}}." };
+    f.silence = { reprompt: "Hello? {{medium_delay}} Can you hear me?", closing: "Okay. {{long_delay}} Have a nice day." };
+    (f.blocks[0] as { text: string }).text += " Say: Hi {{short_delay}} sir.";
+    expect(issues(f)).toEqual([]);
+    expect(issues({ ...nila(), greeting: { text: "Hi {{tiny_delay}}" } }).join()).toMatch(/Unknown variable/);
+  });
+
+  it("stores the lengths as whole numbers from 0 to 3000 ms; old flows without them stay valid", () => {
+    expect(nila().pauses).toBeUndefined();
+    expect(issues(nila())).toEqual([]);
+    expect(issues({ ...nila(), pauses: { short_ms: 0, medium_ms: 700, long_ms: 3000 } })).toEqual([]);
+    for (const bad of [
+      { short_ms: -1, medium_ms: 700, long_ms: 1200 },
+      { short_ms: 300, medium_ms: 3001, long_ms: 1200 },
+      { short_ms: 300, medium_ms: 700, long_ms: 12.5 },
+      { short_ms: 300, medium_ms: 700 },
+      { short_ms: 300, medium_ms: 700, long_ms: 1200, extra: 1 },
+    ]) {
+      expect(issues({ ...nila(), pauses: bad })).not.toEqual([]);
+    }
+    expect(issues({ ...nila(), pauses: { short_ms: 3001, medium_ms: 700, long_ms: 1200 } }).join()).toMatch(/0 to 3000 ms/);
+  });
+});

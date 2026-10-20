@@ -19,7 +19,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone, tzinfo
-from typing import AsyncIterator, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import httpx
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -274,7 +274,12 @@ def render_first_message(template: str, variables: Mapping[str, Optional[str]]) 
     """Deterministic opening line. Missing values are left out, never invented:
     'Hi {{customer_name}} {{title}}, ...' -> 'Hi Ragul sir, ...' / 'Hi Ragul, ...' / 'Hi, ...'"""
     safe = safe_variables(variables)
-    text = _VAR_RE.sub(lambda m: safe.get(m.group(1), "") if m.group(1) in ALLOWED_VARIABLES else "", template)
+    # Pause markers stay in the line: they are turned into silence when it is spoken.
+    text = _VAR_RE.sub(
+        lambda m: "{{" + m.group(1) + "}}" if m.group(1) in PAUSE_MARKERS
+        else safe.get(m.group(1), "") if m.group(1) in ALLOWED_VARIABLES else "",
+        template,
+    )
     text = re.sub(r"\s+([,.?!])", r"\1", text)
     return re.sub(r"\s{2,}", " ", text).strip()
 
@@ -355,7 +360,83 @@ _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _URL_RE = re.compile(r"https?://\S+")
 
 
+# --------------------------------------------------------------------------
+# Pause markers: {{short_delay}} / {{medium_delay}} / {{long_delay}} in lines the system speaks
+# word for word (greeting, silence lines) become real silence between separately synthesized
+# parts (call_service). They are never spoken, never sent to TTS and never written anywhere:
+# render_prompt drops them from the agent prompt, clean_spoken_text strips any that remain.
+# --------------------------------------------------------------------------
+PAUSE_MARKERS = {"short_delay": "short_ms", "medium_delay": "medium_ms", "long_delay": "long_ms"}
+DEFAULT_PAUSES_MS = {"short_ms": 300, "medium_ms": 700, "long_ms": 1200}
+MAX_PAUSE_MS = 3000  # per marker setting
+MAX_LINE_PAUSE_MS = 5000  # all pauses in one line together
+PAUSE_FRAME_MS = 20  # one Plivo media frame (160 bytes of 8 kHz mu-law)
+_PAUSE_RE = re.compile(r"\{\{\s*(short_delay|medium_delay|long_delay)\s*\}\}")
+# Defensive: other spellings a model could produce. Never spoken ("short delay" in plain prose is left alone).
+_STRAY_PAUSE_RE = re.compile(
+    r"\{+\s*(?:short|medium|long)[_ ]delay\s*\}+|[\[(<]\s*(?:short|medium|long)[_ ]delay\s*[\])>]|\b(?:short|medium|long)_delay\b",
+    re.IGNORECASE,
+)
+
+
+def has_pause_markers(text: Optional[str]) -> bool:
+    return bool(text) and bool(_PAUSE_RE.search(text))  # type: ignore[arg-type]
+
+
+def strip_pause_markers(text: str) -> str:
+    return _STRAY_PAUSE_RE.sub(" ", _PAUSE_RE.sub(" ", text))
+
+
+def pauses_from_variables(variables: Mapping[str, Any]) -> Dict[str, int]:
+    """The call's pause lengths (flow_pause_*_ms, set from the flow); the defaults otherwise."""
+    out = dict(DEFAULT_PAUSES_MS)
+    for key in out:
+        try:
+            value = int(str(variables.get(f"flow_pause_{key}", "")).strip())
+        except ValueError:
+            continue
+        out[key] = max(0, min(MAX_PAUSE_MS, value))
+    return out
+
+
+def split_pauses(text: str, pauses: Mapping[str, int]) -> List[Tuple[str, int, int]]:
+    """A line → [(spoken part, requested pause ms after it, inserted pause ms after it)].
+
+    Consecutive markers add up; markers before the first or after the last spoken part are
+    ignored; the inserted pause is rounded to the 20 ms frame and all pauses in the line together
+    are capped at MAX_LINE_PAUSE_MS. A line without markers is one part with no pause."""
+    parts: List[List[Any]] = []
+    pending = 0
+    pos = 0
+    pieces: List[Tuple[str, Any]] = []
+    for m in _PAUSE_RE.finditer(text):
+        pieces += [("text", text[pos:m.start()]), ("pause", int(pauses.get(PAUSE_MARKERS[m.group(1)], 0)))]
+        pos = m.end()
+    pieces.append(("text", text[pos:]))
+    for kind, value in pieces:
+        if kind == "pause":
+            if parts:  # a pause before anything is said is ignored
+                pending += value
+            continue
+        spoken = clean_spoken_text(value).lstrip(",;: ")
+        if not re.search(r"\w", spoken):
+            continue  # nothing to say between two markers: their pauses add up
+        if parts:
+            parts[-1][1] += pending
+        pending = 0
+        parts.append([spoken, 0])
+    # `pending` left over = markers after the last spoken part: ignored.
+    left = MAX_LINE_PAUSE_MS
+    out: List[Tuple[str, int, int]] = []
+    for spoken, requested in parts:
+        inserted = min(left, (requested + PAUSE_FRAME_MS // 2) // PAUSE_FRAME_MS * PAUSE_FRAME_MS)
+        left -= inserted
+        out.append((spoken, requested, inserted))
+    return out
+
+
 def clean_spoken_text(text: str) -> str:
+    text = strip_pause_markers(text)
     text = text.replace(END_CALL_TOKEN, " ")
     text = _MD_LINK_RE.sub(r"\1", text)
     text = _URL_RE.sub("", text)

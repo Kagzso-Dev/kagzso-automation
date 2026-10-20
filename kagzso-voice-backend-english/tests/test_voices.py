@@ -80,3 +80,25 @@ def test_preview_refuses_removed_voices_bad_text_and_missing_key(client, auth):
     assert client.post("/api/voices/preview", json={"voice_id": "roopa", "text": "x" * 201}, headers=auth).status_code == 422
     assert client.post("/api/voices/preview", json={"voice_id": "roopa", "text": "   "}, headers=auth).status_code == 422
     assert client.post("/api/voices/preview", json={"voice_id": "roopa", "text": "Hi"}).status_code in (401, 403)
+
+
+def test_preview_puts_real_silence_where_the_pause_markers_are(client, auth, fakes, monkeypatch):
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content)["text"])
+        return httpx.Response(200, json={"audios": [base64.b64encode(_wav(b"\x01\x00" * 2205, 22050)).decode()]})
+
+    monkeypatch.setattr(settings, "SARVAM_API_KEY", type(settings.SARVAM_API_KEY)("sarvam-test-key"))
+    fakes.tts = SarvamTTS(settings, client=httpx.AsyncClient(base_url="https://api.sarvam.ai", transport=httpx.MockTransport(handler)))
+
+    body = {"voice_id": "roopa", "text": "Hi sir, {{short_delay}} Good afternoon.",
+            "pauses": {"short_ms": 500, "medium_ms": 700, "long_ms": 1200}}
+    r = client.post("/api/voices/preview", json=body, headers=auth)
+    assert r.status_code == 200
+    with wave.open(io.BytesIO(r.content)) as w:
+        frames = w.readframes(w.getnframes())
+    assert len(frames) // 2 == 2205 * 2 + 22050 * 500 // 1000  # two parts + 500 ms of silence
+    assert frames[2205 * 2:(2205 + 11025) * 2] == b"\x00\x00" * 11025
+    assert sorted(seen) == ["Good afternoon.", "Hi sir,"]  # the marker never reaches TTS
+    assert client.post("/api/voices/preview", json={**body, "pauses": {"short_ms": 4000}}, headers=auth).status_code == 422

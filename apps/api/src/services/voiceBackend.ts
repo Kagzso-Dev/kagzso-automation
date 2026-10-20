@@ -155,8 +155,12 @@ export function previewFlow(definition: unknown, sample: Record<string, unknown>
   return request<VoiceFlowPreview>("POST", "/api/flows/preview", { flow: definition, sample });
 }
 
-/** "Listen": a WAV of `voiceId` saying `text`. Text-to-speech only — the voice backend dials nothing. */
-export async function previewVoice(voiceId: string, text: string): Promise<Buffer> {
+/** "Listen": a WAV of `voiceId` saying `text` ({{short_delay}} etc. as real silence). Text-to-speech only — the voice backend dials nothing. */
+export async function previewVoice(
+  voiceId: string,
+  text: string,
+  pauses?: { short_ms: number; medium_ms: number; long_ms: number },
+): Promise<Buffer> {
   if (!isAiCallsConfigured()) {
     throw new VoiceBackendError("Voice backend is not configured (VOICE_BACKEND_URL / VOICE_BACKEND_API_KEY)", null, false);
   }
@@ -165,7 +169,7 @@ export async function previewVoice(voiceId: string, text: string): Promise<Buffe
     res = await fetch(`${aiCallsConfig.voiceBackendUrl}/api/voices/preview`, {
       method: "POST",
       headers: { "X-API-Key": aiCallsConfig.voiceBackendApiKey!, "Content-Type": "application/json" },
-      body: JSON.stringify({ voice_id: voiceId, text }),
+      body: JSON.stringify({ voice_id: voiceId, text, ...(pauses ? { pauses } : {}) }),
       signal: AbortSignal.timeout(30_000),
     });
   } catch (err) {

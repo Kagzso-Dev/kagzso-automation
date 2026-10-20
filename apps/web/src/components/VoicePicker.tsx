@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { getAccessToken } from "../lib/api";
+import type { CallFlowPauses } from "@dispatch/shared";
 import type { VoiceOption } from "../lib/callFlows";
 
 /**
@@ -11,11 +12,11 @@ import type { VoiceOption } from "../lib/callFlows";
 
 export const DEFAULT_SAMPLE = "Hello, am I speaking with Ragul?";
 
-/** Previews already fetched this session: voice + text → object URL. */
+/** Previews already fetched this session: voice + text + pause lengths → object URL. */
 const played = new Map<string, string>();
 
-async function fetchPreview(voiceId: string, text: string): Promise<string> {
-  const key = `${voiceId}\u0000${text}`;
+async function fetchPreview(voiceId: string, text: string, pauses?: CallFlowPauses): Promise<string> {
+  const key = `${voiceId}\u0000${text}\u0000${pauses ? `${pauses.short_ms}/${pauses.medium_ms}/${pauses.long_ms}` : ""}`;
   const hit = played.get(key);
   if (hit) return hit;
   const token = getAccessToken();
@@ -23,7 +24,8 @@ async function fetchPreview(voiceId: string, text: string): Promise<string> {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: JSON.stringify({ voice_id: voiceId, text }),
+    // {{short_delay}} etc. in the sample play as real silence of the flow's lengths.
+    body: JSON.stringify({ voice_id: voiceId, text, ...(pauses ? { pauses } : {}) }),
   });
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
@@ -39,12 +41,15 @@ export function VoicePicker({
   defaultVoice,
   value,
   onChange,
+  pauses,
 }: {
   voices: VoiceOption[];
   defaultVoice: string;
   /** The flow's voice_id (null = the default voice). */
   value: string | null | undefined;
   onChange: (voiceId: string) => void;
+  /** The flow's pause lengths, for {{short_delay}} etc. in the sample line (absent = the defaults). */
+  pauses?: CallFlowPauses;
 }) {
   const [sample, setSample] = useState(DEFAULT_SAMPLE);
   const [playing, setPlaying] = useState<string | null>(null);
@@ -72,7 +77,7 @@ export function VoicePicker({
     setError(null);
     setLoading(voiceId);
     try {
-      const url = await fetchPreview(voiceId, text);
+      const url = await fetchPreview(voiceId, text, pauses);
       if (mine !== request.current) return; // another Listen was pressed meanwhile
       const el = new Audio(url);
       audio.current = el;

@@ -1,7 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CALL_FLOW_BASES,
+  CALL_FLOW_MAX_PAUSE_MS,
+  CALL_FLOW_PAUSE_DEFAULTS,
+  CALL_FLOW_PAUSE_MARKERS,
   CALL_FLOW_SAFETY_BLOCK_IDS,
   CALL_FLOW_VARIABLES,
   callFlowDefinition,
@@ -11,6 +14,7 @@ import {
   type CallFlowBase,
   type CallFlowDefinition,
   type CallFlowGroup,
+  type CallFlowPauses,
   type CallFlowTextBlock,
   type TestCallNumber,
   type TestCallNumberList,
@@ -63,6 +67,11 @@ type Sample = Omit<(typeof SAMPLES)[number], "label">;
 
 const blockTitle = (text: string) => text.split("\n").find((l) => l.trim())?.replace(/^#+\s*/, "") ?? "Untitled";
 const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleString() : "—");
+const PAUSE_FIELDS = [
+  ["short_ms", "Short delay (ms)"],
+  ["medium_ms", "Medium delay (ms)"],
+  ["long_ms", "Long delay (ms)"],
+] as const;
 /** Names for blocks whose text starts without a heading. */
 const BLOCK_LABELS: Record<string, string> = { rules_safety: "Safety rules 21–31", rules_style: "Rules 32 onward" };
 const SAFETY_IDS = new Set<string>(CALL_FLOW_SAFETY_BLOCK_IDS);
@@ -666,6 +675,7 @@ function CallFlowEditor({
                 defaultVoice={catalog.default_voice ?? catalog.voices[0]!.id}
                 value={form.voice_id}
                 onChange={(id) => update((f) => void (f.voice_id = id))}
+                pauses={form.pauses}
               />
             ) : (
               <input
@@ -688,6 +698,46 @@ function CallFlowEditor({
               onChange={(e) => update((f) => void (f.limits.max_duration_sec = Number(e.target.value) || 0))}
             />
             <span className="mt-1 block text-xs text-slate-550">Server maximum {catalog.limits.max_duration_sec}s.</span>
+          </div>
+          <div className="min-w-0">
+            <div className="grid grid-cols-3 gap-2">
+              {PAUSE_FIELDS.map(([key, label]) => {
+                const value = (form.pauses ?? CALL_FLOW_PAUSE_DEFAULTS)[key];
+                const bad = !Number.isInteger(value) || value < 0 || value > CALL_FLOW_MAX_PAUSE_MS;
+                return (
+                  <div key={key} className="min-w-0">
+                    <label className="label whitespace-nowrap" htmlFor={`pause-${key}`}>
+                      {label}
+                    </label>
+                    <input
+                      id={`pause-${key}`}
+                      type="number"
+                      className={`input ${bad ? "border-crit" : ""}`}
+                      min={0}
+                      max={CALL_FLOW_MAX_PAUSE_MS}
+                      step={10}
+                      value={Number.isNaN(value) ? "" : value}
+                      aria-invalid={bad}
+                      onChange={(e) =>
+                        update((f) => {
+                          f.pauses = { ...CALL_FLOW_PAUSE_DEFAULTS, ...f.pauses, [key]: e.target.value === "" ? Number.NaN : Number(e.target.value) };
+                        })
+                      }
+                    />
+                  </div>
+                );
+              })}
+            </div>
+            {PAUSE_FIELDS.some(([key]) => {
+              const v = (form.pauses ?? CALL_FLOW_PAUSE_DEFAULTS)[key];
+              return !Number.isInteger(v) || v < 0 || v > CALL_FLOW_MAX_PAUSE_MS;
+            }) ? (
+              <span className="mt-1 block text-xs text-crit">Each delay must be a whole number from 0 to {CALL_FLOW_MAX_PAUSE_MS} ms.</span>
+            ) : (
+              <span className="mt-1 block text-xs text-slate-550">
+                Used by {"{{short_delay}}"}, {"{{medium_delay}}"}, {"{{long_delay}}"} inside spoken lines.
+              </span>
+            )}
           </div>
         </div>
 
@@ -923,6 +973,28 @@ function CallFlowEditor({
 
 /* ------------------------------------------------------------------ preview */
 
+const PAUSE_TAG_RE = /\{\{\s*(short_delay|medium_delay|long_delay)\s*\}\}/g;
+
+/** A spoken line with each pause marker shown as a small "(pause 300 ms)" tag. */
+function withPauseTags(text: string | null, pauses: CallFlowPauses | undefined): ReactNode {
+  if (!text) return text;
+  const lengths = pauses ?? CALL_FLOW_PAUSE_DEFAULTS;
+  const out: ReactNode[] = [];
+  let last = 0;
+  for (const m of text.matchAll(PAUSE_TAG_RE)) {
+    out.push(text.slice(last, m.index));
+    const ms = lengths[CALL_FLOW_PAUSE_MARKERS[m[1] as keyof typeof CALL_FLOW_PAUSE_MARKERS]];
+    out.push(
+      <span key={m.index} className="mx-0.5 rounded bg-accent-soft px-1 py-px font-mono text-[11px] text-accent-ink">
+        (pause {ms} ms)
+      </span>,
+    );
+    last = m.index! + m[0].length;
+  }
+  out.push(text.slice(last));
+  return out;
+}
+
 function PreviewPanel({ definition, valid }: { definition: CallFlowDefinition; valid: boolean }) {
   const [sample, setSample] = useState<Sample>(() => {
     const { label: _label, ...first } = SAMPLES[0]!;
@@ -998,10 +1070,10 @@ function PreviewPanel({ definition, valid }: { definition: CallFlowDefinition; v
       ) : (
         <div className={`text-sm ${preview.isFetching ? "opacity-60" : ""}`}>
           <div className="label">Greeting</div>
-          <p className="mb-2 rounded-lg bg-surface-muted px-3 py-2">“{p.greeting}”</p>
+          <p className="mb-2 rounded-lg bg-surface-muted px-3 py-2">“{withPauseTags(p.greeting, definition.pauses)}”</p>
           <div className="label">If the customer is silent</div>
-          <p className="mb-1 rounded-lg bg-surface-muted px-3 py-2">“{p.silence_reprompt}”</p>
-          <p className="mb-2 rounded-lg bg-surface-muted px-3 py-2">“{p.silence_closing}”</p>
+          <p className="mb-1 rounded-lg bg-surface-muted px-3 py-2">“{withPauseTags(p.silence_reprompt, definition.pauses)}”</p>
+          <p className="mb-2 rounded-lg bg-surface-muted px-3 py-2">“{withPauseTags(p.silence_closing, definition.pauses)}”</p>
           <p className="mb-2 text-xs text-slate-550">
             Max duration {p.max_duration_sec}s · script {p.script_chars?.toLocaleString()} characters
           </p>

@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 let server: Server;
 let voice: Server;
 let base = "";
-const voiceRequests: { path: string; body: { voice_id: string; text: string }; key: string | undefined }[] = [];
+const voiceRequests: { path: string; body: { voice_id: string; text: string; pauses?: unknown }; key: string | undefined }[] = [];
 const WAV = Buffer.from("RIFF....WAVEfmt fake-audio");
 const token = (role: "ADMIN" | "EDITOR") =>
   jwt.sign({ sub: `u-${role}`, email: `${role.toLowerCase()}@test`, role }, process.env.JWT_ACCESS_SECRET!);
@@ -80,5 +80,19 @@ describe("POST /api/voices/preview", () => {
     expect(((await gone.json()) as { error: string }).error).toMatch(/roopa, ritu, simran, ishita/);
     expect((await preview({ voice_id: "roopa", text: "x".repeat(201) }, "ADMIN")).status).toBe(400);
     expect((await preview({ voice_id: "roopa", text: "   " }, "ADMIN")).status).toBe(400);
+  });
+
+  it("forwards the flow's pause lengths, keys the cache on them and validates them", async () => {
+    const text = "Hi sir, {{short_delay}} Good afternoon.";
+    const pauses = { short_ms: 500, medium_ms: 700, long_ms: 1200 };
+    const before = voiceRequests.length;
+    expect((await preview({ voice_id: "roopa", text, pauses }, "ADMIN")).status).toBe(200);
+    expect(voiceRequests.at(-1)!.body).toEqual({ voice_id: "roopa", text, pauses });
+    expect((await preview({ voice_id: "roopa", text, pauses }, "ADMIN")).status).toBe(200); // cached
+    expect((await preview({ voice_id: "roopa", text, pauses: { ...pauses, short_ms: 900 } }, "ADMIN")).status).toBe(200);
+    expect(voiceRequests.length - before).toBe(2); // other lengths = other audio
+    for (const bad of [{ ...pauses, short_ms: 3001 }, { ...pauses, long_ms: -1 }, { ...pauses, medium_ms: 1.5 }]) {
+      expect((await preview({ voice_id: "roopa", text, pauses: bad }, "ADMIN")).status).toBe(400);
+    }
   });
 });
