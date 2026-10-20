@@ -133,6 +133,82 @@ const varCounts = (text: string) => {
   return out;
 };
 
+/** Variables Live preview fills with sample values, and what such a value may look like. */
+const RESTORABLE: Record<string, RegExp> = {
+  customer_name: /^[\p{L}][\p{L} .'-]{0,59}$|^$/u,
+  title_to_use: /^(sir|madam)?$/i,
+  time_greeting: /^(good (morning|afternoon|evening))?$/i,
+};
+const PER_GENDER_HEADING = /^[ \t]*#{1,6}[ \t]*(male|female|unknown)\b/i;
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Where a pasted section has a Live-preview sample value in place of a variable: for each line of
+ * the current block that uses {{customer_name}}, {{title_to_use}} or {{time_greeting}}, find the
+ * pasted line that is identical except for those slots. Lines under a Male / Female / Unknown
+ * heading and lines the block has no variable on are never offered.
+ */
+function findRestores(blockText: string, pasted: string, sectionIndex: number) {
+  const offers: { id: string; line: number; before: string; after: string }[] = [];
+  const unrestorable: string[] = [];
+  const pastedLines = pasted.split("\n");
+  const perGender = (lines: string[], at: number) => {
+    for (let i = at; i >= 0; i--) {
+      if (/^[ \t]*#{1,6}[ \t]/.test(lines[i]!)) return PER_GENDER_HEADING.test(lines[i]!);
+    }
+    return false;
+  };
+  const blockLines = blockText.split("\n");
+  let cursor = 0;
+  blockLines.forEach((line, at) => {
+    const vars = [...line.matchAll(VAR_RE)].map((m) => m[1]!);
+    if (!vars.some((v) => v in RESTORABLE) || perGender(blockLines, at)) return;
+    // The line as a pattern: restorable variables are slots, everything else must match exactly.
+    const groups = new Map<string, number>();
+    let pattern = "";
+    let last = 0;
+    let adjacent = false;
+    for (const m of line.matchAll(VAR_RE)) {
+      const name = m[1]!;
+      pattern += escapeRe(line.slice(last, m.index));
+      if (name in RESTORABLE) {
+        if (m.index === last && last > 0 && pattern.endsWith(")")) adjacent = true;
+        const g = groups.get(name);
+        if (g) pattern += `\\${g}`;
+        else {
+          groups.set(name, groups.size + 1);
+          pattern += "(.*?)";
+        }
+      } else pattern += escapeRe(m[0]);
+      last = m.index! + m[0].length;
+    }
+    pattern += escapeRe(line.slice(last));
+    const re = adjacent ? null : new RegExp(`^${pattern}$`, "u");
+    let found = -1;
+    for (let i = cursor; re && i < pastedLines.length; i++) {
+      const p = pastedLines[i]!;
+      if (p === line || perGender(pastedLines, i)) continue;
+      const m = re.exec(p);
+      if (!m) continue;
+      // A slot holds a sample value, or still its own variable (only some values were filled in).
+      const ok = [...groups].every(
+        ([name, g]) => m[g] === `{{${name}}}` || (!m[g]!.includes("{{") && RESTORABLE[name]!.test(m[g]!.trim())),
+      );
+      if (ok) {
+        found = i;
+        break;
+      }
+    }
+    if (found < 0) {
+      if (!pastedLines.includes(line)) unrestorable.push(line.trim());
+      return;
+    }
+    offers.push({ id: `${sectionIndex}:${found}`, line: found + 1, before: pastedLines[found]!, after: line });
+    cursor = found + 1;
+  });
+  return { offers, unrestorable };
+}
+
 /** Remove ** and backticks from quoted spoken lines ("> ..."), listing every changed line. */
 function stripSpokenLines(text: string): { text: string; stripped: string[] } {
   const stripped: string[] = [];
@@ -170,7 +246,13 @@ export interface ImportAnalysis {
  * safety blocks already turned into text). Pure: no database, no network.
  */
 export function analyzeImport(
-  input: { prompt: string; stripSpokenMarkdown?: boolean; mapping?: Record<string, string> },
+  input: {
+    prompt: string;
+    stripSpokenMarkdown?: boolean;
+    mapping?: Record<string, string>;
+    restoreSections?: number[];
+    skipRestore?: string[];
+  },
   definition: CallFlowDefinition,
   lockedText: Record<string, string>,
   warnAboveChars = CALL_FLOW_IMPORT_WARN_CHARS,
@@ -274,6 +356,9 @@ export function analyzeImport(
       issues: [],
       warnings: [],
       stripped: [],
+      restorable: [],
+      unrestorable: [],
+      restored: false,
       diff: null,
     };
     if (r.locked) {
@@ -321,6 +406,8 @@ export function analyzeImport(
 
   const blocking: string[] = [];
   const changedBlocks: string[] = [];
+  const restore = new Set(input.restoreSections ?? []);
+  const skipRestore = new Set(input.skipRestore ?? []);
   for (const s of sections) {
     if (s.status === "locked" || s.status === "skipped" || s.status === "invalid") continue;
     if (!s.target) {
@@ -334,6 +421,18 @@ export function analyzeImport(
       const res = stripSpokenLines(text);
       text = res.text;
       s.stripped = res.stripped;
+    }
+    // Sample values back to variables ("Restore variables"), only on lines found by findRestores.
+    if ([...varCounts(block.text)].some(([v, n]) => v in RESTORABLE && (varCounts(text).get(v) ?? 0) < n)) {
+      const { offers, unrestorable } = findRestores(block.text, text, s.index);
+      s.restored = restore.has(s.index);
+      s.restorable = offers.map((o) => ({ ...o, applied: s.restored && !skipRestore.has(o.id) }));
+      s.unrestorable = unrestorable;
+      if (s.restored) {
+        const lines = text.split("\n");
+        for (const o of s.restorable) if (o.applied) lines[o.line - 1] = o.after;
+        text = lines.join("\n");
+      }
     }
     if (text.trim() === block.text.trim()) {
       s.status = "unchanged";
@@ -399,6 +498,9 @@ export function analyzeImport(
       issues: ["The system adds this after every prompt. It is never written, and its text is not shown here."],
       warnings: [],
       stripped: [],
+      restorable: [],
+      unrestorable: [],
+      restored: false,
       diff: null,
     });
   }

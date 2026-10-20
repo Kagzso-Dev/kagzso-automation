@@ -38,16 +38,19 @@ export function ImportPromptModal({
   const [prompt, setPrompt] = useState("");
   const [strip, setStrip] = useState(false);
   const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [restoreSections, setRestoreSections] = useState<number[]>([]);
+  const [skipRestore, setSkipRestore] = useState<string[]>([]);
   const [confirmDnc, setConfirmDnc] = useState(false);
   const [preview, setPreview] = useState<CallFlowImportPreview | null>(null);
   const [result, setResult] = useState<CallFlowImportResult | null>(null);
   const [undone, setUndone] = useState(false);
 
+  type Choices = { mapping: Record<string, string>; restoreSections: number[]; skipRestore: string[] };
   const analyze = useMutation({
-    mutationFn: (m: Record<string, string>) =>
+    mutationFn: (c: Choices) =>
       api<CallFlowImportPreview>(`/api/call-flows/${flowId}/import-preview`, {
         method: "POST",
-        json: { prompt, stripSpokenMarkdown: strip, mapping: m },
+        json: { prompt, stripSpokenMarkdown: strip, ...c },
         notify: false,
       }),
     onSuccess: setPreview,
@@ -56,7 +59,7 @@ export function ImportPromptModal({
     mutationFn: () =>
       api<CallFlowImportResult>(`/api/call-flows/${flowId}/import-apply`, {
         method: "POST",
-        json: { prompt, stripSpokenMarkdown: strip, mapping, confirmDncWarning: confirmDnc },
+        json: { prompt, stripSpokenMarkdown: strip, mapping, restoreSections, skipRestore, confirmDncWarning: confirmDnc },
         notify: false,
       }),
     onSuccess: (r) => {
@@ -80,6 +83,8 @@ export function ImportPromptModal({
     setPrompt("");
     setStrip(false);
     setMapping({});
+    setRestoreSections([]);
+    setSkipRestore([]);
     setConfirmDnc(false);
     setPreview(null);
     setResult(null);
@@ -89,10 +94,22 @@ export function ImportPromptModal({
     undo.reset();
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const choices = (c: Partial<Choices>): Choices => ({ mapping, restoreSections, skipRestore, ...c });
   const remap = (index: number, target: string) => {
     const next = { ...mapping, [String(index)]: target };
     setMapping(next);
-    analyze.mutate(next);
+    analyze.mutate(choices({ mapping: next }));
+  };
+  /** Turn "Restore variables" on or off for these sections. */
+  const setRestore = (indexes: number[], on: boolean) => {
+    const next = on ? [...new Set([...restoreSections, ...indexes])] : restoreSections.filter((i) => !indexes.includes(i));
+    setRestoreSections(next);
+    analyze.mutate(choices({ restoreSections: next }));
+  };
+  const toggleReplacement = (id: string, use: boolean) => {
+    const next = use ? skipRestore.filter((x) => x !== id) : [...skipRestore, id];
+    setSkipRestore(next);
+    analyze.mutate(choices({ skipRestore: next }));
   };
   const busy = analyze.isPending || apply.isPending;
   const canApply =
@@ -155,6 +172,8 @@ export function ImportPromptModal({
                 setPrompt(e.target.value);
                 setPreview(null);
                 setMapping({});
+                setRestoreSections([]);
+                setSkipRestore([]);
               }}
             />
             <label className="mt-2 flex items-center gap-2 text-xs text-slate-550">
@@ -172,7 +191,15 @@ export function ImportPromptModal({
           </div>
 
           {analyze.error && <ErrorNote error={analyze.error} />}
-          {preview && <ImportPreviewTable preview={preview} disabled={busy} onRemap={remap} />}
+          {preview && (
+            <ImportPreviewTable
+              preview={preview}
+              disabled={busy}
+              onRemap={remap}
+              onRestore={setRestore}
+              onToggleReplacement={toggleReplacement}
+            />
+          )}
           {preview?.dncWarning && (
             <label className="flex items-start gap-2 rounded-lg border border-crit-line bg-crit-soft px-3 py-2 text-xs text-crit">
               <input type="checkbox" className="mt-0.5" checked={confirmDnc} onChange={(e) => setConfirmDnc(e.target.checked)} />
@@ -186,7 +213,7 @@ export function ImportPromptModal({
             <button type="button" className="btn-ghost" disabled={busy} onClick={onClose}>
               Cancel
             </button>
-            <button type="button" className="btn-ghost" disabled={busy || !prompt.trim()} onClick={() => analyze.mutate(mapping)}>
+            <button type="button" className="btn-ghost" disabled={busy || !prompt.trim()} onClick={() => analyze.mutate(choices({}))}>
               {analyze.isPending ? "Analyzing…" : "Analyze"}
             </button>
             <button type="button" className="btn-primary" disabled={busy || !canApply} onClick={() => apply.mutate()}>
@@ -203,12 +230,17 @@ function ImportPreviewTable({
   preview,
   disabled,
   onRemap,
+  onRestore,
+  onToggleReplacement,
 }: {
   preview: CallFlowImportPreview;
   disabled: boolean;
   onRemap: (index: number, target: string) => void;
+  onRestore: (indexes: number[], on: boolean) => void;
+  onToggleReplacement: (id: string, use: boolean) => void;
 }) {
   const over = preview.sizeAfter > preview.warnAboveChars;
+  const restorable = preview.sections.filter((s) => s.restorable.length > 0 && !s.restored).map((s) => s.index);
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-x-6 gap-y-1 rounded-lg bg-surface-muted px-3 py-2 text-xs">
@@ -234,6 +266,18 @@ function ImportPreviewTable({
           {preview.blocking.map((b, i) => (
             <div key={i}>{b}</div>
           ))}
+        </div>
+      )}
+
+      {restorable.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line/70 px-3 py-2 text-xs">
+          <span>
+            {restorable.length} section(s) have sample values from Live preview (a name, "sir", "Good afternoon") where the
+            current block has a variable.
+          </span>
+          <button type="button" className="btn-ghost h-8 whitespace-nowrap px-3 py-0 text-xs" disabled={disabled} onClick={() => onRestore(restorable, true)}>
+            Restore all
+          </button>
         </div>
       )}
 
@@ -283,6 +327,51 @@ function ImportPreviewTable({
                   Warning: {m}
                 </p>
               ))}
+              {s.restorable.length > 0 && (
+                <div className="space-y-1.5 rounded-lg bg-surface-muted px-3 py-2 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-slate-550">
+                      {s.restored
+                        ? "Variables restored on these lines (untick any to keep it as pasted):"
+                        : `${s.restorable.length} line(s) can go back to their variables:`}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn-ghost h-7 whitespace-nowrap px-2.5 py-0 text-[11px]"
+                      disabled={disabled}
+                      onClick={() => onRestore([s.index], !s.restored)}
+                    >
+                      {s.restored ? "Undo restore" : "Restore variables"}
+                    </button>
+                  </div>
+                  <ul className="space-y-1.5">
+                    {s.restorable.map((o) => (
+                      <li key={o.id} className="flex items-start gap-2">
+                        {s.restored && (
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 shrink-0"
+                            aria-label={`Use the replacement on line ${o.line}`}
+                            checked={o.applied}
+                            disabled={disabled}
+                            onChange={(e) => onToggleReplacement(o.id, e.target.checked)}
+                          />
+                        )}
+                        <span className="min-w-0 break-words font-mono text-[11px] leading-relaxed">
+                          <span className="block text-crit">- {o.before.trim()}</span>
+                          <span className="block text-ok">+ {o.after.trim()}</span>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  {s.unrestorable.length > 0 && (
+                    <p className="text-crit">Couldn't restore automatically (fix by hand): {s.unrestorable.join(" · ")}</p>
+                  )}
+                </div>
+              )}
+              {s.restorable.length === 0 && s.unrestorable.length > 0 && (
+                <p className="text-xs text-crit">Couldn't restore automatically (fix by hand): {s.unrestorable.join(" · ")}</p>
+              )}
               {s.stripped.length > 0 && (
                 <details className="text-xs">
                   <summary className="cursor-pointer text-slate-550">Removed markdown in {s.stripped.length} spoken line(s)</summary>

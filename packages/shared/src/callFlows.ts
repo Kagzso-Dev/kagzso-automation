@@ -251,6 +251,10 @@ export const callFlowImportInput = z
     prompt: z.string().min(1, "Paste the prompt first").max(200_000),
     stripSpokenMarkdown: z.boolean().default(false),
     mapping: z.record(z.string().regex(/^\d{1,3}$/), z.union([blockId, z.literal("skip")])).default({}),
+    /** Sections whose Live-preview sample values ("Ragul", "sir", "Good afternoon") go back to variables. */
+    restoreSections: z.array(z.number().int().min(0).max(999)).max(200).default([]),
+    /** Replacement ids ("section:line") you unticked: left as pasted. */
+    skipRestore: z.array(z.string().regex(/^\d{1,3}:\d{1,5}$/)).max(2000).default([]),
   })
   .strict();
 export const callFlowImportApplyInput = callFlowImportInput.extend({ confirmDncWarning: z.boolean().default(false) }).strict();
@@ -281,6 +285,16 @@ export interface CallFlowImportSection {
   warnings: string[];
   /** Spoken lines changed by "remove ** and backticks": "before → after". */
   stripped: string[];
+  /**
+   * Lines where a sample value can go back to its variable ("Restore variables"): only lines whose
+   * current text has {{customer_name}}, {{title_to_use}} or {{time_greeting}} and otherwise matches
+   * exactly. `applied` = used in this preview (the section is restored and the line not unticked).
+   */
+  restorable: { id: string; line: number; before: string; after: string; applied: boolean }[];
+  /** Current lines with one of those variables that couldn't be matched safely (fix by hand). */
+  unrestorable: string[];
+  /** "Restore variables" is on for this section. */
+  restored: boolean;
   diff: { removed: string[]; added: string[]; more: number } | null;
 }
 

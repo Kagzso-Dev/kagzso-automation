@@ -39,8 +39,16 @@ const textOf = (d: CallFlowDefinition, id: string) => {
   const b = d.blocks.find((x) => x.id === id)!;
   return isLockedBlock(b) ? null : b.text;
 };
-const run = (prompt: string, def: CallFlowDefinition, opts: { mapping?: Record<string, string>; strip?: boolean } = {}) =>
-  analyzeImport({ prompt, mapping: opts.mapping, stripSpokenMarkdown: opts.strip }, materializeUnlockedBlocks(def, LOCKED), LOCKED);
+const run = (
+  prompt: string,
+  def: CallFlowDefinition,
+  opts: { mapping?: Record<string, string>; strip?: boolean; restore?: number[]; skip?: string[] } = {},
+) =>
+  analyzeImport(
+    { prompt, mapping: opts.mapping, stripSpokenMarkdown: opts.strip, restoreSections: opts.restore, skipRestore: opts.skip },
+    materializeUnlockedBlocks(def, LOCKED),
+    LOCKED,
+  );
 const section = (r: ReturnType<typeof run>, heading: RegExp) => r.preview.sections.find((s) => heading.test(s.heading))!;
 const FIVE = ["do_not_call", "wrong_person", "outcome_rules", "callback_request", "rules_safety"];
 
@@ -194,6 +202,85 @@ describe("analyzeImport", () => {
   });
 });
 
+describe("Restore variables (Live-preview sample values back to variables)", () => {
+  // What "Copy" in Live preview gives for Pooja: the sample values filled in, plus the system tail.
+  const live = (def: CallFlowDefinition) =>
+    render(materializeUnlockedBlocks(def, LOCKED))
+      .replaceAll("{{customer_name}}", "Ragul")
+      .replaceAll("{{title_to_use}}", "sir")
+      .replaceAll("{{time_greeting}}", "Good afternoon") + TAIL;
+  const flagged = (r: ReturnType<typeof run>) => r.preview.sections.filter((s) => s.status === "rendered_value");
+
+  it("finds the 7 flagged Pooja sections and Restore all fixes every one of them", () => {
+    const before = run(live(pooja()), pooja());
+    expect(flagged(before).map((s) => s.target)).toEqual([
+      "first_turn",
+      "identity_confirmation",
+      "permission",
+      "screening_flow",
+      "company_intro",
+      "employee_objection",
+      "rules",
+    ]);
+    expect(section(before, /^FIRST TURN/).restorable.map((o) => [o.before, o.after])).toEqual([
+      ['> "Hi sir, Good afternoon."', '> "Hi {{title_to_use}}, {{time_greeting}}."'],
+      ['> "Am I speaking with Ragul, sir?"', '> "Am I speaking with {{customer_name}}, {{title_to_use}}?"'],
+    ]);
+    const after = run(live(pooja()), pooja(), { restore: flagged(before).map((s) => s.index) });
+    expect(flagged(after)).toEqual([]);
+    expect(after.preview.blocking).toEqual([]);
+    expect(after.preview.summary.updated).toBe(0); // everything is back to the current text
+    expect(after.preview.changed).toBe(false);
+  });
+
+  it("never touches per-gender lines or lines the current block has no variable on", () => {
+    const def = materializeUnlockedBlocks(pooja(), LOCKED);
+    const busy = def.blocks.find((b) => b.id === "busy") as { text: string };
+    // A per-gender line that does use a variable must still be left alone.
+    busy.text = busy.text.replace("### Unknown", "### Unknown\n\n> \"Okay {{title_to_use}}, no problem.\"\n\n### Unknown (old)");
+    const paste = live(def);
+    const before = run(paste, def);
+    const offers = before.preview.sections.flatMap((s) => s.restorable);
+    expect(offers.some((o) => /No problem sir|Sure sir|Okay sir|Sorry sir/.test(o.before))).toBe(false);
+    const all = flagged(before).map((s) => s.index);
+    const after = run(paste, def, { restore: all });
+    expect(section(after, /^BUSY/).status).toBe("rendered_value"); // left as pasted: still blocked, same message
+    expect(section(after, /^BUSY/).issues.join()).toMatch(/appears less often than in the current block/);
+    expect(textOf(after.next, "interested_close")).toBe(textOf(def, "interested_close"));
+  });
+
+  it("an unticked replacement is left as pasted and keeps the section blocked", () => {
+    const before = run(live(pooja()), pooja());
+    const all = flagged(before).map((s) => s.index);
+    const skip = section(before, /^FIRST TURN/).restorable[1]!.id; // "Am I speaking with Ragul, sir?"
+    const after = run(live(pooja()), pooja(), { restore: all, skip: [skip] });
+    const first = section(after, /^FIRST TURN/);
+    expect(first.restorable.map((o) => o.applied)).toEqual([true, false]);
+    expect(first.status).toBe("rendered_value");
+    expect(first.issues.join()).toMatch(/\{\{customer_name\}\} appears less often/);
+    expect(after.preview.blocking.join()).toMatch(/FIRST TURN/);
+    expect(flagged(after)).toHaveLength(1);
+  });
+
+  it("a line with other edits as well is not restored (fix by hand)", () => {
+    const paste = live(pooja()).replace('> "Yes sir. Our company helps', '> "Yes sir! Our firm helps');
+    const before = run(paste, pooja());
+    const intro = section(before, /^COMPANY INTRODUCTION/);
+    expect(intro.restorable).toEqual([]);
+    expect(intro.unrestorable.join()).toMatch(/Yes \{\{title_to_use\}\}\. Our company helps/);
+    const after = run(paste, pooja(), { restore: [intro.index] });
+    expect(section(after, /^COMPANY INTRODUCTION/).status).toBe("rendered_value");
+  });
+
+  it("importing the restored prompt again gives 0 to update", () => {
+    const before = run(live(pooja()), pooja());
+    const restored = run(live(pooja()), pooja(), { restore: flagged(before).map((s) => s.index) });
+    const again = analyzeImport({ prompt: render(restored.next) + TAIL }, restored.next, LOCKED);
+    expect(again.preview.summary.updated).toBe(0);
+    expect(again.preview.changed).toBe(false);
+  });
+});
+
 /* ------------------------------------------------------------------ HTTP */
 
 type Row = { id: string; flowId: string; version: number; status: "DRAFT" | "PUBLISHED"; definition: unknown; definitionHash: string; publishedAt: Date | null };
@@ -344,6 +431,20 @@ describe("POST /api/call-flows/:id/import-preview and /import-apply", () => {
     const ok = await post("/api/call-flows/live/import-apply", { prompt: noDnc, confirmDncWarning: true });
     expect(ok.status).toBe(200);
     expect(rows.find((r) => r.status === "DRAFT" && r.flowId === "live")).toBeTruthy();
+  });
+
+  it("apply takes the same restore choices as the preview", async () => {
+    const paste = render(materializeUnlockedBlocks(pooja(), LOCKED)).replaceAll("{{customer_name}}", "Ragul") + TAIL;
+    const blocked = await post("/api/call-flows/live/import-apply", { prompt: paste });
+    expect(blocked.status).toBe(400);
+    const preview = (await (await post("/api/call-flows/live/import-preview", { prompt: paste })).json()) as {
+      sections: { index: number; status: string }[];
+    };
+    const flaggedIdx = preview.sections.filter((s) => s.status === "rendered_value").map((s) => s.index);
+    const ok = await post("/api/call-flows/live/import-apply", { prompt: paste, restoreSections: flaggedIdx });
+    const okBody = await ok.json();
+    expect(okBody).toMatchObject({ changed: false, version: null }); // fully restored = nothing to save
+    expect(rows).toHaveLength(2);
   });
 
   it("rejects unknown fields", async () => {
