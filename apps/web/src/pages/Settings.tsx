@@ -12,6 +12,7 @@ import { SIDEBAR_SETTINGS_KEY, useSidebarHiddenItems } from "../lib/sidebar";
 import { CostRatesSection } from "../components/CostRatesSection";
 import { ChangePasswordSection, UsersSection } from "../components/UserAdminSections";
 import { BrandingSection } from "../components/BrandingSection";
+import { CallRecordingsSection } from "../components/CallRecordingsSection";
 
 interface ApiKey {
   id: string;
@@ -180,6 +181,8 @@ export function SettingsPage() {
       {isAdmin && <BrandingSection />}
 
       <CostRatesSection isAdmin={isAdmin} />
+
+      {isAdmin && <CallRecordingsSection />}
 
       <UsersSection isAdmin={isAdmin} />
 

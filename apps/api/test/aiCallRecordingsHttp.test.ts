@@ -20,8 +20,20 @@ vi.mock("../src/prisma.js", () => ({
   prisma: {
     aiCallLog: {
       findUnique: async ({ where }: { where: { id: string } }) => (logs[where.id] ? { voiceCallId: logs[where.id]!.voiceCallId } : null),
-      findMany: async ({ where }: { where: { id: { in: string[] } } }) =>
-        where.id.in.filter((id) => logs[id]?.voiceCallId).map((id) => ({ id, voiceCallId: logs[id]!.voiceCallId })),
+      findMany: async ({ where }: { where: { id?: { in: string[] } } }) =>
+        where.id
+          ? where.id.in.filter((id) => logs[id]?.voiceCallId).map((id) => ({ id, voiceCallId: logs[id]!.voiceCallId }))
+          : // Settings > Call recordings: newest first
+            ["log_proc", "log_ok"].map((id, i) => ({
+              id,
+              customerName: id === "log_ok" ? "Ragul" : null,
+              outcome: "interested",
+              durationSec: 47,
+              startedAt: new Date(Date.UTC(2026, 9, 20, 8, 33 - i)),
+              createdAt: new Date(Date.UTC(2026, 9, 20, 8, 33 - i)),
+              voiceCallId: logs[id]!.voiceCallId,
+              run: { skipped: id === "log_ok" ? { testCall: true } : {} },
+            })),
     },
   },
 }));
@@ -41,6 +53,16 @@ beforeAll(async () => {
       res.end(JSON.stringify(body));
     };
     const url = new URL(req.url!, "http://x");
+    if (url.pathname === "/api/recordings/settings") {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        const days = req.method === "PUT" ? (JSON.parse(raw) as { retention_days: number }).retention_days : 90;
+        json(200, { enabled: true, storage_configured: true, retention_days: days, max_retention_days: 3650,
+          counts: { completed: 2, processing: 0, failed: 0, deleted: 0 }, total_bytes: 1737688, oldest_at: null, disk_free_bytes: 27e9 });
+      });
+      return;
+    }
     if (url.pathname === "/api/recordings") {
       return json(200, { enabled: true, items: [{ call_id: "call_ok", status: "completed" }, { call_id: "call_proc", status: "processing" }] });
     }
@@ -161,5 +183,34 @@ describe("AI call recordings", () => {
     expect(entry?.[0]).toMatchObject({ adminId: "u-ADMIN", logId: "log_ok", voiceCallId: "call_ok", action: "play", result: "200" });
     expect(JSON.stringify(spy.mock.calls)).not.toMatch(/98765432/);
     spy.mockRestore();
+  });
+
+  it("Settings: shows the summary and saves the retention (admins only)", async () => {
+    const got = await (await call("/api/ai-calls/recordings/settings", { role: "ADMIN" })).json();
+    expect(got).toMatchObject({ enabled: true, retention_days: 90, counts: { completed: 2 } });
+    const put = (body: unknown, role: "ADMIN" | "EDITOR" = "ADMIN") =>
+      fetch(`${base}/api/ai-calls/recordings/settings`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${token(role)}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const saved = await put({ retentionDays: 30 });
+    expect(saved.status).toBe(200);
+    expect(((await saved.json()) as { retention_days: number }).retention_days).toBe(30);
+    expect((await put({ retentionDays: 30 }, "EDITOR")).status).toBe(403);
+    for (const bad of [{ retentionDays: -1 }, { retentionDays: 3651 }, { retentionDays: 1.5 }, { retentionDays: 30, x: 1 }]) {
+      expect((await put(bad)).status).toBe(400);
+    }
+  });
+
+  it("Settings: lists the latest recorded calls (test calls included) without phone numbers", async () => {
+    const res = await call("/api/ai-calls/recordings/recent?limit=5", { role: "ADMIN" });
+    const body = (await res.json()) as { items: { logId: string; testCall: boolean; status: string }[] };
+    expect(body.items.map((i) => [i.logId, i.status, i.testCall])).toEqual([
+      ["log_proc", "processing", false],
+      ["log_ok", "completed", true],
+    ]);
+    expect(JSON.stringify(body)).not.toMatch(/98765432|phone/);
+    expect((await call("/api/ai-calls/recordings/recent", { role: "EDITOR" })).status).toBe(403);
   });
 });

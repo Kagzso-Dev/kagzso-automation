@@ -62,7 +62,7 @@ function detailMessage(body: unknown, fallback: string): string {
   return fallback;
 }
 
-async function request<T>(method: "GET" | "POST" | "DELETE", path: string, json?: unknown): Promise<T> {
+async function request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, json?: unknown): Promise<T> {
   if (!isAiCallsConfigured()) {
     throw new VoiceBackendError("Voice backend is not configured (VOICE_BACKEND_URL / VOICE_BACKEND_API_KEY)", null, false);
   }
@@ -210,6 +210,28 @@ export function getRecording(voiceCallId: string): Promise<{ enabled: boolean; r
 
 export function listRecordings(voiceCallIds: string[]): Promise<{ enabled: boolean; items: VoiceRecording[] }> {
   return request("GET", `/api/recordings?call_ids=${voiceCallIds.map(encodeURIComponent).join(",")}`);
+}
+
+/** Settings > Call recordings: counts, space used, free disk and the retention period. */
+export interface VoiceRecordingSettings {
+  enabled: boolean;
+  storage_configured: boolean;
+  retention_days: number;
+  default_retention_days: number;
+  max_retention_days: number;
+  counts: { completed: number; processing: number; failed: number; deleted: number };
+  total_bytes: number;
+  oldest_at: string | null;
+  disk_free_bytes: number | null;
+}
+
+export function getRecordingSettings(): Promise<VoiceRecordingSettings> {
+  return request("GET", "/api/recordings/settings");
+}
+
+/** 0 = keep recordings forever. */
+export function setRecordingRetention(days: number): Promise<VoiceRecordingSettings> {
+  return request("PUT", "/api/recordings/settings", { retention_days: days });
 }
 
 export function deleteRecording(voiceCallId: string): Promise<{ ok: true; recording: VoiceRecording | null }> {

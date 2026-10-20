@@ -22,8 +22,10 @@ import asyncio
 import base64
 import errno
 import io
+import json
 import os
 import re
+import shutil
 import uuid
 import wave
 from datetime import datetime, timedelta
@@ -32,7 +34,7 @@ from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.config import Settings
 from app.core.logging import get_logger
@@ -49,6 +51,10 @@ MAGIC = b"KGZREC1\n"  # encrypted file header (followed by a 12-byte nonce and t
 FORMAT_WAV = "wav"
 FORMAT_ENCRYPTED = "wav+aesgcm"
 _KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\.wav(\.enc)?$")
+# Retention chosen in Dispatch (Settings > Call recordings), kept next to the recordings; it overrides
+# RECORDING_RETENTION_DAYS. Its name never matches _KEY_RE, so it can't be served or deleted as a recording.
+RETENTION_FILE = "retention.json"
+MAX_RETENTION_DAYS = 3650
 CALL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
@@ -315,11 +321,66 @@ async def mark_interrupted() -> int:
     return len(rows)
 
 
+def retention_days(cfg: Settings) -> int:
+    """Days completed recordings are kept (0 = forever): the value set in Dispatch, else the .env default."""
+    base = recordings_dir(cfg)
+    if base is not None:
+        try:
+            days = json.loads((base / RETENTION_FILE).read_text(encoding="utf-8"))["retention_days"]
+            if isinstance(days, int) and 0 <= days <= MAX_RETENTION_DAYS:
+                return days
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    return max(0, cfg.RECORDING_RETENTION_DAYS)
+
+
+def set_retention_days(cfg: Settings, days: int) -> None:
+    """Save the retention chosen in Dispatch (atomic write, 0600)."""
+    base = recordings_dir(cfg)
+    if base is None:
+        raise RecordingError("storage_not_configured")
+    if not 0 <= days <= MAX_RETENTION_DAYS:
+        raise RecordingError("bad_retention")
+    base.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp = base / f"{RETENTION_FILE}.{uuid.uuid4().hex}.part"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({"retention_days": days}, f)
+    os.replace(tmp, base / RETENTION_FILE)
+
+
+async def summary(db, cfg: Settings) -> Dict[str, object]:
+    """What Settings > Call recordings shows: counts, space used, oldest kept, free disk, retention."""
+    rows = (await db.execute(select(CallRecording.status, func.count(), func.coalesce(func.sum(CallRecording.size_bytes), 0),
+                                    func.min(CallRecording.created_at)).group_by(CallRecording.status))).all()
+    counts = {status: int(n) for status, n, _, _ in rows}
+    done = next(((int(b), oldest) for status, _, b, oldest in rows if status == "completed"), (0, None))
+    base = recordings_dir(cfg)
+    free = None
+    if base is not None:
+        try:
+            free = shutil.disk_usage(base if base.exists() else base.parent).free
+        except OSError:
+            free = None
+    return {
+        "enabled": cfg.CALL_RECORDING_ENABLED,
+        "storage_configured": base is not None,
+        "retention_days": retention_days(cfg),
+        "default_retention_days": max(0, cfg.RECORDING_RETENTION_DAYS),
+        "max_retention_days": MAX_RETENTION_DAYS,
+        "counts": {k: counts.get(k, 0) for k in ("completed", "processing", "failed", "deleted")},
+        "total_bytes": done[0],
+        "oldest_at": done[1].isoformat() if done[1] else None,
+        "disk_free_bytes": free,
+    }
+
+
 async def purge_expired(cfg: Settings, now: Optional[datetime] = None) -> int:
-    """Delete completed recordings older than RECORDING_RETENTION_DAYS. Idempotent."""
-    if cfg.RECORDING_RETENTION_DAYS <= 0 or recordings_dir(cfg) is None:
+    """Delete completed recordings older than the retention period (Dispatch setting or .env). Idempotent."""
+    days = retention_days(cfg)
+    if days <= 0 or recordings_dir(cfg) is None:
         return 0
-    cutoff = (now or utcnow()) - timedelta(days=cfg.RECORDING_RETENTION_DAYS)
+    cutoff = (now or utcnow()) - timedelta(days=days)
     done = 0
     async with session_factory()() as db:
         rows = list((await db.execute(select(CallRecording).where(
@@ -331,7 +392,7 @@ async def purge_expired(cfg: Settings, now: Optional[datetime] = None) -> int:
             except Exception as exc:
                 log.warning("Retention: a recording could not be deleted (%s)", type(exc).__name__)
     if done:
-        log.info("Retention: %d recording(s) older than %d days deleted", done, cfg.RECORDING_RETENTION_DAYS)
+        log.info("Retention: %d recording(s) older than %d days deleted", done, days)
     return done
 
 

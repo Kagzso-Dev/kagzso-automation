@@ -337,3 +337,41 @@ def test_the_catalog_reports_recording_and_keeps_optional_fields_out(client, aut
     assert cat["recording_enabled"] is True
     for flow in cat["flows"].values():
         assert "pauses" not in flow and "recording_notice" not in flow  # absent, never null
+
+
+# ------------------------------------------------------------------ Settings > Call recordings
+def test_settings_summary_counts_space_and_retention(client, auth, fakes, sync_engine, rec_dir):
+    _recorded_call(client, auth, fakes, sync_engine)
+    s = client.get("/api/recordings/settings", headers=auth).json()  # "settings" is never read as a call id
+    assert s["enabled"] is True and s["storage_configured"] is True
+    assert s["counts"]["completed"] == 1 and s["total_bytes"] > 0 and s["oldest_at"]
+    assert s["retention_days"] == settings.RECORDING_RETENTION_DAYS and s["disk_free_bytes"] > 0
+
+
+def test_retention_set_in_dispatch_is_saved_and_used_by_the_cleanup(client, auth, sync_engine, rec_dir):
+    r = client.put("/api/recordings/settings", json={"retention_days": 7}, headers=auth)
+    assert r.status_code == 200 and r.json()["retention_days"] == 7
+    assert recording.retention_days(settings) == 7 and (rec_dir / recording.RETENTION_FILE).is_file()
+    now = datetime(2026, 10, 20)
+    with sync_engine.begin() as c:
+        for cid, age in (("week_old", 8), ("fresh", 3)):
+            (rec_dir / f"{cid}.wav").write_bytes(b"x")
+            c.execute(text("insert into call_recordings (id, call_id, storage_key, format, status, created_at) "
+                           "values (:i, :c, :k, 'wav', 'completed', :t)"),
+                      {"i": cid, "c": cid, "k": f"{cid}.wav", "t": now - timedelta(days=age)})
+    assert asyncio.run(recording.purge_expired(settings, now)) == 1
+    assert not (rec_dir / "week_old.wav").exists() and (rec_dir / "fresh.wav").exists()
+    # 0 = keep forever; out of range and unknown fields are refused; the file is never served as audio.
+    assert client.put("/api/recordings/settings", json={"retention_days": 0}, headers=auth).json()["retention_days"] == 0
+    assert asyncio.run(recording.purge_expired(settings, now + timedelta(days=999))) == 0
+    for bad in ({"retention_days": -1}, {"retention_days": 3651}, {"retention_days": 7, "x": 1}):
+        assert client.put("/api/recordings/settings", json=bad, headers=auth).status_code == 422
+    assert client.put("/api/recordings/settings", json={"retention_days": 7}).status_code in (401, 403)
+    with pytest.raises(recording.RecordingError):
+        recording.storage_path(settings, recording.RETENTION_FILE)
+
+
+def test_retention_needs_the_recordings_dir(client, auth, monkeypatch):
+    monkeypatch.setattr(settings, "RECORDINGS_DIR", "")
+    assert client.put("/api/recordings/settings", json={"retention_days": 30}, headers=auth).status_code == 409
+    assert client.get("/api/recordings/settings", headers=auth).json()["storage_configured"] is False

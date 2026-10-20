@@ -4,6 +4,9 @@
 // URL is ever sent to the browser.
 //
 //   GET    /api/ai-calls/recordings/status?logIds=a,b   recording status per log (call list badges)
+//   GET    /api/ai-calls/recordings/recent?limit=20     latest calls that have a recording (Settings > Call recordings)
+//   GET    /api/ai-calls/recordings/settings            counts, space used, free disk, retention
+//   PUT    /api/ai-calls/recordings/settings            { retentionDays } - 0 keeps recordings forever
 //   GET    /api/ai-calls/logs/:logId/recording          metadata
 //   GET    /api/ai-calls/logs/:logId/recording/audio    the WAV, HTTP Range passed through (?download=1 to save)
 //   DELETE /api/ai-calls/logs/:logId/recording          delete the file (the call log, transcript and summary stay)
@@ -23,7 +26,9 @@ import {
   deleteRecording,
   fetchRecordingAudio,
   getRecording,
+  getRecordingSettings,
   listRecordings,
+  setRecordingRetention,
   VoiceBackendError,
 } from "../../services/voiceBackend.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
@@ -49,6 +54,8 @@ aiCallRecordingsRouter.use(
 
 const logIdParam = z.object({ logId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "Invalid call log id") });
 const statusQuery = z.object({ logIds: z.string().max(8000).default("") });
+const recentQuery = z.object({ limit: z.coerce.number().int().min(1).max(100).default(20) });
+const retentionInput = z.object({ retentionDays: z.number().int().min(0).max(3650) }).strict();
 
 /** The voice call behind a log row we own; 404 for an unknown log or a call that never reached the voice backend. */
 async function voiceCallOf(logId: string): Promise<string> {
@@ -84,6 +91,77 @@ aiCallRecordingsRouter.get(
     const { enabled, items } = await listRecordings(logs.map((l) => l.voiceCallId!)).catch(voiceError);
     const byCall = new Map(items.map((r) => [r.call_id, r.status]));
     res.json({ enabled, items: Object.fromEntries(logs.filter((l) => byCall.has(l.voiceCallId!)).map((l) => [l.id, byCall.get(l.voiceCallId!)])) });
+  }),
+);
+
+aiCallRecordingsRouter.get(
+  "/recordings/settings",
+  wrap(async (_req, res) => {
+    res.json(await getRecordingSettings().catch(voiceError));
+  }),
+);
+
+aiCallRecordingsRouter.put(
+  "/recordings/settings",
+  wrap(async (req, res) => {
+    const { retentionDays } = retentionInput.parse(req.body ?? {});
+    try {
+      const body = await setRecordingRetention(retentionDays);
+      logger.info({ adminId: req.user!.id, retentionDays }, "call recording retention changed");
+      res.json(body);
+    } catch (err) {
+      if (err instanceof VoiceBackendError && err.status === 409) {
+        throw new AppError(409, "Recording storage isn't set up on the voice backend (RECORDINGS_DIR)", "conflict");
+      }
+      voiceError(err);
+    }
+  }),
+);
+
+/** The latest calls with a recording (any status), newest first. No phone numbers. */
+aiCallRecordingsRouter.get(
+  "/recordings/recent",
+  wrap(async (req, res) => {
+    const { limit } = recentQuery.parse(req.query);
+    const logs = await prisma.aiCallLog.findMany({
+      where: { voiceCallId: { not: null } },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+      select: {
+        id: true,
+        customerName: true,
+        outcome: true,
+        durationSec: true,
+        startedAt: true,
+        createdAt: true,
+        voiceCallId: true,
+        run: { select: { skipped: true } },
+      },
+    });
+    if (!logs.length) {
+      res.json({ items: [] });
+      return;
+    }
+    const { items } = await listRecordings(logs.map((l) => l.voiceCallId!)).catch(voiceError);
+    const byCall = new Map(items.map((r) => [r.call_id, r]));
+    res.json({
+      items: logs
+        .filter((l) => byCall.has(l.voiceCallId!))
+        .slice(0, limit)
+        .map((l) => {
+          const r = byCall.get(l.voiceCallId!)!;
+          return {
+            logId: l.id,
+            customerName: l.customerName,
+            outcome: l.outcome,
+            durationSec: l.durationSec,
+            at: l.startedAt ?? l.createdAt,
+            testCall: (l.run?.skipped as { testCall?: boolean } | null)?.testCall === true,
+            status: r.status,
+            recordingMs: r.duration_ms,
+          };
+        }),
+    });
   }),
 );
 

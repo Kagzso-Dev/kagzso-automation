@@ -1,6 +1,8 @@
 """Call recordings (X-API-Key protected; Dispatch is the only client and checks ADMIN itself).
 
     GET    /api/recordings?call_ids=a,b    status of each call's recording (call list badges)
+    GET    /api/recordings/settings          counts, space used, free disk, retention (Settings page)
+    PUT    /api/recordings/settings          {retention_days} - 0 keeps recordings forever
     GET    /api/recordings/{call_id}         one recording's metadata
     GET    /api/recordings/{call_id}/audio   the WAV (HTTP Range supported for seeking)
     DELETE /api/recordings/{call_id}         remove the file and mark the recording deleted
@@ -16,6 +18,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query
 from fastapi.responses import Response
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -38,6 +41,35 @@ async def list_recordings(call_ids: str = Query("", max_length=8000)) -> Dict[st
     async with session_factory()() as db:
         rows = await recording.get_many(db, ids)
     return {"enabled": settings.CALL_RECORDING_ENABLED, "items": [recording.describe(r) for r in rows]}
+
+
+class RetentionUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    retention_days: int = Field(..., ge=0, le=recording.MAX_RETENTION_DAYS)
+
+
+# Declared before /{call_id}, so "settings" is never read as a call id.
+@router.get("/settings")
+async def recording_settings() -> Dict[str, Any]:
+    async with session_factory()() as db:
+        return await recording.summary(db, settings)
+
+
+@router.put("/settings")
+async def update_recording_settings(body: RetentionUpdate) -> Dict[str, Any]:
+    try:
+        await asyncio.to_thread(recording.set_retention_days, settings, body.retention_days)
+    except recording.RecordingError as exc:
+        if exc.kind == "storage_not_configured":
+            raise HTTPException(409, "Set RECORDINGS_DIR on the voice backend first") from None
+        raise HTTPException(422, "Invalid retention") from None
+    except OSError:
+        log.warning("Retention setting not saved (storage_error)")
+        raise HTTPException(500, "The retention setting could not be saved") from None
+    log.info("Recording retention set to %d days", body.retention_days)
+    async with session_factory()() as db:
+        return await recording.summary(db, settings)
 
 
 @router.get("/{call_id}")
