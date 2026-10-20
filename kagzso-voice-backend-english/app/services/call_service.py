@@ -957,7 +957,8 @@ class CallSession:
         self._answered_mono = self._stream_started - max(0.0, min(since_answer, 30.0))
         self.recorder = recording.start(self.call_id, self.cfg)  # None unless recording is on
         self._greeting_task = asyncio.create_task(
-            self._greet_after_first_wait() if self._first_speech_mode else self._greet_if_silent())
+            self._greet_at_delay() if self.greeting_delay is not None  # Dispatch "AI Greeting Delay"
+            else self._greet_after_first_wait() if self._first_speech_mode else self._greet_if_silent())
         self._silence_task = asyncio.create_task(self._watch_silence())
         if identity_after_greeting(self.ctx.first_message):
             self._spawn(self._ask_identity_after_pause())
@@ -1135,7 +1136,8 @@ class CallSession:
                     self._identity_silence_over = self._identity_asked
                     if self._hangup_task is None:
                         self.end_call_requested = False  # customer is talking again; keep the call open
-                if self._greeting_task and not self._greeting_task.done() and not self._first_speech_mode:
+                if (self._greeting_task and not self._greeting_task.done() and not self._first_speech_mode
+                        and self.greeting_delay is None):
                     self._greeting_task.cancel()
                 self._speech_near_agent = self.ai_busy or self._agent_recently_spoke()
                 if self.ai_busy:
@@ -1158,6 +1160,12 @@ class CallSession:
                 if candidate or self.ai_busy:
                     self._drop_stt_stream(stt_stream)
                     self._check_barge_in(ev.audio, t0)  # interrupt only if STT hears real words
+                elif self.greeting_delay is not None and self.ctx.first_message and not self._greeted:
+                    # AI Greeting Delay: words before the greeting are answered by the greeting itself,
+                    # right away; a do-not-call / AI question among them still gets the script.
+                    self._spawn(self._check_opening_words(ev.audio, stt_stream, t0))
+                    if not self._opening_taken and ev.duration_ms >= self.OPENING_SPEECH_MIN_MS:
+                        self._greet_now("speech")
                 else:
                     self._start_turn(audio_pcm=ev.audio, stt_stream=stt_stream, t0=t0,
                                      near_agent=self._speech_near_agent)
@@ -1332,9 +1340,7 @@ class CallSession:
                 or (self._greeting_task is not None and not self._greeting_task.done())):
             return
         log.info("That was only noise - the greeting will still play")
-        # With an "AI Greeting Delay" the greeting still waits for the rest of it (counted from the answer).
-        self._greeting_task = asyncio.create_task(
-            self._greet_if_silent(None if self.greeting_delay is not None else self.cfg.GREETING_PRERENDERED_DELAY_MS))
+        self._greeting_task = asyncio.create_task(self._greet_if_silent(self.cfg.GREETING_PRERENDERED_DELAY_MS))
 
     async def barge_in(self) -> None:
         log.info("Barge-in: customer interrupted, stopping playback")
@@ -1470,19 +1476,11 @@ class CallSession:
         return self._at_opening()
 
     async def _greet_if_silent(self, delay_ms: Optional[int] = None) -> None:
-        if delay_ms is None and self.greeting_delay is not None:
-            # "AI Greeting Delay" from Dispatch: counted from the answer, the same for every greeting.
-            due = (self._answered_mono or time.monotonic()) + self.greeting_delay
-            await asyncio.sleep(max(0.0, due - time.monotonic()))
-            log.info("AI greeting delay %.1fs after answer", self.greeting_delay)
-        else:
-            if delay_ms is None:
-                delay_ms = self.cfg.GREETING_DELAY_MS
-                if has_greeting_audio(self.call_id):  # ready to play instantly - don't leave dead air
-                    delay_ms = min(delay_ms, self.cfg.GREETING_PRERENDERED_DELAY_MS)
-            await asyncio.sleep(delay_ms / 1000)
-        if self._closed:  # hung up during the wait: never speak after that
-            return
+        if delay_ms is None:
+            delay_ms = self.cfg.GREETING_DELAY_MS
+            if has_greeting_audio(self.call_id):  # ready to play instantly - don't leave dead air
+                delay_ms = min(delay_ms, self.cfg.GREETING_PRERENDERED_DELAY_MS)
+        await asyncio.sleep(delay_ms / 1000)
         if not self._customer_spoke and not self.ai_busy and not self.endpointer.in_speech:
             log.info("Customer silent after answer - agent greets first")
             if self.ctx.first_message:
@@ -1501,24 +1499,78 @@ class CallSession:
         wait ends - but never on top of the customer: while they are speaking, wait (at most
         FIRST_SPEECH_HOLD_MAX_SECONDS) for them to stop."""
         with call_context(self.call_id):
-            if self.greeting_delay is not None:  # "AI Greeting Delay" from Dispatch, counted from the answer
-                start, wait = self._answered_mono or time.monotonic(), self.greeting_delay
-            else:
-                start, wait = self._stream_started or time.monotonic(), self.cfg.FIRST_SPEECH_WAIT_SECONDS
+            start = self._stream_started or time.monotonic()
             while not self._closed:
                 await asyncio.sleep(0.05)
                 if self._greeted or self._opening_taken:
                     return
                 due = first_speech_greeting_due(
-                    time.monotonic(), start, wait, self.FIRST_SPEECH_HOLD_MAX_SECONDS,
+                    time.monotonic(), start, self.cfg.FIRST_SPEECH_WAIT_SECONDS, self.FIRST_SPEECH_HOLD_MAX_SECONDS,
                     self.endpointer.in_speech, self._turn_task is not None and not self._turn_task.done())
                 if due is None:
                     continue
                 self._opening_taken = True
                 self._greeting_trigger = due
-                log.info("No words in the first %.1fs - greeting", wait)
+                log.info("No words in the first %.1fs - greeting", self.cfg.FIRST_SPEECH_WAIT_SECONDS)
                 self._start_turn(scripted=self.greeting_text())
                 return
+
+    OPENING_SPEECH_MIN_MS = 300  # shorter sounds before the greeting (a click on pickup) aren't "speaking first"
+
+    def _greet_now(self, trigger: str) -> None:
+        """Start the greeting (once): the AI Greeting Delay ended, or the customer spoke first."""
+        if self._closed or self._opening_taken or self._agent_spoke:
+            return
+        self._opening_taken = True
+        self._greeting_trigger = trigger
+        if self.ctx.first_message:
+            self._start_turn(scripted=self.greeting_text())
+        else:
+            self._start_turn(injected=GREETING_INSTRUCTION)
+
+    async def _greet_at_delay(self) -> None:
+        """Dispatch's AI Greeting Delay: greet this long after the customer answered. If they speak
+        first, the greeting starts as soon as they stop (on_media); if they're talking when the delay
+        ends, it waits for them to stop (at most FIRST_SPEECH_HOLD_MAX_SECONDS). Once per call."""
+        with call_context(self.call_id):
+            start = self._answered_mono or time.monotonic()
+            while not self._closed:
+                await asyncio.sleep(0.05)
+                # Agents without a fixed greeting answer the customer's first words themselves.
+                if self._opening_taken or self._agent_spoke or (not self.ctx.first_message and self._customer_spoke):
+                    return
+                due = first_speech_greeting_due(time.monotonic(), start, self.greeting_delay or 0.0,
+                                                self.FIRST_SPEECH_HOLD_MAX_SECONDS, self.endpointer.in_speech, False)
+                if due is None:
+                    continue
+                log.info("AI greeting delay %.1fs after answer - greeting", self.greeting_delay)
+                self._greet_now(due)
+                return
+
+    async def _check_opening_words(self, audio_pcm: bytes, stt_stream: Optional[STTStream], t0: float) -> None:
+        """Words the customer said before the greeting (AI Greeting Delay): recorded, not answered -
+        unless they need the script (do-not-call, "are you a bot?"): then that is answered now."""
+        with call_context(self.call_id):
+            try:
+                result = await self._transcribe(audio_pcm, stt_stream)
+            except STTError as exc:
+                log.warning("Opening words not transcribed (%s)", exc.kind)
+                return
+            text = (result.get("text") or "").strip()
+            if self._closed or not text or (self.cfg.STT_DROP_NOISE_TEXT and is_noise_text(text)):
+                return
+            self._confirm_customer_speech()
+            self._customer_texts.append(text)
+            log.info("Customer said (before the greeting): %s", text[:200])
+            self._persist(lambda db, t=text, c=result.get("confidence"): repo.add_transcript(db, self.call_id, "customer", t, confidence=c))
+            if not needs_script_at_opening(text):
+                return
+            log.info("First words need the script - answering them instead of the greeting")
+            self._event("greeting_skipped", {"reason": "script"})
+            if self.ai_busy or (self._turn_task is not None and not self._turn_task.done()):
+                await self.barge_in()  # stop the greeting that already started
+            self._opening_taken = self._greeted = True
+            self._start_turn(transcript=(text, result.get("confidence"), t0))
 
     def _log_greeting_start(self) -> None:
         now = time.monotonic()

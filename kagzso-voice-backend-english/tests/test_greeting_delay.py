@@ -3,6 +3,7 @@ Counted from the answer webhook, once per call; a hang-up during the wait cancel
 and a customer who speaks first is greeted at once (as before). Calls without it keep the
 configured timing exactly. Fakes only (GREETING_DELAY_MS is 60 s in tests, so any greeting
 that plays on its own here comes from the delay)."""
+import asyncio
 import json
 import time
 import xml.etree.ElementTree as ET
@@ -16,6 +17,7 @@ from app.db.models import utcnow
 from app.services.call_service import greeting_delay_of
 from tests.conftest import silence_mulaw, tone_mulaw
 from tests.test_media_stream import _send_audio, _start_msg
+from tests.test_flows import nila_copy
 from tests.test_nila_flow import PHONE, _nila_id, _send, _start, _until
 
 
@@ -27,6 +29,20 @@ def _outbound(client, auth, agent_id, **extra):
     xml = client.post(f"/api/webhooks/plivo/answer?call_id={call_id}", data={"CallUUID": "uuid-g", "CallStatus": "in-progress"}).text
     token = parse_qs(urlparse(ET.fromstring(xml.split("?>", 1)[1]).find("Stream").text).query)["token"][0]
     return call_id, token
+
+
+KINDS = ["no-fixed-greeting", "fixed-question", "time-of-day"]
+
+
+def _call_kind(client, auth, kind, **extra):
+    """no-fixed-greeting = the default agent (the AI writes its opening); fixed-question = a flow
+    greeting "Hello, am I speaking with ...?"; time-of-day = Nila's "Hi sir, Good morning."."""
+    if kind == "no-fixed-greeting":
+        return _outbound(client, auth, 1, **extra)
+    if kind == "time-of-day":
+        return _outbound(client, auth, _nila_id(client, auth), **extra)
+    flow = nila_copy(greeting={"text": "Hello, am I speaking with {{customer_name}}?"})
+    return _outbound(client, auth, 1, flow_id="flow_gd", flow_version=1, flow_draft=True, flow=flow, **extra)
 
 
 def _answered_ago(sync_engine, call_id, seconds):
@@ -61,18 +77,16 @@ def test_the_value_is_validated_and_absent_means_the_configured_timing(client, a
 
 
 # ------------------------------------------------------------------ timing, counted from the answer
-@pytest.mark.parametrize("nila", [False, True], ids=["plain-greeting", "time-of-day-greeting"])
-def test_zero_seconds_greets_at_once(client, auth, fakes, nila):
-    agent = _nila_id(client, auth) if nila else 1
-    call_id, token = _outbound(client, auth, agent, greeting_delay_sec=0)
+@pytest.mark.parametrize("kind", KINDS)
+def test_zero_seconds_greets_at_once(client, auth, fakes, kind):
+    call_id, token = _call_kind(client, auth, kind, greeting_delay_sec=0)
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         assert _greeting_after(ws) < 0.6
 
 
-@pytest.mark.parametrize("nila", [False, True], ids=["plain-greeting", "time-of-day-greeting"])
-def test_two_seconds_waits_two_seconds_after_the_answer(client, auth, fakes, nila):
-    agent = _nila_id(client, auth) if nila else 1
-    call_id, token = _outbound(client, auth, agent, greeting_delay_sec=2)
+@pytest.mark.parametrize("kind", KINDS)
+def test_two_seconds_waits_two_seconds_after_the_answer(client, auth, fakes, kind):
+    call_id, token = _call_kind(client, auth, kind, greeting_delay_sec=2)
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         waited = _greeting_after(ws)
     assert 1.8 <= waited < 2.8
@@ -119,3 +133,49 @@ def test_speaking_first_greets_once_and_the_delay_never_greets_again(client, aut
     lines = _agent_lines(sync_engine, call_id)
     assert len(lines) == 1 and lines[0].startswith("Hi sir")
     assert sum(len(s.texts) for s in fakes.tts.streams) == 1
+
+
+# ------------------------------------------------------------------ "If they speak first, the AI greets right away"
+@pytest.mark.parametrize("kind", ["fixed-question", "time-of-day"])
+def test_speaking_first_greets_right_away_without_waiting_for_speech_recognition(client, auth, fakes, kind, monkeypatch):
+    real = fakes.stt.transcribe
+
+    async def slow(*a, **k):  # recognising the words takes 1.5 s: the greeting must not wait for it
+        await asyncio.sleep(1.5)
+        return await real(*a, **k)
+
+    monkeypatch.setattr(fakes.stt, "transcribe", slow)
+    call_id, token = _call_kind(client, auth, kind, greeting_delay_sec=5)
+    fakes.stt.replies = ["Hello?"]
+    with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
+        ws.send_text(json.dumps(_start_msg()))
+        t = time.monotonic()
+        _send_audio(ws, tone_mulaw(400) + silence_mulaw(900))  # "Hello?" long before the 5 s delay
+        _until(ws, "playAudio")
+        assert time.monotonic() - t < 1.0
+
+
+def test_a_click_on_pickup_is_not_speaking_first(client, auth, fakes):
+    call_id, token = _call_kind(client, auth, "fixed-question", greeting_delay_sec=2)
+    with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
+        t = time.monotonic()
+        ws.send_text(json.dumps(_start_msg()))
+        _send_audio(ws, tone_mulaw(120) + silence_mulaw(900))  # too short to be speech
+        _until(ws, "playAudio")
+        assert time.monotonic() - t >= 1.7  # still greeted at the delay
+
+
+def test_do_not_call_said_first_gets_the_script_not_the_greeting(client, auth, fakes, sync_engine):
+    call_id, token = _call_kind(client, auth, "time-of-day", greeting_delay_sec=3)
+    fakes.stt.replies = ["Don't call me again"]
+    fakes.llm.reply = "Understood. I respect your request. Thank you."
+    with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
+        _start(ws)
+        _send(ws, tone_mulaw(600) + silence_mulaw(900))
+        deadline = time.time() + 5
+        while time.time() < deadline and not any("respect your request" in l for l in _agent_lines(sync_engine, call_id)):
+            _send(ws, silence_mulaw(200))
+    assert any("respect your request" in l for l in _agent_lines(sync_engine, call_id))
+    with sync_engine.connect() as c:
+        events = c.execute(text("select event_type from call_events where call_id = :id"), {"id": call_id}).scalars().all()
+    assert "greeting_skipped" in events
