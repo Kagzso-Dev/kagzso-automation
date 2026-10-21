@@ -12,6 +12,8 @@ The service is isolated behind `STTProvider` so it can be swapped later.
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from abc import ABC, abstractmethod
 from typing import Optional, TypedDict
 
@@ -124,12 +126,31 @@ class SarvamSTT(STTProvider):
         if not audio_data or len(audio_data) < 100:
             raise STTError("invalid_audio", "audio is empty or too short")
 
-        data = {"model": self.cfg.SARVAM_STT_MODEL, "language_code": self.cfg.sarvam_language_code}
-        if self.cfg.SARVAM_STT_MODEL.startswith("saaras:v3"):
-            data["mode"] = self.cfg.SARVAM_STT_MODE
+        model = self.cfg.SARVAM_STT_MODEL
+        try:
+            return await self._request(key, model, audio_data, filename, content_type, attempts=2)
+        except STTError as exc:
+            fallback = (self.cfg.STT_FALLBACK_MODEL or "").strip()
+            if not fallback or fallback == model or exc.kind in ("auth", "not_configured"):
+                raise
+            log.warning("Sarvam STT %s failed (%s) - trying %s once", model, exc.kind, fallback)
+            return await self._request(key, fallback, audio_data, filename, content_type, attempts=1, fallback=True)
 
+    def _form(self, model: str) -> dict:
+        data = {"model": model, "language_code": self.cfg.sarvam_language_code}
+        if model.startswith("saaras:v3"):
+            data["mode"] = self.cfg.SARVAM_STT_MODE
+        terms = self.cfg.stt_keyterms if model.startswith("saaras:v4") else []
+        if terms:
+            data["keyterms"] = json.dumps(terms)  # company names etc. (saaras:v4 only)
+        return data
+
+    async def _request(self, key: str, model: str, audio_data: bytes, filename: str, content_type: str,
+                       attempts: int, fallback: bool = False) -> STTResult:
+        data = self._form(model)
+        started = time.monotonic()
         last_exc: Optional[STTError] = None
-        for attempt in range(2):  # one quick retry on transient failures
+        for attempt in range(attempts):  # one quick retry on transient failures
             try:
                 resp = await self._client.post(
                     "/speech-to-text",
@@ -143,11 +164,15 @@ class SarvamSTT(STTProvider):
                 last_exc = STTError("provider", f"Sarvam connection error: {type(exc).__name__}")
             else:
                 if resp.status_code == 200:
-                    return self._parse(resp)
+                    result = self._parse(resp)
+                    if self.cfg.STT_TIMING_LOG:
+                        log.info("Sarvam STT %s: %dms%s%s", model, int((time.monotonic() - started) * 1000),
+                                 " (keyterms)" if "keyterms" in data else "", " (fallback model)" if fallback else "")
+                    return result
                 last_exc = _error_from_response(resp)
                 if last_exc.kind not in ("rate_limit", "provider", "timeout"):
                     break
-            if attempt == 0:
+            if attempt + 1 < attempts:
                 log.warning("Sarvam STT %s, retrying once", last_exc.kind)
                 await asyncio.sleep(0.25)
         assert last_exc is not None

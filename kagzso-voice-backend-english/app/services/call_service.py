@@ -1268,7 +1268,7 @@ class CallSession:
     async def _run_barge_check(self, audio_pcm: bytes, t1: float, t0: Optional[float] = None) -> None:
         with call_context(self.call_id):
             try:
-                result = await self.providers.stt.transcribe(audio.telephony_pcm_to_stt_wav(audio_pcm))
+                result = await self.providers.stt.transcribe(self._stt_wav(audio_pcm))
             except STTError as exc:
                 log.warning("STT failed on possible interruption (%s) - agent keeps talking", exc.kind)
                 return
@@ -1688,7 +1688,15 @@ class CallSession:
                 log.warning("Streamed STT failed (%s) - using the REST request", exc.kind)
             finally:
                 await stt_stream.aclose()
-        return await self.providers.stt.transcribe(audio.telephony_pcm_to_stt_wav(audio_pcm))
+        return await self.providers.stt.transcribe(self._stt_wav(audio_pcm))
+
+    def _stt_wav(self, audio_pcm: bytes) -> bytes:
+        """What STT hears for an utterance: the original audio, or (STT_NORMALIZE_AUDIO) a
+        level-normalised copy of it. The live call audio is never changed."""
+        if self.cfg.STT_NORMALIZE_AUDIO:
+            audio_pcm = audio.normalize_for_stt(audio_pcm, self.cfg.STT_NORMALIZE_TARGET_RMS,
+                                                self.cfg.STT_NORMALIZE_MAX_GAIN_DB)
+        return audio.telephony_pcm_to_stt_wav(audio_pcm)
 
     async def _run_turn(self, turn: int, audio_pcm: Optional[bytes], injected: Optional[str], t1: float,
                         scripted: Optional[str] = None, transcript: Optional[tuple] = None,

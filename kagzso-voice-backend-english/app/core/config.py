@@ -86,6 +86,19 @@ class Settings(BaseSettings):
     SARVAM_API_KEY: SecretStr = SecretStr("")
     SARVAM_STT_MODEL: str = "saaras:v3"
     SARVAM_STT_MODE: str = "transcribe"  # only used by saaras:v3
+    # Words Sarvam should expect (saaras:v4 REST only, up to 50, 64 chars each), comma-separated,
+    # e.g. "Kexo,Kagzso,UiPath,automation,WhatsApp". Empty = none (today's behaviour).
+    STT_KEYTERMS: str = ""
+    # If a request with SARVAM_STT_MODEL fails (after its own retry), try once with this model.
+    # Only used when it differs from SARVAM_STT_MODEL; empty = no second model.
+    STT_FALLBACK_MODEL: str = "saaras:v3"
+    # Send STT a level-normalised copy of the customer's audio (soft voices lifted, loud ones never
+    # clipped). Live call audio, speech detection, barge-in and recordings are unchanged. Off = as before.
+    STT_NORMALIZE_AUDIO: bool = False
+    STT_NORMALIZE_TARGET_RMS: int = 3000  # speech level to aim for (16-bit PCM RMS)
+    STT_NORMALIZE_MAX_GAIN_DB: float = 12.0  # never lift more than this
+    # Log the time of each STT request (model and ms; never audio, numbers or keys).
+    STT_TIMING_LOG: bool = True
     SARVAM_BASE_URL: str = "https://api.sarvam.ai"
     SARVAM_TIMEOUT_SECONDS: float = 10.0
 
@@ -313,6 +326,16 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> List[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+
+    @property
+    def stt_keyterms(self) -> List[str]:
+        """STT_KEYTERMS as Sarvam accepts them: unique, non-empty, at most 50 of up to 64 characters."""
+        out: List[str] = []
+        for term in (self.STT_KEYTERMS or "").split(","):
+            term = term.strip()[:64]
+            if term and term.lower() not in {t.lower() for t in out}:
+                out.append(term)
+        return out[:50]
 
     @property
     def sarvam_language_code(self) -> str:

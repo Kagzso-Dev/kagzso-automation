@@ -69,6 +69,35 @@ def telephony_pcm_to_stt_wav(pcm8k: bytes) -> bytes:
     return pcm16_to_wav(resample_pcm16(pcm8k, TELEPHONY_SAMPLE_RATE, STT_SAMPLE_RATE), STT_SAMPLE_RATE)
 
 
+def normalize_for_stt(pcm8k: bytes, target_rms: int = 3000, max_gain_db: float = 12.0) -> bytes:
+    """A copy of the utterance at a steady speech level, for STT only. The speech level is measured
+    on its louder 20 ms frames (silence doesn't count); quiet speech is lifted towards `target_rms`
+    by at most `max_gain_db`; audio is never made quieter; a soft limiter keeps every sample below
+    full scale, so a loud voice never clips."""
+    if not pcm8k:
+        return pcm8k
+    import numpy as np
+
+    x = np.frombuffer(pcm8k[: len(pcm8k) - len(pcm8k) % SAMPLE_WIDTH], dtype="<i2").astype(np.float32)
+    frame = PCM_FRAME_BYTES // SAMPLE_WIDTH
+    usable = len(x) - len(x) % frame
+    if usable < frame:
+        return pcm8k
+    levels = np.sqrt(np.mean(x[:usable].reshape(-1, frame) ** 2, axis=1))
+    speech = levels[levels >= max(100.0, 0.25 * float(levels.max()))]
+    level = float(np.sqrt(np.mean(speech ** 2))) if speech.size else 0.0
+    if level <= 0:
+        return pcm8k
+    gain = min(10 ** (max_gain_db / 20), target_rms / level)
+    if gain <= 1.0:
+        return pcm8k  # already loud enough: unchanged
+    y = x * gain
+    knee, ceiling = 0.7 * 32767, 0.98 * 32767
+    over = np.abs(y) > knee
+    y[over] = np.sign(y[over]) * (knee + (ceiling - knee) * np.tanh((np.abs(y[over]) - knee) / (ceiling - knee)))
+    return y.astype("<i2").tobytes()
+
+
 def mulaw_to_stt_wav(mulaw8k: bytes) -> bytes:
     return telephony_pcm_to_stt_wav(mulaw_to_pcm16(mulaw8k))
 
