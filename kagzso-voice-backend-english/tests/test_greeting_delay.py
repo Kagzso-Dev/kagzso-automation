@@ -1,9 +1,8 @@
-"""Dispatch's "AI Greeting Delay": seconds after the customer answers before the agent greets.
-Counted from the answer webhook, once per call; a hang-up during the wait cancels the greeting,
-and a customer who speaks first is greeted at once (as before). Calls without it keep the
-configured timing exactly. Fakes only (GREETING_DELAY_MS is 60 s in tests, so any greeting
+"""Dispatch's "AI Greeting Delay": the agent greets exactly this many seconds after the customer
+answers - only the delay starts the greeting (the customer's first words don't start, move or cut
+it; a do-not-call / AI question still gets the script). Once per call; a hang-up during the wait
+cancels it. Calls without the setting keep the configured timing exactly. Fakes only (GREETING_DELAY_MS is 60 s in tests, so any greeting
 that plays on its own here comes from the delay)."""
-import asyncio
 import json
 import time
 import xml.etree.ElementTree as ET
@@ -135,34 +134,50 @@ def test_speaking_first_greets_once_and_the_delay_never_greets_again(client, aut
     assert sum(len(s.texts) for s in fakes.tts.streams) == 1
 
 
-# ------------------------------------------------------------------ "If they speak first, the AI greets right away"
+# ------------------------------------------------------------------ only the set delay starts the greeting
 @pytest.mark.parametrize("kind", ["fixed-question", "time-of-day"])
-def test_speaking_first_greets_right_away_without_waiting_for_speech_recognition(client, auth, fakes, kind, monkeypatch):
-    real = fakes.stt.transcribe
-
-    async def slow(*a, **k):  # recognising the words takes 1.5 s: the greeting must not wait for it
-        await asyncio.sleep(1.5)
-        return await real(*a, **k)
-
-    monkeypatch.setattr(fakes.stt, "transcribe", slow)
-    call_id, token = _call_kind(client, auth, kind, greeting_delay_sec=5)
+def test_speaking_first_does_not_start_the_greeting_early(client, auth, fakes, kind):
+    call_id, token = _call_kind(client, auth, kind, greeting_delay_sec=2)
     fakes.stt.replies = ["Hello?"]
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
-        ws.send_text(json.dumps(_start_msg()))
         t = time.monotonic()
-        _send_audio(ws, tone_mulaw(400) + silence_mulaw(900))  # "Hello?" long before the 5 s delay
+        ws.send_text(json.dumps(_start_msg()))
+        _send_audio(ws, tone_mulaw(400) + silence_mulaw(900))  # "Hello?" right after answering
         _until(ws, "playAudio")
-        assert time.monotonic() - t < 1.0
+        waited = time.monotonic() - t
+    assert 1.8 <= waited < 2.8  # still exactly the 2 s delay
 
 
-def test_a_click_on_pickup_is_not_speaking_first(client, auth, fakes):
+def test_talking_when_the_delay_ends_does_not_move_or_cut_the_greeting(client, auth, fakes, sync_engine):
+    call_id, token = _call_kind(client, auth, "fixed-question", greeting_delay_sec=1)
+    fakes.stt.replies = ["Hello hello who is this"]
+    with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
+        t = time.monotonic()
+        ws.send_text(json.dumps(_start_msg()))
+        time.sleep(0.6)
+        _send_audio(ws, tone_mulaw(1200))  # still talking when the 1 s delay ends
+        _until(ws, "playAudio")
+        waited = time.monotonic() - t
+        _send_audio(ws, silence_mulaw(900))  # they stop: no barge-in on the greeting
+        msgs = []
+        for _ in range(60):
+            m = ws.receive_json()
+            msgs.append(m["event"])
+            if m["event"] == "checkpoint":
+                break
+    assert 0.9 <= waited < 1.8 and "clearAudio" not in msgs
+    lines = _agent_lines(sync_engine, call_id)
+    assert lines and lines[0] == "Hello, am I speaking with Ragul?"
+
+
+def test_a_click_on_pickup_does_not_change_the_delay(client, auth, fakes):
     call_id, token = _call_kind(client, auth, "fixed-question", greeting_delay_sec=2)
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         t = time.monotonic()
         ws.send_text(json.dumps(_start_msg()))
-        _send_audio(ws, tone_mulaw(120) + silence_mulaw(900))  # too short to be speech
+        _send_audio(ws, tone_mulaw(120) + silence_mulaw(900))
         _until(ws, "playAudio")
-        assert time.monotonic() - t >= 1.7  # still greeted at the delay
+        assert time.monotonic() - t >= 1.7
 
 
 def test_do_not_call_said_first_gets_the_script_not_the_greeting(client, auth, fakes, sync_engine):

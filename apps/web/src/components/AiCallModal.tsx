@@ -574,7 +574,7 @@ function SetupFlow({
               onChange={(e) => setGreetingDelay(e.target.value)}
             />
             <span className="text-xs text-slate-550">
-              After the customer answers. 0 = speak at once. If they speak first, the AI greets right away.
+              The AI greets this many seconds after the customer answers. 0 = speak at once.
             </span>
           </div>
         </div>

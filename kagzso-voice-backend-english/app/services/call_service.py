@@ -941,6 +941,7 @@ class CallSession:
         self._notice_spoken = False
         self.greeting_delay = greeting_delay_of(ctx.variables)  # seconds after answer; None = configured timing
         self._answered_mono: Optional[float] = None  # the answer, on the monotonic clock (set at stream start)
+        self._opening_speech = False  # the customer's current words began before the greeting (AI Greeting Delay)
         self._bg_tasks: Set[asyncio.Task] = set()
         self._last_prewarm = 0.0
         self._db_queue: "asyncio.Queue[Callable[[AsyncSession], Awaitable[None]]]" = asyncio.Queue()
@@ -1140,6 +1141,8 @@ class CallSession:
                         and self.greeting_delay is None):
                     self._greeting_task.cancel()
                 self._speech_near_agent = self.ai_busy or self._agent_recently_spoke()
+                if self.greeting_delay is not None and self.ctx.first_message and not self._agent_spoke:
+                    self._opening_speech = True  # before the greeting: it never moves or cuts the greeting
                 if self.ai_busy:
                     # Don't cut the agent off yet: echo, line noise or "hmm" also look like speech.
                     self._barge_candidate, self._barge_loud_ms = True, 0
@@ -1157,15 +1160,14 @@ class CallSession:
                 t0 = time.monotonic() - ev.silence_ms / 1000
                 self._last_speech_end = t0
                 log.info("Customer audio received (%dms)", ev.duration_ms)
-                if candidate or self.ai_busy:
+                opening, self._opening_speech = self._opening_speech, False
+                if opening:
+                    # AI Greeting Delay: words that began before the greeting don't start, move or cut it
+                    # (it plays at the delay); only a do-not-call / AI question among them gets the script.
+                    self._spawn(self._check_opening_words(ev.audio, stt_stream, t0))
+                elif candidate or self.ai_busy:
                     self._drop_stt_stream(stt_stream)
                     self._check_barge_in(ev.audio, t0)  # interrupt only if STT hears real words
-                elif self.greeting_delay is not None and self.ctx.first_message and not self._greeted:
-                    # AI Greeting Delay: words before the greeting are answered by the greeting itself,
-                    # right away; a do-not-call / AI question among them still gets the script.
-                    self._spawn(self._check_opening_words(ev.audio, stt_stream, t0))
-                    if not self._opening_taken and ev.duration_ms >= self.OPENING_SPEECH_MIN_MS:
-                        self._greet_now("speech")
                 else:
                     self._start_turn(audio_pcm=ev.audio, stt_stream=stt_stream, t0=t0,
                                      near_agent=self._speech_near_agent)
@@ -1515,10 +1517,8 @@ class CallSession:
                 self._start_turn(scripted=self.greeting_text())
                 return
 
-    OPENING_SPEECH_MIN_MS = 300  # shorter sounds before the greeting (a click on pickup) aren't "speaking first"
-
     def _greet_now(self, trigger: str) -> None:
-        """Start the greeting (once): the AI Greeting Delay ended, or the customer spoke first."""
+        """Start the greeting (once), when the AI Greeting Delay ends."""
         if self._closed or self._opening_taken or self._agent_spoke:
             return
         self._opening_taken = True
@@ -1529,22 +1529,20 @@ class CallSession:
             self._start_turn(injected=GREETING_INSTRUCTION)
 
     async def _greet_at_delay(self) -> None:
-        """Dispatch's AI Greeting Delay: greet this long after the customer answered. If they speak
-        first, the greeting starts as soon as they stop (on_media); if they're talking when the delay
-        ends, it waits for them to stop (at most FIRST_SPEECH_HOLD_MAX_SECONDS). Once per call."""
+        """Dispatch's AI Greeting Delay: greet exactly this long after the customer answered, whatever
+        happens before (the customer's first words don't start or move it). Once per call; never
+        after a hang-up or after a do-not-call / AI question took the opening (_check_opening_words)."""
         with call_context(self.call_id):
-            start = self._answered_mono or time.monotonic()
+            due = (self._answered_mono or time.monotonic()) + (self.greeting_delay or 0.0)
             while not self._closed:
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(max(0.0, min(0.05, due - time.monotonic())))
                 # Agents without a fixed greeting answer the customer's first words themselves.
                 if self._opening_taken or self._agent_spoke or (not self.ctx.first_message and self._customer_spoke):
                     return
-                due = first_speech_greeting_due(time.monotonic(), start, self.greeting_delay or 0.0,
-                                                self.FIRST_SPEECH_HOLD_MAX_SECONDS, self.endpointer.in_speech, False)
-                if due is None:
+                if time.monotonic() < due:
                     continue
                 log.info("AI greeting delay %.1fs after answer - greeting", self.greeting_delay)
-                self._greet_now(due)
+                self._greet_now("delay")
                 return
 
     async def _check_opening_words(self, audio_pcm: bytes, stt_stream: Optional[STTStream], t0: float) -> None:

@@ -151,7 +151,7 @@ export type AiCallMode = z.infer<typeof aiCallMode>;
 /** "AI Greeting Delay (seconds)" in the Start AI Calls window: default and maximum. */
 export const AI_CALL_DEFAULT_GREETING_DELAY_SEC = 2;
 export const AI_CALL_MAX_GREETING_DELAY_SEC = 10;
-/** Seconds after the customer answers before the AI greets (if they speak first it greets at once). */
+/** Seconds after the customer answers before the AI greets (only this delay starts the greeting). */
 export const aiCallGreetingDelay = z.coerce
   .number()
   .min(0, "AI greeting delay must be 0 to 10 seconds")
