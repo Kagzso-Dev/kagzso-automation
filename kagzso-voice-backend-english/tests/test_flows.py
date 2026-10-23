@@ -69,7 +69,9 @@ def test_default_prompt_is_unchanged_apart_from_the_safety_layer(agent_name, cas
     prompt = llm.build_system_prompt(agent["system_prompt"], golden["variables"], "en")
     assert prompt.count(llm.SAFETY_RULES) == 1
     assert llm.VOICE_RULES + llm.SAFETY_RULES in prompt  # appended right after the fixed phone rules
-    assert prompt.replace(llm.SAFETY_RULES, "", 1) == golden["system_prompt"]
+    # ... and the who-answered rules right after it (a missing name never stops a call).
+    identity = llm.identity_rules(llm.safe_variables(golden["variables"])["customer_name"])
+    assert prompt.replace(llm.SAFETY_RULES + identity, "", 1) == golden["system_prompt"]
     assert llm.render_first_message(agent["first_message"], golden["variables"]) == golden["first_message"]
 
 
@@ -264,7 +266,8 @@ def test_greeting_without_the_name_variable_needs_no_name(client, auth):
     r = _outbound(client, auth, customer_name=None, flow_id="flow_f", flow_version=1, flow=flow)
     assert r.status_code == 200, r.text
     with_name = nila_copy(greeting={"text": "Hi {{name}}?"})
-    assert _outbound(client, auth, customer_name=None, flow_id="flow_g", flow_version=1, flow=with_name).status_code == 422
+    # A greeting that uses the name no longer blocks the call: it becomes the neutral opening.
+    assert _outbound(client, auth, customer_name=None, flow_id="flow_g", flow_version=1, flow=with_name).status_code == 200
 
 
 def test_flow_silence_lines_are_spoken(client, auth, fakes, monkeypatch):

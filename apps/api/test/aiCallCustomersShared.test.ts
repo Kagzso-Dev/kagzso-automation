@@ -95,7 +95,7 @@ describe("stageForCallResult", () => {
   it.each([
     ["COMPLETED", "interested", "INTERESTED"],
     ["COMPLETED", "not_interested", "NOT_INTERESTED"],
-    ["COMPLETED", "wrong_person", "NOT_INTERESTED"],
+    ["COMPLETED", "wrong_person", "FOLLOW_UP_NEEDED"], // someone else answered: not a "no"
     ["COMPLETED", "callback_requested", "CALLBACK_REQUESTED"],
     ["COMPLETED", "do_not_call", "DO_NOT_CALL"],
     ["COMPLETED", "voicemail", "NO_ANSWER"],
@@ -132,5 +132,20 @@ describe("followupsForStage", () => {
     expect(followupsForStage("NO_ANSWER", { ...base, noAnswerRetries: 1 })).toHaveLength(1);
     expect(followupsForStage("NO_ANSWER", { ...base, noAnswerRetries: 2 })).toEqual([]);
     expect(followupsForStage("NO_ANSWER", { ...base, maxRetries: 0 })).toEqual([]);
+  });
+});
+
+describe("a missing customer name never blocks a call", () => {
+  it("add / edit, import and Start AI Calls all accept a customer without a name (phone stays required)", async () => {
+    const { aiCallCustomerInput, importAiCallCustomersInput, checkAiCallCustomerRow, checkAiCallRow, startAiCallsInput } =
+      await import("@dispatch/shared");
+    expect(aiCallCustomerInput.parse({ phone: "+919876543210" }).customerName).toBeNull();
+    expect(aiCallCustomerInput.parse({ phone: "+919876543210", customerName: "  " }).customerName).toBeNull();
+    expect(aiCallCustomerInput.safeParse({ customerName: "Ragul" }).success).toBe(false); // phone is required
+    expect(importAiCallCustomersInput.safeParse({ rows: [{ phone: "9876543210" }] }).success).toBe(true);
+    const row = checkAiCallCustomerRow({ phone: "9876543210", customerName: "" });
+    expect(row.errors).toEqual([]); // a warning only, never a reason to skip the row
+    expect(checkAiCallRow({ phone: "9876543210" }).errors).toEqual([]);
+    expect(startAiCallsInput.safeParse({ rows: [{ phone: "+919876543210" }], mode: "all" }).success).toBe(true);
   });
 });

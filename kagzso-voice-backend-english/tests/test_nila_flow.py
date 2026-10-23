@@ -34,10 +34,10 @@ def test_first_sentence_never_speaks_the_name():
     assert "Ragul" not in out and "{" not in out and "}" not in out and out == "Hi sir, Good morning."
 
 
-def test_outbound_requires_name_for_nila(client, auth):
+def test_outbound_without_a_name_is_placed_for_nila(client, auth):
     r = client.post("/api/calls/outbound", headers=auth,
                     json={"phone_number": PHONE, "gender": "male", "agent_id": _nila_id(client, auth)})
-    assert r.status_code == 422 and "customer_name is required" in r.json()["detail"]
+    assert r.status_code == 200, r.text  # a missing name never blocks a call
 
 
 def test_gender_normalization():

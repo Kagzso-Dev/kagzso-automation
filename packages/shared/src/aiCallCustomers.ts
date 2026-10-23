@@ -200,7 +200,6 @@ export function stageForCallResult(status: string, outcome: string | null | unde
     case "interested":
       return "INTERESTED";
     case "not_interested":
-    case "wrong_person":
       return "NOT_INTERESTED";
     case "callback_requested":
       return "CALLBACK_REQUESTED";
@@ -211,7 +210,9 @@ export function stageForCallResult(status: string, outcome: string | null | unde
     case "call_failed":
       return "FAILED";
     default:
-      return "FOLLOW_UP_NEEDED"; // completed / unknown / not classified yet
+      // completed / unknown / not classified yet; also wrong_person: someone else answering, or an
+      // unclear identity, is never "not interested" - the stage follows the answer to the pitch.
+      return "FOLLOW_UP_NEEDED";
   }
 }
 

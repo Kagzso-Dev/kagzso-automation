@@ -759,7 +759,7 @@ function CallFlowEditor({
         <label className="label">Greeting (spoken word for word, before the AI takes over)</label>
         <input className="input mb-1" maxLength={300} {...bind("greeting")} />
         <p className="mb-5 text-xs text-slate-550">
-          If it uses {"{{name}}"} or {"{{customer_name}}"}, customers without a name are not called. Keep the
+          If it uses {"{{name}}"} or {"{{customer_name}}"}, customers without a name hear “Hello, good day.” instead. Keep the
           “Greeting” blocks below consistent with this line.
         </p>
 

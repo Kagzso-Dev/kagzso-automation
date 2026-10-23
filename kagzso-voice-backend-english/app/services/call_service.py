@@ -259,9 +259,26 @@ _NAME_ALIAS_RE = re.compile(r"\{\{\s*name\s*\}\}")
 _TIME_GREETING_RE = re.compile(r"\{\{\s*time_greeting\s*\}\}")
 
 
+# Spoken instead of a greeting that names the customer when the customer has no name.
+NO_NAME_GREETING = "Hello, good day."
+
+
+def greets_by_name(first_message: str) -> bool:
+    """The opening line itself speaks the customer's name ({{customer_name}} / {{name}})."""
+    return "customer_name" in first_message or bool(_NAME_ALIAS_RE.search(first_message))
+
+
+def opening_line(first_message: str, variables: Mapping[str, Any]) -> str:
+    """The greeting as spoken: rendered as before, or NO_NAME_GREETING when it names the customer
+    and the customer has no name (never "Hello , ..." or a blank)."""
+    if greets_by_name(first_message) and not safe_variables(variables)["customer_name"]:
+        return NO_NAME_GREETING
+    return render_first_message(first_message, variables)
+
+
 def greeting_needs_name(first_message: str) -> bool:
-    """The opening line, or the identity question right after it, speaks the customer's
-    name, so a call without one is refused."""
+    """The opening line, or the identity question right after it, speaks the customer's name.
+    Without a name the call still goes ahead (opening_line, no identity question)."""
     return ("customer_name" in first_message or bool(_NAME_ALIAS_RE.search(first_message))
             or identity_after_greeting(first_message))
 
@@ -540,9 +557,8 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
     existing = await repo.get_contact_by_phone(db, req.phone_number)
     if existing is not None and existing.dnd:
         raise CallError(409, "Contact is marked Do-Not-Disturb; call not placed")
-    if agent.first_message and greeting_needs_name(agent.first_message) and not (req.name or (existing and existing.name)):
-        # e.g. "Hi, is this {{customer_name}}?" cannot be spoken without a name, and we never invent one.
-        raise CallError(422, f"customer_name is required for agent '{agent.name}' (its first sentence uses the name)")
+    # A missing name never blocks a call: a greeting that names the customer becomes the neutral
+    # NO_NAME_GREETING (opening_line) and the identity question is skipped.
     contact = await repo.upsert_contact(
         db, req.phone_number, req.name, req.company_name, req.email,
         gender=req.gender, business_type=req.business_type,
@@ -605,7 +621,7 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
         await get_session_store().set_fields(call.id, provider_request_id=result.request_uuid)
         log.info("Plivo outbound call fired")
         if cfg.GREETING_PRERENDER and agent.first_message:
-            greeting = render_first_message(agent.first_message, variables)
+            greeting = opening_line(agent.first_message, variables)
             if greeting:
                 schedule_greeting_prerender(call.id, greeting, call.voice_id or agent.voice_id,
                                             greeting_pace(agent.first_message, cfg), pauses_from_variables(variables))
@@ -1387,7 +1403,7 @@ class CallSession:
 
     # ------------------------------------------------------------------ turns
     def greeting_text(self) -> str:
-        return render_first_message(self.ctx.first_message or "", self.ctx.variables)
+        return opening_line(self.ctx.first_message or "", self.ctx.variables)
 
     def identity_reask_text(self) -> Optional[str]:
         name = safe_variables(self.ctx.variables)["customer_name"]

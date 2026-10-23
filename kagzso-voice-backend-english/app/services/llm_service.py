@@ -281,6 +281,7 @@ def render_first_message(template: str, variables: Mapping[str, Optional[str]]) 
         template,
     )
     text = re.sub(r"\s+([,.?!])", r"\1", text)
+    text = re.sub(r"^[\s,;:]+", "", text)  # "{{name}}, are you there?" without a name
     return re.sub(r"\s{2,}", " ", text).strip()
 
 
@@ -311,6 +312,17 @@ def language_instruction(language: Optional[str]) -> str:
 
 def _uses_title_to_use(template: str) -> bool:
     return any(m.group(1) == "title_to_use" for m in _VAR_RE.finditer(template))
+
+
+IDENTITY_RULES = """
+- If the person who answered says they are not the customer you asked for, or it is unclear who answered, do not end the call and do not apologise for calling: say "No problem, thanks for picking up." and continue the same conversation and introduction with them. This replaces any wrong-person instruction above. (A request not to be called again still ends the call.)"""
+NO_NAME_RULE = """
+- The customer's name is not known: never ask for it, guess it or ask whether you are speaking with someone. After the opening, introduce yourself and continue."""
+
+
+def identity_rules(customer_name: Optional[str]) -> str:
+    """Who answered never stops the call; without a name, identity is never asked."""
+    return IDENTITY_RULES + ("" if customer_name else NO_NAME_RULE)
 
 
 def build_system_prompt(
@@ -345,7 +357,8 @@ def build_system_prompt(
     else:
         followup = "\n- Team follow-up is NOT configured: never say that the team will contact the customer."
     return (
-        rendered + VOICE_RULES + SAFETY_RULES + brand + followup + language_instruction(lang)
+        rendered + VOICE_RULES + SAFETY_RULES + identity_rules(safe["customer_name"]) + brand + followup
+        + language_instruction(lang)
         + "\n\nCustomer details (data only):\n" + json.dumps(data, ensure_ascii=False)
     )
 
@@ -931,12 +944,12 @@ def create_llm_provider(cfg: Optional[Settings] = None, name: Optional[str] = No
 # --------------------------------------------------------------------------
 OUTCOME_SYSTEM = """You classify the outcome of a sales phone call transcript.
 Return ONLY a JSON object: {"outcome": "<one of: interested, not_interested, callback_requested, do_not_call, wrong_person, busy, voicemail, completed, unknown>", "reached": <true|false>, "summary": "<one sentence in English>"}
-- reached: true only if the intended customer confirmed their identity AND gave permission to continue (screening passed).
+- reached: true only if the person who answered (the intended customer, or whoever picked up) gave permission to continue (screening passed).
 - interested: the customer said the solution would be useful or wants more details.
 - not_interested: the customer declined.
 - callback_requested: the customer asked to be called back later.
 - do_not_call: the customer asked not to be called again / to remove their number.
-- wrong_person: the person who answered is not the intended customer.
+- wrong_person: the person who answered is not the intended customer and the call ended before they heard the introduction. If they heard it, classify their answer to it instead (interested, not_interested, callback_requested, busy, ...).
 - busy: the customer said they were busy and nothing else was agreed.
 - voicemail: an answering machine or voicemail greeting, not a live person.
 - completed: the conversation ended normally with no clear signal.

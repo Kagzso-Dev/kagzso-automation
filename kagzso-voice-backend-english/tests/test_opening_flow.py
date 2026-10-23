@@ -166,10 +166,10 @@ def test_unknown_gender_uses_the_default_title(client, auth, fakes):
     assert spoken == [GREETING, IDENTITY]
 
 
-def test_call_without_a_name_is_still_refused(client, auth):
+def test_call_without_a_name_is_placed(client, auth):
     r = client.post("/api/calls/outbound", headers=auth,
                     json={"phone_number": PHONE, "gender": "male", "agent_id": _nila_id(client, auth)})
-    assert r.status_code == 422 and "customer_name is required" in r.json()["detail"]
+    assert r.status_code == 200, r.text  # no name: the opening plays, the identity question is skipped
 
 
 def test_prompt_keeps_the_safety_layer_and_the_locked_blocks():
