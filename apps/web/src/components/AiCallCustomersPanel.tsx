@@ -102,7 +102,7 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
   return (
     <div>
       <PageHeader
-        title="AI Call Customers"
+        title="Voicecall Contact"
         subtitle="Customers for AI voice calls, their call stage and follow-ups. Separate from email and WhatsApp contacts."
         action={
           <div className="flex flex-wrap gap-2">

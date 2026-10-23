@@ -13,7 +13,7 @@ export function AiCallCustomersPage() {
   if (!config.data?.enabled || !config.data.canStart) {
     return (
       <div>
-        <PageHeader title="AI Call Customers" />
+        <PageHeader title="Voicecall Contact" />
         <EmptyState icon="phone" title="Not available">
           {!config.data?.enabled
             ? "AI calls are turned off. An admin can enable them with ENABLE_AI_CALLS."
