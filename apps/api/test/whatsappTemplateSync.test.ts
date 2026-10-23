@@ -148,6 +148,31 @@ describe("Meta → Dispatch import planning", () => {
     });
   });
 
+  it("Tamil (ta): non-ASCII body and quick replies are kept exactly", () => {
+    const p = planMetaImport({
+      name: "kagzso_automation_intro_ta",
+      language: "ta",
+      status: "APPROVED",
+      category: "MARKETING",
+      components: [
+        body("வணக்கம் {{1}}, உங்கள் வணிகத்திற்கு AI ஆட்டோமேஷன் உதவும்."),
+        { type: "BUTTONS", buttons: [{ type: "QUICK_REPLY", text: "ஆர்வம் உள்ளது" }, { type: "QUICK_REPLY", text: "இப்போது வேண்டாம்" }] },
+      ],
+    });
+    expect(p).toEqual({
+      ok: true,
+      row: {
+        name: "Kagzso Automation Intro Ta",
+        providerTemplateName: "kagzso_automation_intro_ta",
+        languageCode: "ta",
+        body: "வணக்கம் {{first_name}}, உங்கள் வணிகத்திற்கு AI ஆட்டோமேஷன் உதவும்.",
+        variables: ["first_name"],
+        buttonLabels: ["ஆர்வம் உள்ளது", "இப்போது வேண்டாம்"],
+      },
+      warnings: [],
+    });
+  });
+
   it.each([
     [{ parameter_format: "NAMED", components: [body("Hi {{name}}")] }, /named variables/],
     [{ components: [body("{{1}} {{2}} {{3}}")] }, /3 variables/],

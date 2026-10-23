@@ -40,14 +40,20 @@ export interface SyncUpdate {
 const STATUS_TONE: Record<string, BadgeTone> = { APPROVED: "ok", PENDING: "warn", IN_APPEAL: "warn", REJECTED: "crit", PAUSED: "crit", DISABLED: "crit" };
 const k = (c: { name: string; language: string }) => `${c.name}|${c.language}`;
 
-/** Checked automatically when an admin opens the templates page (Meta's list is read, nothing changes). */
-export function useMetaSyncCandidates(enabled: boolean) {
+/**
+ * Checked automatically when an admin opens the templates page (Meta's list is read,
+ * nothing changes). `fresh` re-reads Meta on mount (the Sync window, every time it
+ * opens); `autoCheckMs` re-reads while the page is open (0 = off).
+ */
+export function useMetaSyncCandidates(enabled: boolean, opts: { fresh?: boolean; autoCheckMs?: number } = {}) {
   return useQuery({
     queryKey: ["whatsapp-meta-sync"],
     queryFn: () => api<{ items: SyncCandidate[] }>("/api/whatsapp/templates/meta-sync"),
     enabled,
     staleTime: 5 * 60_000,
     retry: false,
+    ...(opts.fresh ? { refetchOnMount: "always" as const } : {}),
+    refetchInterval: opts.autoCheckMs && opts.autoCheckMs > 0 ? opts.autoCheckMs : false,
   });
 }
 
@@ -63,12 +69,17 @@ function SyncBody({ onClose }: { onClose: () => void }) {
   const { appName } = useBranding();
   const qc = useQueryClient();
   const toast = useToast();
-  const list = useMetaSyncCandidates(true);
+  // Re-read Meta every time the window opens, so a template just made in WhatsApp
+  // Manager shows without reloading the page.
+  const list = useMetaSyncCandidates(true, { fresh: true });
   const changed = useQuery({
     queryKey: ["whatsapp-meta-sync-updates"],
     queryFn: () => api<{ items: SyncUpdate[] }>("/api/whatsapp/templates/meta-sync/updates"),
     retry: false,
+    refetchOnMount: "always",
   });
+  // Until the fresh read is back, the previous list may be on screen.
+  const refreshing = (list.isFetching || changed.isFetching) && !(list.isLoading || changed.isLoading);
   const items = list.data?.items ?? [];
   const updates = changed.data?.items ?? [];
   const importable = items.filter((c) => c.importable);
@@ -117,6 +128,7 @@ function SyncBody({ onClose }: { onClose: () => void }) {
   if (list.error) return <ErrorNote error={list.error} />;
   if (changed.error) return <ErrorNote error={changed.error} />;
   if (items.length === 0 && updates.length === 0) {
+    if (refreshing) return <Spinner />;
     return (
       <div>
         <p className="text-sm text-slate-550">Every template in your WhatsApp Business Account is registered here and matches Meta.</p>
@@ -131,6 +143,7 @@ function SyncBody({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="space-y-5">
+      {refreshing && <p className="text-xs text-slate-550">Checking Meta for the latest templates…</p>}
       {items.length > 0 && (
         <div>
           <h3 className="mb-1 text-sm font-semibold">New in Meta</h3>
@@ -267,7 +280,7 @@ function SyncBody({ onClose }: { onClose: () => void }) {
         <button type="button" className="btn-ghost" onClick={onClose}>
           Cancel
         </button>
-        <button className="btn-primary" disabled={total === 0 || run.isPending} onClick={() => run.mutate()}>
+        <button className="btn-primary" disabled={total === 0 || run.isPending || refreshing} onClick={() => run.mutate()}>
           {run.isPending ? "Syncing…" : `Sync ${total} template${total === 1 ? "" : "s"}`}
         </button>
       </div>

@@ -4,7 +4,14 @@ import { api } from "../lib/api";
 import { PageHeader } from "../components/Layout";
 import { Badge, EmptyState, ErrorNote, Modal, Spinner, Table, Tabs, type BadgeTone } from "../components/ui";
 import { useConfirm } from "../components/confirm";
-import { useTemplateVerification, type TemplateVerification, type TemplateVerifyStatus } from "../lib/whatsapp";
+import {
+  AUTO_CHECK_OPTIONS,
+  useAutoCheckMinutes,
+  useMetaStatusChanges,
+  useTemplateVerification,
+  type TemplateVerification,
+  type TemplateVerifyStatus,
+} from "../lib/whatsapp";
 import { ACCEPT, formatBytes, uploadWithProgress, type MediaView } from "../lib/whatsappMedia";
 import { WhatsAppMedia } from "../components/WhatsAppMedia";
 import { MetaSyncModal, useMetaSyncCandidates } from "../components/WhatsAppTemplateSync";
@@ -39,9 +46,13 @@ export function WhatsAppTemplatesPage() {
   const [headerFor, setHeaderFor] = useState<WTemplate | null>(null);
   const [syncOpen, setSyncOpen] = useState(false);
   const isAdmin = useAuth().user?.role === "ADMIN";
+  // Read-only re-check of Meta while the page is open (banner + badges only, never imports).
+  const [autoCheckMin, setAutoCheckMin] = useAutoCheckMinutes();
+  const autoCheckMs = autoCheckMin * 60_000;
   // Checked when an admin opens the page: Meta templates not registered here yet.
-  const metaNew = useMetaSyncCandidates(isAdmin);
+  const metaNew = useMetaSyncCandidates(isAdmin, { autoCheckMs });
   const newInMeta = (metaNew.data?.items ?? []).filter((c) => c.importable);
+  const blockedInMeta = (metaNew.data?.items ?? []).filter((c) => !c.importable);
 
   const query = useQuery({
     queryKey: ["whatsapp-templates"],
@@ -66,7 +77,14 @@ export function WhatsAppTemplatesPage() {
   const items = all.filter((t) => !t.archived);
   const archivedItems = all.filter((t) => t.archived);
   const shown = showArchived ? [...items, ...archivedItems] : items;
-  const verify = useTemplateVerification();
+  const verify = useTemplateVerification(autoCheckMs);
+  const statusChange = useMetaStatusChanges(verify.query.data);
+  // Latest read of Meta by either check (Verify badges / Sync list).
+  const checkedAt = Math.max(
+    verify.query.data ? new Date(verify.query.data.checkedAt).getTime() : 0,
+    metaNew.data ? metaNew.dataUpdatedAt : 0,
+  );
+  const metaError = verify.query.data?.error ?? (metaNew.error instanceof Error ? metaNew.error.message : null);
 
   return (
     <div>
@@ -87,15 +105,31 @@ export function WhatsAppTemplatesPage() {
         }
       />
 
-      {newInMeta.length > 0 && (
-        <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-accent-soft px-3 py-2 text-sm">
-          <span>
-            {newInMeta.length} template{newInMeta.length === 1 ? "" : "s"} in Meta {newInMeta.length === 1 ? "isn't" : "aren't"} in {appName} yet:{" "}
-            <span className="font-mono text-xs">{newInMeta.slice(0, 4).map((c) => c.name).join(", ")}{newInMeta.length > 4 ? " …" : ""}</span>
-          </span>
-          <button className="ml-auto text-xs font-medium text-accent-ink hover:underline" onClick={() => setSyncOpen(true)}>
-            Review &amp; import
-          </button>
+      {(newInMeta.length > 0 || blockedInMeta.length > 0) && (
+        <div className="mb-4 space-y-1 rounded-lg bg-accent-soft px-3 py-2 text-sm">
+          {newInMeta.length > 0 && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span>
+                {newInMeta.length} template{newInMeta.length === 1 ? "" : "s"} in Meta {newInMeta.length === 1 ? "isn't" : "aren't"} in {appName} yet:{" "}
+                <span className="font-mono text-xs">{newInMeta.slice(0, 4).map((c) => c.name).join(", ")}{newInMeta.length > 4 ? " …" : ""}</span>
+              </span>
+              <button className="ml-auto text-xs font-medium text-accent-ink hover:underline" onClick={() => setSyncOpen(true)}>
+                Review &amp; import
+              </button>
+            </div>
+          )}
+          {blockedInMeta.length > 0 && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-550">
+              <span>
+                {newInMeta.length > 0 ? `${blockedInMeta.length} more` : blockedInMeta.length} template{blockedInMeta.length === 1 ? "" : "s"} in
+                Meta can't be imported yet:{" "}
+                <span className="font-mono text-xs">{blockedInMeta.slice(0, 4).map((c) => c.name).join(", ")}{blockedInMeta.length > 4 ? " …" : ""}</span>
+              </span>
+              <button className="ml-auto text-xs font-medium text-accent-ink hover:underline" onClick={() => setSyncOpen(true)}>
+                See why
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -116,7 +150,26 @@ export function WhatsAppTemplatesPage() {
       ) : (
         <>
         <div className="mb-2 flex flex-wrap items-center justify-end gap-3 text-xs text-slate-550">
-          {verify.query.data && <span>Checked with Meta {new Date(verify.query.data.checkedAt).toLocaleTimeString()}</span>}
+          {metaError && (
+            <span className="text-crit" title={metaError}>
+              Meta couldn't be read: {metaError.slice(0, 120)}
+            </span>
+          )}
+          {checkedAt > 0 && <span>Checked with Meta {new Date(checkedAt).toLocaleTimeString()}</span>}
+          <label className="flex items-center gap-1" title="Re-reads Meta while this page is open. Only the banner and badges update; nothing is imported.">
+            Auto-check
+            <select
+              className="rounded border border-line bg-surface px-1 py-0.5 text-xs"
+              value={autoCheckMin}
+              onChange={(e) => setAutoCheckMin(Number(e.target.value))}
+            >
+              {AUTO_CHECK_OPTIONS.map((m) => (
+                <option key={m} value={m}>
+                  {m === 0 ? "Off" : `Every ${m} min`}
+                </option>
+              ))}
+            </select>
+          </label>
           <button
             type="button"
             className="btn-ghost py-1 text-xs"
@@ -143,6 +196,7 @@ export function WhatsAppTemplatesPage() {
                     verification={verify.byId.get(t.id)}
                     loading={verify.query.isLoading || verify.refresh.isPending}
                     error={verify.query.error ?? verify.refresh.error}
+                    change={statusChange(t.id)}
                   />
                 ) : (
                   <span title="Registered before the move to Meta — edit it and add the Meta template name to send it.">
@@ -385,31 +439,53 @@ const STATUS_BADGE: Record<TemplateVerifyStatus, { label: string; tone: BadgeTon
   verified: { label: "Verified", tone: "ok" },
   pending: { label: "Pending", tone: "warn" },
   failed: { label: "Failed", tone: "crit" },
-  not_found: { label: "Not found", tone: "crit" },
+  not_found: { label: "Not found in Meta", tone: "crit" },
   unchecked: { label: "Couldn't check", tone: "neutral" },
 };
 
-/** Meta verification badge; the full Meta name and the reason are in the tooltip. */
+const statusWord = (s: string) => (s === "NOT_FOUND" ? "not found" : s.toLowerCase().replace(/_/g, " "));
+
+/**
+ * Meta verification badge, with Meta's status and category under it (the full Meta
+ * name and the reason are in the tooltip). Display only: nothing here changes the row.
+ */
 function MetaStatus({
   name,
   verification,
   loading,
   error,
+  change,
 }: {
   name: string;
   verification?: TemplateVerification;
   loading: boolean;
   error: unknown;
+  /** Meta status changed since this browser last saw it (e.g. approved → paused). */
+  change?: { from: string; to: string } | null;
 }) {
+  // A name that exists in Meta only in another language can't be sent either.
+  const missing = verification?.status === "failed" && !verification.metaStatus;
   const badge = verification
-    ? STATUS_BADGE[verification.status]
+    ? missing
+      ? STATUS_BADGE.not_found
+      : STATUS_BADGE[verification.status]
     : loading
       ? { label: "Checking…", tone: "neutral" as BadgeTone }
       : STATUS_BADGE.unchecked;
   const reason = verification?.reason ?? (error instanceof Error ? error.message : loading ? "" : "Not checked yet");
   return (
     <div title={[name, reason].filter(Boolean).join(" — ")}>
-      <Badge tone={badge.tone}>{badge.label}</Badge>
+      <div className="flex flex-wrap items-center gap-1">
+        <Badge tone={badge.tone}>{badge.label}</Badge>
+        {change && (
+          <span title={`Meta status was ${statusWord(change.from)}, now ${statusWord(change.to)}`}>
+            <Badge tone="warn">Status changed</Badge>
+          </span>
+        )}
+      </div>
+      {verification?.metaStatus && (
+        <div className="mt-0.5 truncate text-[11px] text-slate-400">{reason.replace(/^Meta status /, "").toLowerCase()}</div>
+      )}
     </div>
   );
 }
