@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { formatPhoneDisplay } from "@dispatch/shared";
+import { BUTTON_REPLY_INTENT_LABELS, formatPhoneDisplay } from "@dispatch/shared";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { formatDateTime } from "../lib/schedule";
@@ -9,7 +9,7 @@ import { INBOX_POLL_MS, type Conversation, type ConversationPage, type Thread, t
 import { PageHeader } from "../components/Layout";
 import { WhatsAppMedia } from "../components/WhatsAppMedia";
 import { useFillHeight } from "../components/QueueTable";
-import { EmptyState, ErrorNote } from "../components/ui";
+import { Badge, EmptyState, ErrorNote } from "../components/ui";
 import { Icon } from "../components/icons";
 
 /**
@@ -426,6 +426,11 @@ function Bubble({ m }: { m: ThreadMessage }) {
     <div className={`flex ${out ? "justify-end" : "justify-start"}`}>
       <div className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-sm shadow-[0_2px_8px_rgba(17,24,39,0.06)] sm:max-w-[70%] ${out ? "rounded-br-md bg-accent-soft text-ink" : "rounded-bl-md border border-line/60 bg-surface text-ink"}`}>
         {m.template && <div className="mb-1 text-[11px] font-medium text-slate-550">Template · {m.template}</div>}
+        {m.replyIntent && (
+          <div className="mb-1" title="Quick-reply button the customer tapped (label only; nothing is changed)">
+            <Badge tone={m.replyIntent === "interested" ? "ok" : "neutral"}>{BUTTON_REPLY_INTENT_LABELS[m.replyIntent]}</Badge>
+          </div>
+        )}
         {m.media && (
           <div className="mb-1">
             <WhatsAppMedia media={m.media} compact zoomable />

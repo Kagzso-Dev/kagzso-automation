@@ -8,6 +8,7 @@
 // updates them like any other send.
 
 import { Prisma, type WhatsAppSend } from "@prisma/client";
+import { classifyButtonReply, type ButtonReplyIntent } from "@dispatch/shared";
 import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
 import { sendMediaMessage, sendTextMessage, WhatsAppSendError } from "../services/whatsapp.js";
@@ -182,6 +183,47 @@ export interface ThreadMessage {
   template: string | null; // outbound template name, if it was a template send
   /** Inbound location messages: coordinates for a map link. */
   location?: { latitude: number; longitude: number; name: string | null; address: string | null } | null;
+  /** Inbound quick-reply taps: "interested" / "not_now" badge (display only), null when unclear. */
+  replyIntent?: ButtonReplyIntent | null;
+}
+
+/**
+ * Display-only intent of each tapped quick-reply: the button text, else its position
+ * on the template the tap replies to (found from the reply's context message id).
+ * Read-only lookups; nothing is written.
+ */
+async function replyIntents(
+  inbound: { id: string; messageType: string; body: string | null; replyPayload: string | null; contextMessageId: string | null }[],
+): Promise<Map<string, ButtonReplyIntent | null>> {
+  const taps = inbound.filter((m) => m.messageType === "button" || m.messageType === "interactive");
+  const out = new Map<string, ButtonReplyIntent | null>();
+  if (!taps.length) return out;
+  const contextIds = [...new Set(taps.map((m) => m.contextMessageId).filter((x): x is string => !!x))];
+  const sends = contextIds.length
+    ? await prisma.whatsAppSend.findMany({
+        where: { providerMessageId: { in: contextIds } },
+        select: { providerMessageId: true, templateId: true, batch: { select: { templateId: true } } },
+      })
+    : [];
+  const templateOf = new Map(sends.map((s) => [s.providerMessageId!, s.templateId ?? s.batch?.templateId ?? null]));
+  const templateIds = [...new Set([...templateOf.values()].filter((x): x is string => !!x))];
+  const templates = templateIds.length
+    ? await prisma.whatsAppTemplate.findMany({ where: { id: { in: templateIds } }, select: { id: true, buttonLabels: true } })
+    : [];
+  const labelsOf = new Map(templates.map((t) => [t.id, t.buttonLabels]));
+  for (const m of taps) {
+    const templateId = m.contextMessageId ? templateOf.get(m.contextMessageId) : null;
+    out.set(
+      m.id,
+      classifyButtonReply({
+        messageType: m.messageType,
+        text: m.body,
+        payload: m.replyPayload,
+        buttonLabels: templateId ? labelsOf.get(templateId) : undefined,
+      }),
+    );
+  }
+  return out;
 }
 
 function locationOf(raw: unknown): ThreadMessage["location"] {
@@ -207,7 +249,7 @@ export async function getConversation(phoneRaw: string, opts: { before?: Date | 
       where: { phone, ...(before ? { sentAt: { lt: before } } : {}) },
       orderBy: { sentAt: "desc" },
       take: limit,
-      select: { id: true, sentAt: true, messageType: true, body: true, profileName: true },
+      select: { id: true, sentAt: true, messageType: true, body: true, profileName: true, replyPayload: true, contextMessageId: true },
     }),
     prisma.whatsAppSend.findMany({
       where: { phone, ...(before ? { createdAt: { lt: before } } : {}) },
@@ -219,12 +261,13 @@ export async function getConversation(phoneRaw: string, opts: { before?: Date | 
     prisma.whatsAppInboundMessage.findFirst({ where: { phone }, orderBy: { sentAt: "desc" }, select: { sentAt: true, profileName: true } }),
   ]);
   const locationIds = inbound.filter((m) => m.messageType === "location").map((m) => m.id);
-  const [inMedia, outMedia, locations] = await Promise.all([
+  const [inMedia, outMedia, locations, intents] = await Promise.all([
     inbound.length ? prisma.whatsAppMedia.findMany({ where: { inboundMessageId: { in: inbound.map((m) => m.id) } } }) : [],
     outbound.length
       ? prisma.whatsAppSendMedia.findMany({ where: { sendId: { in: outbound.map((s) => s.id) } }, include: { media: true } })
       : [],
     locationIds.length ? prisma.whatsAppInboundMessage.findMany({ where: { id: { in: locationIds } }, select: { id: true, raw: true } }) : [],
+    replyIntents(inbound),
   ]);
   const inMediaBy = new Map(inMedia.map((m) => [m.inboundMessageId!, m]));
   const outMediaBy = new Map(outMedia.map((l) => [l.sendId, l.media]));
@@ -247,6 +290,7 @@ export async function getConversation(phoneRaw: string, opts: { before?: Date | 
           error: null,
           template: null,
           ...(m.messageType === "location" ? { location: locBy.get(m.id) ?? null } : {}),
+          ...(intents.has(m.id) ? { replyIntent: intents.get(m.id) ?? null } : {}),
         } as ThreadMessage,
       };
     }),

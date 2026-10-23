@@ -201,4 +201,43 @@ describe("Inbox API", () => {
     const t: any = await (await api(`/api/whatsapp/inbox/${PHONE}`)).json();
     expect(t.messages[0].location).toEqual({ latitude: 13.0827, longitude: 80.2707, name: "Kagzso", address: "Chennai" });
   });
+
+  it("quick-reply taps get an Interested / Not now badge (English and Tamil); nothing is written", async () => {
+    T("whatsAppTemplate").push(
+      { id: "tpl-en", name: "Company Intro", buttonLabels: ["Yes, interested", "Not now"] },
+      { id: "tpl-ta", name: "Kagzso Automation Intro Ta", buttonLabels: ["ஆர்வம் உள்ளது", "இப்போது வேண்டாம்"] },
+      { id: "tpl-odd", name: "Odd buttons", buttonLabels: ["சரி, சொல்லுங்கள்", "அப்புறம் பேசலாம்"] },
+    );
+    const sent = (id: string, templateId: string, minsAgo: number) =>
+      T("whatsAppSend").push({ id: `s-${id}`, phone: PHONE, providerMessageId: `wamid.out.${id}`, templateId, batchId: "b1", status: "READ",
+        body: "template", createdAt: new Date(Date.now() - minsAgo * 60_000), sentAt: new Date(Date.now() - minsAgo * 60_000) });
+    sent("en", "tpl-en", 60);
+    sent("ta", "tpl-ta", 50);
+    sent("odd", "tpl-odd", 40);
+    inbound(9, { messageType: "button", body: "Yes, interested", replyPayload: "Yes, interested", contextMessageId: "wamid.out.en" });
+    inbound(8, { messageType: "button", body: "Not now", replyPayload: "Not now", contextMessageId: "wamid.out.en" });
+    inbound(7, { messageType: "button", body: "ஆர்வம் உள்ளது", replyPayload: "ஆர்வம் உள்ளது", contextMessageId: "wamid.out.ta" });
+    inbound(6, { messageType: "button", body: "இப்போது வேண்டாம்", replyPayload: "இப்போது வேண்டாம்", contextMessageId: "wamid.out.ta" });
+    // Not a known phrase: told by its position on the template it replies to.
+    inbound(5, { messageType: "button", body: "அப்புறம் பேசலாம்", replyPayload: "அப்புறம் பேசலாம்", contextMessageId: "wamid.out.odd" });
+    inbound(4, { messageType: "button", body: "Call me tomorrow", replyPayload: "Call me tomorrow", contextMessageId: "wamid.unknown" });
+    inbound(3, { messageType: "text", body: "Interested" }); // typed, not a button tap
+    // The in-memory db adds an empty table when one is read, so compare tables that hold rows.
+    const rows = () => JSON.stringify(Object.entries(db).filter(([, r]) => r.length).sort(([x], [y]) => x.localeCompare(y)));
+    const before = rows();
+
+    const t: any = await (await api(`/api/whatsapp/inbox/${PHONE}`)).json();
+    const ins = t.messages.filter((m: Row) => m.direction === "in");
+    expect(ins.map((m: Row) => [m.text, m.replyIntent])).toEqual([
+      ["Yes, interested", "interested"],
+      ["Not now", "not_now"],
+      ["ஆர்வம் உள்ளது", "interested"],
+      ["இப்போது வேண்டாம்", "not_now"],
+      ["அப்புறம் பேசலாம்", "not_now"],
+      ["Call me tomorrow", null],
+      ["Interested", undefined],
+    ]);
+    // Tamil text comes back unchanged, and no row anywhere was added or changed.
+    expect(rows()).toBe(before);
+  });
 });

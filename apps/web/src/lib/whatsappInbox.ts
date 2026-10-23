@@ -1,3 +1,4 @@
+import type { ButtonReplyIntent } from "@dispatch/shared";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 import type { MediaView } from "./whatsappMedia";
@@ -34,6 +35,8 @@ export interface ThreadMessage {
   error: string | null;
   template: string | null;
   location?: { latitude: number; longitude: number; name: string | null; address: string | null } | null;
+  /** Inbound quick-reply taps: which button it was (display only); null when unclear. */
+  replyIntent?: ButtonReplyIntent | null;
 }
 
 export interface Thread {
