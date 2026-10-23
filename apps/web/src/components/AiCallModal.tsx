@@ -213,7 +213,7 @@ function SetupFlow({
     () => ({
       invalid: checks.filter((c) => c.errors.length > 0).length,
       duplicates: checks.filter((c) => c.duplicate).length,
-      unknownGender: checks.filter((c) => c.errors.length === 0 && c.gender === "unknown").length,
+      noGender: checks.filter((c) => c.errors.length === 0 && c.genderDefaulted).length,
     }),
     [checks],
   );
@@ -423,9 +423,7 @@ function SetupFlow({
         <span className="text-ok">{callable} callable</span>
         {counts.invalid > 0 && <span className="text-crit">{counts.invalid} invalid (missing / invalid phone)</span>}
         {counts.duplicates > 0 && <span className="text-warn">{counts.duplicates} duplicate numbers</span>}
-        {counts.unknownGender > 0 && (
-          <span className="text-warn">{counts.unknownGender} unknown gender (neutral greeting)</span>
-        )}
+        {counts.noGender > 0 && <span className="text-warn">{counts.noGender} without gender (Male)</span>}
       </div>
 
       <div className="mb-4 max-h-72 overflow-auto rounded-lg border border-line">
@@ -485,9 +483,8 @@ function SetupFlow({
                   </td>
                   <td className="px-2 py-1.5 text-slate-550">{i + 1}</td>
                   <td className="px-2 py-1.5">{r.customerName || "—"}</td>
-                  <td className={`px-2 py-1.5 ${c.gender === "unknown" ? "text-warn" : ""}`}>
-                    {r.gender || "—"}
-                    {r.gender && c.gender === "unknown" ? " (?)" : ""}
+                  <td className={`px-2 py-1.5 ${c.genderDefaulted ? "text-warn" : ""}`}>
+                    {c.genderDefaulted ? `${r.gender ? `${r.gender} → ` : ""}male` : r.gender}
                   </td>
                   <td className="max-w-[14rem] truncate px-2 py-1.5" title={r.followUpDetail ?? ""}>
                     {r.followUpDetail || "—"}

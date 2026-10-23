@@ -66,12 +66,12 @@ describe("normalizePhoneE164 (default India)", () => {
 });
 
 describe("gender / masking / row checks", () => {
-  it("normalises gender spellings", () => {
+  it("accepts m / male and f / female in any case; anything else is Male", () => {
     expect(normalizeAiCallGender("M")).toBe("male");
+    expect(normalizeAiCallGender("MALE")).toBe("male");
     expect(normalizeAiCallGender(" Female ")).toBe("female");
-    expect(normalizeAiCallGender("Mrs.")).toBe("female");
-    expect(normalizeAiCallGender("")).toBe("unknown");
-    expect(normalizeAiCallGender("other")).toBe("unknown");
+    expect(normalizeAiCallGender("f")).toBe("female");
+    for (const other of ["", null, undefined, "unknown", "other", "Mrs.", "x"]) expect(normalizeAiCallGender(other)).toBe("male");
   });
 
   it("masks all but the country code and last 4 digits", () => {
@@ -80,13 +80,16 @@ describe("gender / masking / row checks", () => {
     expect(maskPhone(null)).toBe("");
   });
 
-  it("flags missing / invalid phone as errors and unknown gender as a warning", () => {
+  it("flags missing / invalid phone as errors; a missing gender only defaults to Male", () => {
     expect(checkAiCallRow({ phone: "" }).errors).toEqual(["Missing phone"]);
     expect(checkAiCallRow({ phone: "12345" }).errors).toEqual(["Invalid phone"]);
     const ok = checkAiCallRow({ customerName: "Ragul", gender: "x", phone: "9876543210" });
     expect(ok.errors).toEqual([]);
     expect(ok.phone).toBe("+919876543210");
-    expect(ok.warnings[0]).toMatch(/Unknown gender/);
+    expect(ok.gender).toBe("male");
+    expect(ok.genderDefaulted).toBe(true);
+    expect(ok.warnings[0]).toMatch(/No gender — Male/);
+    expect(checkAiCallRow({ gender: "F", phone: "9876543210" })).toMatchObject({ gender: "female", genderDefaulted: false });
   });
 });
 

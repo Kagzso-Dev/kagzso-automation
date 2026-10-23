@@ -33,7 +33,7 @@ function matches(row: Row, where: Row = {}): boolean {
 }
 
 const DEFAULTS: Record<string, Row> = {
-  aiCallCustomer: { stage: "NOT_CALLED", gender: "unknown", whatsappOptIn: false, needsReview: false, doNotCall: false, deletedAt: null, lastCallLogId: null },
+  aiCallCustomer: { stage: "NOT_CALLED", gender: "male", whatsappOptIn: false, needsReview: false, doNotCall: false, deletedAt: null, lastCallLogId: null },
   aiCallFollowup: { status: "PENDING_APPROVAL", attempt: 1, whatsappTemplateId: null, whatsappBatchId: null, aiCallRunId: null, sourceCallLogId: null, decidedAt: null },
 };
 
@@ -150,7 +150,7 @@ describe("bulk import", () => {
       [
         { customerName: "A", gender: "m", phone: "9876543210", whatsappOptIn: "yes" },
         { customerName: "B", gender: "female", phone: "+91 98765 43210" }, // duplicate in file
-        { customerName: "C", gender: "x?", phone: "9123456789" }, // unknown gender
+        { customerName: "C", gender: "x?", phone: "9123456789" }, // unrecognised gender: imported as Male
         { customerName: "D", phone: "" }, // missing phone
         { customerName: "E", phone: "12" }, // invalid phone
         { customerName: "F", phone: "09000000001" }, // already saved
@@ -158,8 +158,9 @@ describe("bulk import", () => {
       ],
       ADMIN,
     );
-    expect(res).toMatchObject({ imported: 2, skipped: 3, duplicates: 2 });
-    expect(res.problems.map((p) => p.row).sort()).toEqual([2, 3, 4, 5, 6]);
+    expect(res).toMatchObject({ imported: 3, skipped: 2, duplicates: 2 });
+    expect(res.problems.map((p) => p.row).sort()).toEqual([2, 4, 5, 6]);
+    expect(T("aiCallCustomer").find((c) => c.customerName === "C")).toMatchObject({ gender: "male" });
     const a = T("aiCallCustomer").find((c) => c.customerName === "A")!;
     expect(a).toMatchObject({ phone: "+919876543210", gender: "male", whatsappOptIn: true });
   });
@@ -410,5 +411,16 @@ describe("follow-up approval (Send Queue)", () => {
     cust(c.id).doNotCall = true;
     await expect(followups.approveFollowup(f.id, ADMIN)).rejects.toMatchObject({ status: 409 });
     expect(enqueueAiCallFollowup).not.toHaveBeenCalled();
+  });
+});
+
+describe("gender: Male or Female only, Male by default", () => {
+  it("saves Male when the gender is missing, blank, unknown or anything else", async () => {
+    for (const [i, gender] of [undefined, null, "", "unknown", "other"].entries()) {
+      const c = await customers.createCustomer(input({ phone: `900000010${i}`, gender }) as any, ADMIN);
+      expect(c.gender).toBe("male");
+    }
+    const f = await customers.createCustomer(input({ phone: "9000000200", gender: "F" }) as any, ADMIN);
+    expect(f.gender).toBe("female");
   });
 });

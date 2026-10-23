@@ -89,14 +89,21 @@ export function normalizePhoneE164(raw: unknown, defaultCountryCode = "91"): str
   return `+${digits}`;
 }
 
-export type AiCallGender = "male" | "female" | "unknown";
+export type AiCallGender = "male" | "female";
 
-/** male / female from common spellings; anything else (incl. blank) is unknown. */
+/** Default when the gender is missing or not male / female. */
+export const AI_CALL_DEFAULT_GENDER: AiCallGender = "male";
+
+/** "m" / "male" and "f" / "female" in any case; anything else (incl. blank) is Male. */
 export function normalizeAiCallGender(raw: unknown): AiCallGender {
   const v = String(raw ?? "").trim().toLowerCase().replace(/\./g, "");
-  if (["m", "male", "man", "mr", "boy", "gents"].includes(v)) return "male";
-  if (["f", "female", "woman", "ms", "mrs", "miss", "girl", "ladies"].includes(v)) return "female";
-  return "unknown";
+  if (v === "f" || v === "female") return "female";
+  return AI_CALL_DEFAULT_GENDER;
+}
+
+/** True when `raw` is a recognised gender (anything else is saved as Male). */
+export function isAiCallGender(raw: unknown): boolean {
+  return ["m", "male", "f", "female"].includes(String(raw ?? "").trim().toLowerCase().replace(/\./g, ""));
 }
 
 /** "+919876543210" → "+91******3210". For logs and anywhere a full number isn't needed. */
@@ -117,6 +124,8 @@ export interface AiCallRowInput {
 export interface AiCallRowCheck {
   phone: string | null;
   gender: AiCallGender;
+  /** The row had no recognised gender: Male is used. */
+  genderDefaulted: boolean;
   /** Blocking problems — the row can't be called. */
   errors: string[];
   /** Non-blocking — the row is called, but with a fallback (e.g. neutral greeting). */
@@ -131,9 +140,10 @@ export function checkAiCallRow(row: AiCallRowInput, defaultCountryCode = "91"): 
   if (!rawPhone) errors.push("Missing phone");
   else if (!phone) errors.push("Invalid phone");
   const gender = normalizeAiCallGender(row.gender);
-  if (gender === "unknown") warnings.push("Unknown gender — neutral greeting");
+  const genderDefaulted = !isAiCallGender(row.gender);
+  if (genderDefaulted) warnings.push("No gender — Male");
   if (!String(row.customerName ?? "").trim()) warnings.push("No name — greeting without a name");
-  return { phone, gender, errors, warnings };
+  return { phone, gender, genderDefaulted, errors, warnings };
 }
 
 /** Values as read from the file, already mapped to fields by the browser. */

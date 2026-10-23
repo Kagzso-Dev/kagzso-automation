@@ -157,7 +157,6 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
           <option value="">All genders</option>
           <option value="male">Male</option>
           <option value="female">Female</option>
-          <option value="unknown">Unknown</option>
         </select>
         <select
           className="input sm:max-w-[13rem]"
@@ -323,7 +322,7 @@ function CustomerFormModal({ customer, onClose }: { customer: AiCallCustomer | "
   const existing = customer && customer !== "new" ? customer : null;
   const [form, setForm] = useState({
     customerName: existing?.customerName ?? "",
-    gender: existing?.gender ?? "unknown",
+    gender: existing?.gender === "female" ? "female" : "male", // Male by default
     phone: existing?.phone ?? "",
     businessName: existing?.businessName ?? "",
     followUpDetail: existing?.followUpDetail ?? "",
@@ -362,7 +361,6 @@ function CustomerFormModal({ customer, onClose }: { customer: AiCallCustomer | "
           <div>
             <label className="label">Gender</label>
             <select className="input" value={form.gender} onChange={(e) => set("gender", e.target.value)}>
-              <option value="unknown">Unknown</option>
               <option value="male">Male</option>
               <option value="female">Female</option>
             </select>
@@ -751,7 +749,7 @@ function DetailBody({ id, onClose }: { id: string; onClose: () => void }) {
         <div className="text-sm">
           <div className="font-mono">{formatPhoneDisplay(c.phone)}</div>
           <div className="text-slate-550">
-            {[c.businessName, c.gender !== "unknown" ? c.gender : null, c.email, c.whatsappOptIn ? "WhatsApp opt-in" : null]
+            {[c.businessName, c.gender, c.email, c.whatsappOptIn ? "WhatsApp opt-in" : null]
               .filter(Boolean)
               .join(" · ") || "—"}
           </div>

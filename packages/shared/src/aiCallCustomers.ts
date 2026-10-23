@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { aiCallGreetingDelay, normalizeAiCallGender, normalizePhoneE164, type AiCallGender } from "./aiCalls.js";
+import { aiCallGreetingDelay, isAiCallGender, normalizeAiCallGender, normalizePhoneE164, type AiCallGender } from "./aiCalls.js";
 
 /* ------------------------------------------------------------------ AI Call Customers (isolated) */
 // Saved customers for AI voice calls, their call stage and follow-up rules.
@@ -152,7 +152,7 @@ export interface AiCallCustomerRowCheck {
 
 /**
  * Validate one customer row. Errors: missing / invalid phone, a gender value
- * that isn't recognised (blank is fine — stored as unknown), invalid email.
+ * that isn't recognised is saved as Male (a warning, never an error), invalid email.
  */
 export function checkAiCallCustomerRow(row: AiCallCustomerRowInput, defaultCountryCode = "91"): AiCallCustomerRowCheck {
   const errors: string[] = [];
@@ -162,13 +162,10 @@ export function checkAiCallCustomerRow(row: AiCallCustomerRowInput, defaultCount
   if (!rawPhone) errors.push("Missing phone");
   else if (!phone) errors.push("Invalid phone");
 
+  // Only Male / Female: a missing or unrecognised gender is saved as Male (never an error).
   const rawGender = String(row.gender ?? "").trim();
   const gender = normalizeAiCallGender(rawGender);
-  if (rawGender && gender === "unknown" && rawGender.toLowerCase() !== "unknown") {
-    errors.push(`Unknown gender "${rawGender.slice(0, 20)}"`);
-  } else if (gender === "unknown") {
-    warnings.push("No gender — neutral greeting");
-  }
+  if (!isAiCallGender(rawGender)) warnings.push(rawGender ? `Gender "${rawGender.slice(0, 20)}" — saved as Male` : "No gender — saved as Male");
 
   const rawEmail = String(row.email ?? "").trim().toLowerCase();
   const email = rawEmail || null;
@@ -277,7 +274,7 @@ export type AiCallCustomerInput = z.infer<typeof aiCallCustomerInput>;
 
 export const listAiCallCustomersQuery = z.object({
   search: z.string().trim().max(100).optional(),
-  gender: z.enum(["male", "female", "unknown"]).optional(),
+  gender: z.enum(["male", "female"]).optional(),
   stage: z.enum(AI_CALL_STAGES).optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),

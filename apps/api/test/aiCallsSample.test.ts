@@ -29,6 +29,6 @@ describe("scripts/sample-ai-calls.xlsx", () => {
     expect(plan.targets.map((t) => t.phone)).toEqual([
       "+919000000001", "+919000000002", "+919000000003", "+919000000004", "+919000000005",
     ]);
-    expect(plan.targets.map((t) => t.gender)).toEqual(["male", "female", "male", "female", "unknown"]);
+    expect(plan.targets.map((t) => t.gender)).toEqual(["male", "female", "male", "female", "male"]); // no gender = Male
   });
 });

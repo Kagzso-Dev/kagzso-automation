@@ -61,7 +61,7 @@ const TABS: { key: CallFlowGroup | "locked"; label: string }[] = [
 const SAMPLES = [
   { label: "Male, with name", customer_name: "Ragul", gender: "male", follow_up_detail: "" },
   { label: "Female, follow-up detail", customer_name: "Priya", gender: "female", follow_up_detail: "the quotation for 20 laptops" },
-  { label: "Unknown gender, no name", customer_name: "", gender: "unknown", follow_up_detail: "" },
+  { label: "Male, no name", customer_name: "", gender: "male", follow_up_detail: "" },
 ];
 type Sample = Omit<(typeof SAMPLES)[number], "label">;
 
@@ -1074,7 +1074,6 @@ function PreviewPanel({ definition, valid }: { definition: CallFlowDefinition; v
         <select className="input py-1 text-xs" value={sample.gender} onChange={(e) => setSample({ ...sample, gender: e.target.value })}>
           <option value="male">male</option>
           <option value="female">female</option>
-          <option value="unknown">unknown</option>
         </select>
         <input
           className="input col-span-2 py-1 text-xs"
@@ -1189,7 +1188,7 @@ function TestCallModal({
   const [newPhone, setNewPhone] = useState("");
   const [newLabel, setNewLabel] = useState("");
   const [customerName, setCustomerName] = useState("");
-  const [gender, setGender] = useState("unknown");
+  const [gender, setGender] = useState("male");
   const [followUpDetail, setFollowUpDetail] = useState("");
   const [runId, setRunId] = useState<string | null>(null);
 
@@ -1346,7 +1345,6 @@ function TestCallModal({
                 <select className="input" value={gender} onChange={(e) => setGender(e.target.value)}>
                   <option value="male">male</option>
                   <option value="female">female</option>
-                  <option value="unknown">unknown</option>
                 </select>
                 <input
                   className="input col-span-2"

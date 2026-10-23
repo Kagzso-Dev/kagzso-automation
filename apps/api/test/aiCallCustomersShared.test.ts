@@ -56,18 +56,22 @@ describe("checkAiCallCustomerRow", () => {
     expect(c).toMatchObject({ phone: "+919876543210", gender: "female", email: "asha@example.com", errors: [] });
   });
 
-  it("flags missing / invalid phone, unknown gender and invalid email", () => {
+  it("flags missing / invalid phone and invalid email; an unrecognised gender is saved as Male", () => {
     expect(checkAiCallCustomerRow({ phone: "" }).errors).toContain("Missing phone");
     expect(checkAiCallCustomerRow({ phone: "123" }).errors).toContain("Invalid phone");
-    expect(checkAiCallCustomerRow({ phone: "9876543210", gender: "xyz" }).errors[0]).toMatch(/Unknown gender/);
+    const other = checkAiCallCustomerRow({ phone: "9876543210", gender: "xyz" });
+    expect(other).toMatchObject({ gender: "male", errors: [] });
+    expect(other.warnings.join()).toMatch(/saved as Male/);
     expect(checkAiCallCustomerRow({ phone: "9876543210", email: "nope" }).errors).toContain("Invalid email");
   });
 
-  it("blank gender is allowed (neutral greeting)", () => {
-    const c = checkAiCallCustomerRow({ phone: "9876543210", gender: "" });
-    expect(c.errors).toEqual([]);
-    expect(c.gender).toBe("unknown");
-    expect(c.warnings.join()).toMatch(/neutral greeting/);
+  it("a blank or unknown gender is saved as Male", () => {
+    for (const gender of ["", "unknown", "Unknown", null, undefined]) {
+      const c = checkAiCallCustomerRow({ phone: "9876543210", gender });
+      expect(c.errors).toEqual([]);
+      expect(c.gender).toBe("male");
+      expect(c.warnings.join()).toMatch(/saved as Male/);
+    }
   });
 });
 
