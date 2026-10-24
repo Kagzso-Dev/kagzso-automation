@@ -65,6 +65,9 @@ export interface CallFlowPreview {
   silence_reprompt: string | null;
   silence_closing: string | null;
   max_duration_sec: number | null;
+  /** System-spoken after a time-of-day opening; null when skipped (opening names the customer, or no name). */
+  identity_question?: string | null;
+  identity_reask?: string | null;
 }
 
 export const BASE_LABELS: Record<CallFlowBase, string> = {

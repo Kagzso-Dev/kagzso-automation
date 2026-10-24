@@ -132,6 +132,17 @@ function flowText(max: number, { multiline }: { multiline: boolean }) {
     });
 }
 
+/** Built-in identity lines (voice backend IDENTITY_QUESTION / IDENTITY_REASK), as flow templates. */
+export const CALL_FLOW_DEFAULT_IDENTITY = {
+  question: "Am I speaking with {{customer_name}}, {{title_to_use}}?",
+  reask: "Sorry, am I speaking with {{customer_name}}?",
+} as const;
+
+// An identity line names the customer: it is skipped when the customer has no name.
+const identityLine = flowText(200, { multiline: false }).refine((v) => /\{\{\s*(customer_name|name)\s*\}\}/.test(v), {
+  message: "Must contain {{customer_name}}",
+});
+
 const blockId = z.string().regex(/^[a-z0-9_]{1,40}$/, "Use 1-40 lowercase letters, digits or _");
 
 export const callFlowTextBlock = z
@@ -169,6 +180,14 @@ export const callFlowDefinition = z
     pauses: z.object({ short_ms: pauseMs, medium_ms: pauseMs, long_ms: pauseMs }).strict().optional(),
     /** Spoken word for word right after the greeting while the voice backend records calls. Absent = none. */
     recording_notice: flowText(300, { multiline: false }).optional(),
+    /**
+     * The identity question (and re-ask) the system speaks after a time-of-day opening
+     * ("Hi sir, Good morning."). Absent = the built-in "Am I speaking with {name}, {title}?".
+     */
+    identity: z
+      .object({ question: identityLine, reask: identityLine.optional() })
+      .strict()
+      .optional(),
     transfer: z
       .object({
         // Live transfer is not implemented yet: the number is stored only.

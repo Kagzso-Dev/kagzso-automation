@@ -136,3 +136,19 @@ describe("recording notice", () => {
     expect(issues({ ...nila(), recording_notice: "Call {{phone_number}}" }).join()).toMatch(/Unknown variable/);
   });
 });
+
+describe("identity question", () => {
+  const q = "Am I speaking with {{customer_name}}, {{title_to_use}}? This is Thaara.";
+  it("is optional; question (and an optional re-ask) must name the customer, one line each", () => {
+    expect(issues(nila())).toEqual([]); // absent on old flows = the built-in lines
+    expect(issues({ ...nila(), identity: { question: q } })).toEqual([]);
+    expect(issues({ ...nila(), identity: { question: q, reask: "Sorry, is this {{customer_name}}?" } })).toEqual([]);
+    expect(issues({ ...nila(), identity: { question: "Hello, is this {{name}}?" } })).toEqual([]);
+    expect(issues({ ...nila(), identity: { question: "Am I speaking with the owner?" } }).join()).toMatch(/customer_name/);
+    expect(issues({ ...nila(), identity: { question: q, reask: "Sorry, who is this?" } }).join()).toMatch(/customer_name/);
+    expect(issues({ ...nila(), identity: { question: "Is this {{customer_name}}?\nsecond" } }).join()).toMatch(/single line/);
+    expect(issues({ ...nila(), identity: { question: "Is this {{customer_name}}, {{boss}}?" } }).join()).toMatch(/Unknown variable/);
+    expect(issues({ ...nila(), identity: { reask: "Sorry, is this {{customer_name}}?" } })).not.toEqual([]); // question required
+    expect(issues({ ...nila(), identity: { question: q, extra: 1 } })).not.toEqual([]);
+  });
+});

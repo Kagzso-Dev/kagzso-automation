@@ -16,6 +16,7 @@ from app.core.voices import DEFAULT_VOICE, VOICES
 from app.flows.loader import BUILTIN_FLOWS, FlowError, parse_flow
 from app.flows.schema import BLOCK_GROUPS, FLOW_VARIABLES, LOCKED_BLOCKS, MAX_BLOCK_CHARS, MAX_PROMPT_CHARS, render_blocks
 from app.schemas.calls import normalize_gender
+from app.services.call_service import identity_after_greeting, identity_lines
 from app.services.llm_service import build_call_variables, build_system_prompt, render_first_message
 
 router = APIRouter(prefix="/api/flows", tags=["flows"], dependencies=[Depends(require_api_key)])
@@ -25,7 +26,7 @@ def _catalog_flow(flow: Any) -> Dict[str, Any]:
     """A built-in flow as JSON. Optional settings it doesn't use are left out (not null), so a copy
     made from it validates in Dispatch exactly like flows saved before those settings existed."""
     data = flow.model_dump(mode="json")
-    for optional in ("pauses", "recording_notice"):
+    for optional in ("pauses", "recording_notice", "identity"):
         if data.get(optional) is None:
             data.pop(optional, None)
     return data
@@ -74,6 +75,10 @@ class PreviewResponse(BaseModel):
     silence_reprompt: Optional[str] = None
     silence_closing: Optional[str] = None
     max_duration_sec: Optional[int] = None
+    # System-spoken after a time-of-day opening; None when the opening names the customer or
+    # the sample customer has no name (the question is skipped then).
+    identity_question: Optional[str] = None
+    identity_reask: Optional[str] = None
 
 
 @router.post("/preview", response_model=PreviewResponse, dependencies=[Depends(rate_limit(120))])
@@ -87,6 +92,9 @@ async def preview_flow(body: PreviewRequest) -> PreviewResponse:
                                      follow_up_detail=s.follow_up_detail, company_name=s.company_name,
                                      business_type=s.business_type)
     script = render_blocks(flow)
+    question, reask = (identity_lines(variables, flow.identity.question if flow.identity else None,
+                                      flow.identity.reask if flow.identity else None)
+                       if identity_after_greeting(flow.greeting.text) else (None, None))
     return PreviewResponse(
         valid=True,
         greeting=render_first_message(flow.greeting.text, variables),
@@ -95,4 +103,6 @@ async def preview_flow(body: PreviewRequest) -> PreviewResponse:
         silence_reprompt=render_first_message(flow.silence.reprompt, variables),
         silence_closing=render_first_message(flow.silence.closing, variables),
         max_duration_sec=min(flow.limits.max_duration_sec, settings.MAX_CALL_DURATION_SECONDS),
+        identity_question=question,
+        identity_reask=reask,
     )

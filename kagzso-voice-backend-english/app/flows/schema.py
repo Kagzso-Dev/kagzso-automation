@@ -82,6 +82,33 @@ class FlowGreeting(_Strict):
         return check_text(v, multiline=False)
 
 
+_NAME_VAR_RE = re.compile(r"\{\{\s*(customer_name|name)\s*\}\}")
+
+
+class FlowIdentity(_Strict):
+    """The system-spoken identity question after a time-of-day opening ("Hi sir, Good morning."),
+    and its re-ask. None / absent = the built-in lines (IDENTITY_QUESTION / IDENTITY_REASK)."""
+    question: str = Field(..., min_length=1, max_length=200)
+    reask: Optional[str] = Field(None, max_length=200)
+
+    @field_validator("question", "reask")
+    @classmethod
+    def _text(cls, v: Optional[str]) -> Optional[str]:
+        v = (v or "").strip()
+        if not v:
+            return None
+        check_text(v, multiline=False)
+        if not _NAME_VAR_RE.search(v):
+            raise ValueError("must contain {{customer_name}} (it is skipped when the customer has no name)")
+        return v
+
+    @model_validator(mode="after")
+    def _question(self) -> "FlowIdentity":
+        if not self.question:
+            raise ValueError("question is required (leave identity out to use the built-in line)")
+        return self
+
+
 class TextBlock(_Strict):
     id: str = Field(..., pattern=r"^[a-z0-9_]{1,40}$")
     group: Literal[BLOCK_GROUPS]  # type: ignore[valid-type]
@@ -147,6 +174,8 @@ class CallFlow(_Strict):
     pauses: Optional[FlowPauses] = None  # None = DEFAULT pause lengths (flows saved before pauses existed)
     # Spoken word for word right after the greeting while CALL_RECORDING_ENABLED; None = no notice.
     recording_notice: Optional[str] = Field(None, max_length=300)
+    # Identity question / re-ask spoken by the system; None = the built-in lines.
+    identity: Optional[FlowIdentity] = None
 
     @field_validator("recording_notice")
     @classmethod

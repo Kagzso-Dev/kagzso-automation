@@ -106,6 +106,29 @@ describe("Voice Call Flows layout", () => {
     }
   });
 
+  it("identity question: empty by default (built-in line shown), editable, and in the Live preview", async () => {
+    const preview = responses["/api/call-flows/preview"] as Record<string, unknown>;
+    preview.identity_question = "Am I speaking with Ragul, sir?";
+    preview.identity_reask = "Sorry, am I speaking with Ragul?";
+    try {
+      renderPage();
+      fireEvent.click(await screen.findByText("Thaara natural"));
+      const question = (await screen.findByLabelText(/Identity question/)) as HTMLInputElement;
+      const reask = screen.getByLabelText(/asked once more/) as HTMLInputElement;
+      expect(question.value).toBe(""); // old flows keep the built-in lines
+      expect(question.placeholder).toBe("Am I speaking with {{customer_name}}, {{title_to_use}}?");
+      expect(reask.placeholder).toBe("Sorry, am I speaking with {{customer_name}}?");
+      fireEvent.change(question, { target: { value: "Am I speaking with {{customer_name}}? This is Thaara." } });
+      expect(question.value).toBe("Am I speaking with {{customer_name}}? This is Thaara.");
+      expect(screen.getByRole("button", { name: /Save draft/ }).hasAttribute("disabled")).toBe(false);
+      await waitFor(() => expect(screen.getByText("“Am I speaking with Ragul, sir?”")).toBeTruthy());
+      expect(screen.getByText("Then the system asks")).toBeTruthy();
+    } finally {
+      delete preview.identity_question;
+      delete preview.identity_reask;
+    }
+  });
+
   it("shows the flow list and no editor before a flow is selected", async () => {
     renderPage();
     expect(await screen.findByText("Thaara natural")).toBeTruthy();

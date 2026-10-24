@@ -283,6 +283,20 @@ def greeting_needs_name(first_message: str) -> bool:
             or identity_after_greeting(first_message))
 
 
+def identity_lines(variables: Mapping[str, Any], question: Optional[str] = None,
+                   reask: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+    """The identity question and its re-ask as spoken: a call flow's own lines (templates) when it
+    has them, else IDENTITY_QUESTION / IDENTITY_REASK. (None, None) when the customer has no name."""
+    safe = safe_variables(variables)
+    name = safe["customer_name"]
+    if not name:
+        return None, None
+    q = (render_first_message(question, variables) if question
+         else render_first_message(IDENTITY_QUESTION.format(name=name, title=safe["title_to_use"]), {}))
+    r = render_first_message(reask, variables) if reask else IDENTITY_REASK.format(name=name)
+    return q or None, r or None
+
+
 def identity_after_greeting(first_message: Optional[str]) -> bool:
     """The opening is a time-of-day greeting that doesn't name the customer, so the
     identity question (IDENTITY_QUESTION) follows the customer's first reply."""
@@ -549,6 +563,10 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
                          "flow_silence_closing": resolved.flow.silence.closing}
             if resolved.flow.recording_notice:
                 flow_vars["flow_recording_notice"] = resolved.flow.recording_notice
+            if resolved.flow.identity is not None:  # else the built-in identity lines
+                flow_vars["flow_identity_question"] = resolved.flow.identity.question
+                if resolved.flow.identity.reask:
+                    flow_vars["flow_identity_reask"] = resolved.flow.identity.reask
             if resolved.flow.pauses is not None:  # else the default pause lengths
                 flow_vars.update({f"flow_pause_{k}": str(v) for k, v in resolved.flow.pauses.model_dump().items()})
             time_limit = min(resolved.flow.limits.max_duration_sec, cfg.MAX_CALL_DURATION_SECONDS)
@@ -798,6 +816,9 @@ class CallContextData:
     silence_closing: Optional[str] = None
     # Call-flow recording notice (already rendered); spoken after the greeting while recording is on.
     recording_notice: Optional[str] = None
+    # Call-flow identity question / re-ask (templates, see identity_lines); None = IDENTITY_QUESTION / IDENTITY_REASK.
+    identity_question: Optional[str] = None
+    identity_reask: Optional[str] = None
     answered_at: Optional[datetime] = None  # UTC, from the answer webhook (timing log only)
 
 
@@ -1406,14 +1427,10 @@ class CallSession:
         return opening_line(self.ctx.first_message or "", self.ctx.variables)
 
     def identity_reask_text(self) -> Optional[str]:
-        name = safe_variables(self.ctx.variables)["customer_name"]
-        return IDENTITY_REASK.format(name=name) if name else None
+        return identity_lines(self.ctx.variables, self.ctx.identity_question, self.ctx.identity_reask)[1]
 
     def identity_question_text(self) -> Optional[str]:
-        safe = safe_variables(self.ctx.variables)
-        if not safe["customer_name"]:
-            return None
-        return render_first_message(IDENTITY_QUESTION.format(name=safe["customer_name"], title=safe["title_to_use"]), {})
+        return identity_lines(self.ctx.variables, self.ctx.identity_question, self.ctx.identity_reask)[0]
 
     def _last_assistant_line(self) -> Optional[str]:
         last = self.history[-1] if self.history else None
@@ -2186,5 +2203,7 @@ async def load_call_context(call_id: str) -> Optional[CallContextData]:
             silence_closing=flow_lines.get("closing"),
             recording_notice=render_first_message(variables["flow_recording_notice"], variables) or None
             if variables.get("flow_recording_notice") else None,
+            identity_question=variables.get("flow_identity_question") or None,
+            identity_reask=variables.get("flow_identity_reask") or None,
             answered_at=call.answered_at,
         )

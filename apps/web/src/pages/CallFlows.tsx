@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CALL_FLOW_BASES,
+  CALL_FLOW_DEFAULT_IDENTITY,
   CALL_FLOW_MAX_PAUSE_MS,
   CALL_FLOW_PAUSE_DEFAULTS,
   CALL_FLOW_PAUSE_MARKERS,
@@ -605,6 +606,12 @@ function CallFlowEditor({
         if (b && !isLockedBlock(b)) b.text = value;
       }
     });
+  // Both identity lines empty = no `identity` (the built-in lines, and the flow keeps its old shape).
+  const setIdentity = (question: string, reask: string) =>
+    update((f) => {
+      if (!question.trim() && !reask.trim()) delete f.identity;
+      else f.identity = { question, ...(reask.trim() ? { reask } : {}) };
+    });
   const bind = (key: FieldKey) => ({
     value: getField(key),
     onChange: (e: { target: { value: string } }) => setField(key, e.target.value),
@@ -767,6 +774,40 @@ function CallFlowEditor({
           If it uses {"{{name}}"} or {"{{customer_name}}"}, customers without a name hear “Hello, good day.” instead. Keep the
           “Greeting” blocks below consistent with this line.
         </p>
+
+        <div className="mb-5 grid gap-4 sm:grid-cols-2">
+          <div className="min-w-0">
+            <label className="label" htmlFor="identity-question">
+              Identity question (spoken by the system after a time-of-day greeting)
+            </label>
+            <input
+              id="identity-question"
+              className="input"
+              maxLength={200}
+              placeholder={CALL_FLOW_DEFAULT_IDENTITY.question}
+              value={form.identity?.question ?? ""}
+              onChange={(e) => setIdentity(e.target.value, form.identity?.reask ?? "")}
+            />
+          </div>
+          <div className="min-w-0">
+            <label className="label" htmlFor="identity-reask">
+              If they only say “Hello”: asked once more
+            </label>
+            <input
+              id="identity-reask"
+              className="input"
+              maxLength={200}
+              placeholder={CALL_FLOW_DEFAULT_IDENTITY.reask}
+              value={form.identity?.reask ?? ""}
+              onChange={(e) => setIdentity(form.identity?.question ?? "", e.target.value)}
+            />
+          </div>
+          <p className="text-xs text-slate-550 sm:col-span-2">
+            Used only when the greeting doesn't name the customer (for example “Hi {"{{title_to_use}}"}, {"{{time_greeting}}"}.”).
+            Must contain {"{{customer_name}}"}; skipped when the customer has no name. Empty = the built-in line shown in grey.
+            The “First turn” block below is only instructions for the AI and doesn't change these spoken lines.
+          </p>
+        </div>
 
         <div className="mb-4 flex flex-wrap gap-1 rounded-lg bg-surface-muted p-1">
           {TABS.map((t) => (
@@ -1103,6 +1144,17 @@ function PreviewPanel({ definition, valid }: { definition: CallFlowDefinition; v
         <div className={`text-sm ${preview.isFetching ? "opacity-60" : ""}`}>
           <div className="label">Greeting</div>
           <p className="mb-2 rounded-lg bg-surface-muted px-3 py-2">“{withPauseTags(p.greeting, definition.pauses)}”</p>
+          {p.identity_question && (
+            <>
+              <div className="label">Then the system asks</div>
+              <p className="mb-1 rounded-lg bg-surface-muted px-3 py-2">“{withPauseTags(p.identity_question, definition.pauses)}”</p>
+              {p.identity_reask && (
+                <p className="mb-2 rounded-lg bg-surface-muted px-3 py-2 text-slate-550">
+                  If they only say “Hello”: “{withPauseTags(p.identity_reask, definition.pauses)}”
+                </p>
+              )}
+            </>
+          )}
           <div className="label">If the customer is silent</div>
           <p className="mb-1 rounded-lg bg-surface-muted px-3 py-2">“{withPauseTags(p.silence_reprompt, definition.pauses)}”</p>
           <p className="mb-2 rounded-lg bg-surface-muted px-3 py-2">“{withPauseTags(p.silence_closing, definition.pauses)}”</p>
