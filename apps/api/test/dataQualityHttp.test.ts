@@ -103,6 +103,7 @@ vi.mock("../src/queue/queues.js", async (orig) => ({
 /* ---------------------------------------------------------------- fake local Ollama */
 
 let ollamaUp = true;
+let rateLimitNext = false; // the next generation answers 429 "too many requests"
 const prompts: string[] = [];
 let ollama: Server;
 let ollamaBase = "";
@@ -128,6 +129,12 @@ beforeAll(async () => {
         return res.end(JSON.stringify({ error: "server is starting" }));
       }
       if (req.url === "/api/tags") return res.end(JSON.stringify({ models: [{ name: "llama3.2:latest" }] }));
+      if (rateLimitNext) {
+        rateLimitNext = false;
+        res.statusCode = 429;
+        res.setHeader("retry-after", "20");
+        return res.end(JSON.stringify({ error: "too many requests" }));
+      }
       const { prompt } = JSON.parse(body) as { prompt: string };
       prompts.push(prompt);
       res.end(JSON.stringify({ response: JSON.stringify({ score: 80, issues: ["looks real"] }) }));
@@ -166,6 +173,7 @@ beforeEach(() => {
   outbound = [];
   ollamaUp = true;
   liveRun = false;
+  rateLimitNext = false;
 });
 afterEach(() => {
   // The rule for every test: the server talked to nothing but the local Ollama.
@@ -215,7 +223,7 @@ describe("the 20-row file with Ollama running", () => {
     const res = await uploadFixture();
     expect(res.status).toBe(201);
     const { job: created } = (await res.json()) as { job: Row };
-    expect(created).toMatchObject({ ...DQ_EXPECTED, status: "RUNNING", aiStatus: "pending", aiModel: "llama3.2" });
+    expect(created).toMatchObject({ ...DQ_EXPECTED, status: "RUNNING", aiStatus: "pending", aiModel: "llama3.2 (Ollama)" });
     expect(enqueued).toEqual([{ jobId: created.id, runToken: created.runToken }]);
 
     expect(await drain(enqueued[0]!)).toEqual({ done: true });
@@ -264,8 +272,8 @@ describe("the 20-row file with Ollama running", () => {
 describe("Ollama not available", () => {
   it("runs only the standard checks and says so", async () => {
     ollamaUp = false;
-    const status = (await (await call("/api/data-quality/status")).json()) as { ollama: Row };
-    expect(status.ollama).toMatchObject({ configured: true, available: false });
+    const status = (await (await call("/api/data-quality/status")).json()) as { ai: Row };
+    expect(status.ai).toMatchObject({ provider: "ollama", configured: true, available: false });
     const { job: created } = (await (await uploadFixture()).json()) as { job: Row };
     expect(created).toMatchObject({ ...DQ_EXPECTED, status: "DONE", aiStatus: "unavailable" });
     expect(created.note).toMatch(/^Ollama not available: Ollama 503/);
@@ -278,7 +286,7 @@ describe("Ollama not available", () => {
   it("Ollama going down mid-job skips the rest and keeps the checks", async () => {
     await uploadFixture();
     ollamaUp = false;
-    expect(await drain(enqueued[0]!)).toEqual({ stopped: "ollama unavailable" });
+    expect(await drain(enqueued[0]!)).toEqual({ stopped: "ai unavailable" });
     expect(job()).toMatchObject({ status: "DONE", aiStatus: "unavailable" });
     expect(records().filter((r) => r.aiState === "PENDING")).toHaveLength(0);
     expect(prompts).toHaveLength(0);
@@ -286,6 +294,16 @@ describe("Ollama not available", () => {
 });
 
 describe("background job controls", () => {
+  it("too many requests: waits and tries the same row again, without counting a failure", async () => {
+    await uploadFixture();
+    rateLimitNext = true;
+    expect(await drain(enqueued[0]!)).toBe("waiting"); // deferred ~20s (Retry-After)
+    expect(job()).toMatchObject({ status: "RUNNING", aiFailures: 0, aiDone: 0, waitingReason: expect.stringMatching(/rate limit/) });
+    expect(records().find((r) => r.rowIndex === 0)!.aiState).toBe("PENDING");
+    expect(await drain(enqueued[0]!)).toEqual({ done: true });
+    expect(job()).toMatchObject({ status: "DONE", aiDone: 14, aiFailures: 0, waitingReason: null });
+  });
+
   it("waits while live AI calls run, then goes on", async () => {
     await uploadFixture();
     liveRun = true;

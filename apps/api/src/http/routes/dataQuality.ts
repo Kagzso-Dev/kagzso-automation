@@ -1,8 +1,9 @@
 // Data Quality (admin only). Writes only data_quality_jobs / data_quality_records: no contact,
 // WhatsApp contact, AI call customer, queue, call flow, template or history row is changed, and
-// nothing is called or sent. AI scoring uses the local Ollama server only (services/ollama.ts).
+// nothing is called or sent. The AI score uses the one service picked by DATA_QUALITY_AI_PROVIDER
+// (local Ollama, Groq or Gemini; services/dataQualityAi.ts), sent a row's name and business name only.
 //
-//   GET    /api/data-quality/status              Ollama available? live calls running?
+//   GET    /api/data-quality/status              AI service available? live calls running?
 //   GET    /api/data-quality/jobs                recent jobs
 //   POST   /api/data-quality/jobs                upload .csv/.xlsx → standard checks + staging job
 //   GET    /api/data-quality/jobs/:id            one job with its rows (?status=VALID|…)
@@ -25,7 +26,7 @@ import { aiCallsConfig } from "../../config/aiCalls.js";
 import { aiCallFormatFromFilename, readAiCallSheet } from "../../domain/aiCallImport.js";
 import { createDataQualityJob, detectDataQualityColumns, liveCallsRunning, overallScore } from "../../domain/dataQuality.js";
 import { enqueueDataQuality } from "../../queue/queues.js";
-import { checkOllama } from "../../services/ollama.js";
+import { checkAi } from "../../services/dataQualityAi.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
 import { badRequest, conflict, notFound, wrap } from "../errors.js";
 
@@ -60,8 +61,8 @@ dataQualityRouter.get(
   "/status",
   readLimiter,
   wrap(async (_req, res) => {
-    const [ollama, liveCalls] = await Promise.all([checkOllama(), liveCallsRunning()]);
-    res.json({ ollama, liveCalls });
+    const [ai, liveCalls] = await Promise.all([checkAi(), liveCallsRunning()]);
+    res.json({ ai, liveCalls });
   }),
 );
 
@@ -94,13 +95,13 @@ dataQualityRouter.post(
     if (!mapping.phone) {
       throw badRequest(`No phone column found. Name one of the columns "Phone" or "Mobile". Columns in the file: ${sheet.headers.join(", ")}`);
     }
-    const ollama = await checkOllama();
+    const ai = await checkAi();
     const job = await createDataQualityJob({
       filename: req.file.originalname,
       rows: sheet.rows,
       mapping,
       byEmail: req.user!.email,
-      ollama,
+      ai,
       defaultCountryCode: aiCallsConfig.defaultCountryCode,
     });
     logger.info(

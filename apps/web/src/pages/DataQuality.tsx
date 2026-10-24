@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import {
+  AI_PROVIDER_LABELS,
   downloadDataQualityExport,
   EXCLUDED_LABELS,
   issueLabel,
@@ -25,7 +26,7 @@ const REVIEW_TONE: Record<DqReview, BadgeTone> = { PENDING: "neutral", APPROVED:
 type Filter = "ALL" | DqRecordStatus;
 
 function aiLine(job: DqJob): string {
-  if (job.aiStatus === "unavailable") return job.note ?? "Ollama not available";
+  if (job.aiStatus === "unavailable") return job.note ?? "AI not available";
   if (job.aiStatus === "cancelled") return `Cancelled after ${job.aiDone} of ${job.valid}`;
   if (job.aiStatus === "done") return job.valid ? `Scored ${job.aiDone} of ${job.valid}` : "Nothing to score";
   return `${job.aiDone} of ${job.valid} scored${job.aiFailures ? `, ${job.aiFailures} failed` : ""}`;
@@ -93,7 +94,7 @@ export function DataQualityPage() {
     }
   };
 
-  const ollama = status.data?.ollama;
+  const ai = status.data?.ai;
   return (
     <div>
       <PageHeader
@@ -119,14 +120,15 @@ export function DataQualityPage() {
         }
       />
 
-      {ollama && !ollama.available && (
+      {ai && !ai.available && (
         <p className="mb-3 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn">
-          Ollama not available{ollama.reason ? `: ${ollama.reason}` : ""}. Only the standard checks run.
+          {AI_PROVIDER_LABELS[ai.provider]} not available{ai.reason ? `: ${ai.reason}` : ""}. Only the standard checks run.
         </p>
       )}
-      {ollama?.available && (
+      {ai?.available && (
         <p className="mb-3 text-xs text-slate-550">
-          AI score: {ollama.model} on this server's Ollama. Only the name and business name are sent to it; phone numbers and emails are never sent.
+          AI score: {ai.model} {ai.provider === "ollama" ? "on this server's Ollama" : `via ${AI_PROVIDER_LABELS[ai.provider]}`}. Only the name and business
+          name are sent to it; phone numbers and emails are never sent.
           {status.data?.liveCalls ? " Scoring is paused while live AI calls run." : ""}
         </p>
       )}

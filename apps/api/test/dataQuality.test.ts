@@ -9,8 +9,8 @@ import {
   parseAiAnswer,
   type DqLookups,
 } from "../src/domain/dataQuality.js";
-import { isLoopbackHost, readOllamaSettings } from "../src/config/dataQuality.js";
-import { OLLAMA_PATHS, ollamaUrl } from "../src/services/ollama.js";
+import { isLoopbackHost, readAiSettings } from "../src/config/dataQuality.js";
+import { aiUrl, allowedPaths, generateJson } from "../src/services/dataQualityAi.js";
 import { exportCell } from "../src/http/routes/dataQuality.js";
 import {
   DQ_DO_NOT_CALL,
@@ -23,8 +23,8 @@ import {
   dqSheetRows,
 } from "./dataQualityFixture.js";
 
-// Data Quality: the standard checks on the 20-row test file, the Ollama-only guard, the prompt
-// (no phone / email), and the export. No DB, no network.
+// Data Quality: the standard checks on the 20-row test file, the AI service guard (Ollama / Groq /
+// Gemini), the prompt (no phone / email), and the export. No DB; fetch is faked where used.
 
 const lookups = (): DqLookups => ({
   doNotCall: new Set([DQ_DO_NOT_CALL]),
@@ -93,30 +93,88 @@ describe("standard checks on the 20-row file", () => {
   });
 });
 
-describe("Ollama only", () => {
-  const local = readOllamaSettings({ OLLAMA_BASE_URL: "http://127.0.0.1:11434", OLLAMA_MODEL: "llama3.2" });
+describe("AI service guard (one service, fixed address, name + business only)", () => {
+  const local = readAiSettings({ OLLAMA_BASE_URL: "http://127.0.0.1:11434", OLLAMA_MODEL: "llama3.2" });
+  const groq = readAiSettings({ DATA_QUALITY_AI_PROVIDER: "groq", GROQ_API_KEY: "gsk_test_key", GROQ_MODEL: "llama-3.1-8b-instant" });
+  const gemini = readAiSettings({ DATA_QUALITY_AI_PROVIDER: "gemini", GEMINI_API_KEY: "gem_test_key", GEMINI_MODEL: "gemini-2.5-flash" });
 
-  it("accepts only this machine", () => {
-    expect(local).toMatchObject({ origin: "http://127.0.0.1:11434", model: "llama3.2", problem: null });
-    expect(readOllamaSettings({ OLLAMA_BASE_URL: "http://localhost:11434", OLLAMA_MODEL: "m" }).problem).toBeNull();
+  it("Ollama is accepted only on this machine; it is the default service", () => {
+    expect(local).toMatchObject({ provider: "ollama", origin: "http://127.0.0.1:11434", model: "llama3.2", problem: null, minGapMs: 250 });
+    expect(readAiSettings({ OLLAMA_BASE_URL: "http://localhost:11434", OLLAMA_MODEL: "m" }).problem).toBeNull();
     for (const url of ["https://api.openai.com", "http://10.0.0.5:11434", "http://ollama.example.com:11434", "http://169.254.169.254"]) {
-      expect(readOllamaSettings({ OLLAMA_BASE_URL: url, OLLAMA_MODEL: "m" })).toMatchObject({ origin: null, problem: expect.stringMatching(/this server/) });
+      expect(readAiSettings({ OLLAMA_BASE_URL: url, OLLAMA_MODEL: "m" })).toMatchObject({ origin: null, problem: expect.stringMatching(/this server/) });
     }
     expect(isLoopbackHost("[::1]")).toBe(true);
     expect(isLoopbackHost("127.0.0.1.evil.com")).toBe(false);
   });
 
-  it("not configured = AI off, never a crash", () => {
-    expect(readOllamaSettings({}).problem).toBe("OLLAMA_BASE_URL is not set");
-    expect(readOllamaSettings({ OLLAMA_BASE_URL: "http://127.0.0.1:11434" }).problem).toBe("OLLAMA_MODEL is not set");
-    expect(() => ollamaUrl("/api/tags", readOllamaSettings({}))).toThrow(/not set/);
+  it("Groq and Gemini use their own fixed address; the key and model are required", () => {
+    expect(groq).toMatchObject({ provider: "groq", origin: "https://api.groq.com", model: "llama-3.1-8b-instant", problem: null, minGapMs: 2500 });
+    expect(gemini).toMatchObject({ provider: "gemini", origin: "https://generativelanguage.googleapis.com", problem: null });
+    expect(readAiSettings({ DATA_QUALITY_AI_PROVIDER: "groq", GROQ_MODEL: "m" }).problem).toBe("GROQ_API_KEY is not set");
+    expect(readAiSettings({ DATA_QUALITY_AI_PROVIDER: "gemini", GEMINI_API_KEY: "k" }).problem).toBe("GEMINI_MODEL is not set");
+    expect(readAiSettings({ DATA_QUALITY_AI_PROVIDER: "gemini", GEMINI_API_KEY: "k", GEMINI_MODEL: "../x" }).problem).toMatch(/not a valid model/);
+    expect(readAiSettings({ DATA_QUALITY_AI_PROVIDER: "openai" }).problem).toMatch(/must be one of: ollama, groq, gemini/);
   });
 
-  it("builds URLs only for the configured origin and the two Ollama paths", () => {
-    expect(OLLAMA_PATHS).toEqual(["/api/tags", "/api/generate"]);
-    expect(ollamaUrl("/api/generate", local)).toBe("http://127.0.0.1:11434/api/generate");
-    for (const path of ["/api/pull", "/api/chat", "//evil.com/api/generate", "https://evil.com/api/generate", "/api/generate?x=1"]) {
-      expect(() => ollamaUrl(path, local)).toThrow();
+  it("not configured = AI off, never a crash", () => {
+    expect(readAiSettings({}).problem).toBe("OLLAMA_BASE_URL is not set");
+    expect(readAiSettings({ OLLAMA_BASE_URL: "http://127.0.0.1:11434" }).problem).toBe("OLLAMA_MODEL is not set");
+    expect(() => aiUrl("/api/tags", readAiSettings({}))).toThrow(/not set/);
+  });
+
+  it("builds URLs only for the chosen service and its two paths", () => {
+    expect(allowedPaths("ollama", "m")).toEqual(["/api/tags", "/api/generate"]);
+    expect(aiUrl("/api/generate", local)).toBe("http://127.0.0.1:11434/api/generate");
+    expect(aiUrl("/openai/v1/chat/completions", groq)).toBe("https://api.groq.com/openai/v1/chat/completions");
+    expect(aiUrl("/v1beta/models/gemini-2.5-flash:generateContent", gemini)).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+    );
+    for (const [s, path] of [
+      [local, "/api/pull"], [local, "//evil.com/api/generate"], [local, "/api/generate?x=1"],
+      [groq, "/api/generate"], [groq, "/openai/v1/files"], [groq, "https://evil.com/openai/v1/chat/completions"],
+      [gemini, "/v1beta/models/other-model:generateContent"], [gemini, "/v1beta/files"],
+    ] as const) {
+      expect(() => aiUrl(path, s)).toThrow();
+    }
+  });
+
+  it("Groq and Gemini requests: right address, key in a header (never the URL), prompt without phone / email", async () => {
+    const seen: { url: string; headers: Record<string, string>; body: string }[] = [];
+    const real = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
+      seen.push({ url, headers: init.headers as Record<string, string>, body: String(init.body) });
+      const answer = JSON.stringify({ score: 92, issues: [] });
+      const body = url.includes("groq") ? { choices: [{ message: { content: answer } }] } : { candidates: [{ content: { parts: [{ text: answer }] } }] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      const prompt = aiPrompt({ name: "Deepa", businessName: "Deepa Bakery" });
+      expect(await generateJson(prompt, groq)).toEqual({ score: 92, issues: [] });
+      expect(await generateJson(prompt, gemini)).toEqual({ score: 92, issues: [] });
+    } finally {
+      globalThis.fetch = real;
+    }
+    expect(seen.map((r) => r.url)).toEqual([
+      "https://api.groq.com/openai/v1/chat/completions",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+    ]);
+    expect(seen[0]!.headers.Authorization).toBe("Bearer gsk_test_key");
+    expect(seen[1]!.headers["x-goog-api-key"]).toBe("gem_test_key");
+    for (const r of seen) {
+      expect(r.url).not.toMatch(/key/);
+      expect(r.body).toContain("Deepa Bakery");
+      expect(r.body).not.toMatch(/9876|@|phone|email/i);
+    }
+  });
+
+  it("too many requests → wait and retry (not a failure)", async () => {
+    const real = globalThis.fetch;
+    globalThis.fetch = (async () => new Response("{}", { status: 429, headers: { "retry-after": "12" } })) as typeof fetch;
+    try {
+      await expect(generateJson("x JSON", groq)).rejects.toMatchObject({ name: "AiError", retryAfterMs: 12_000 });
+    } finally {
+      globalThis.fetch = real;
     }
   });
 
@@ -127,7 +185,7 @@ describe("Ollama only", () => {
     expect(p).not.toMatch(/9876|@|phone|email/i);
   });
 
-  it("reads the model's answer defensively", () => {
+  it("reads the model answer defensively", () => {
     expect(parseAiAnswer({ score: 87.6, issues: ["name ok", "  "] })).toEqual({ score: 88, notes: "name ok" });
     expect(parseAiAnswer({ score: "140" })).toEqual({ score: 100, notes: null });
     expect(() => parseAiAnswer({ issues: [] })).toThrow();
@@ -136,15 +194,18 @@ describe("Ollama only", () => {
     expect(overallScore(null, 90)).toBeNull();
   });
 
-  it("source guard: only services/ollama.ts opens a network request, and no module reaches another service", () => {
-    const files = ["config/dataQuality.ts", "services/ollama.ts", "domain/dataQuality.ts", "queue/dataQuality.ts", "http/routes/dataQuality.ts"];
-    const forbidden = /voiceBackend|services\/whatsapp|provider\/|smtp|nodemailer|twilio|plivo|sarvam|openai|anthropic|gemini|googleapis|axios|node:https?['"]|undici/i;
+  it("source guard: only services/dataQualityAi.ts opens a network request, and no module reaches another service", () => {
+    const files = ["config/dataQuality.ts", "services/dataQualityAi.ts", "domain/dataQuality.ts", "queue/dataQuality.ts", "http/routes/dataQuality.ts"];
+    const forbidden = /voiceBackend|services\/whatsapp|provider\/|smtp|nodemailer|twilio|plivo|sarvam|openai|anthropic|axios|node:https?['"]|undici/i;
+    const read = (f: string) => readFileSync(fileURLToPath(new URL(`../src/${f}`, import.meta.url)), "utf8");
     for (const f of files) {
-      const src = readFileSync(fileURLToPath(new URL(`../src/${f}`, import.meta.url)), "utf8");
-      const imports = [...src.matchAll(/from\s+["']([^"']+)["']/g)].map((m) => m[1]!);
+      const imports = [...read(f).matchAll(/from\s+["']([^"']+)["']/g)].map((m) => m[1]!);
       expect([f, imports.filter((i) => forbidden.test(i))]).toEqual([f, []]);
-      expect([f, /\bfetch\(/.test(src)]).toEqual([f, f === "services/ollama.ts"]);
+      expect([f, /\bfetch\(/.test(read(f))]).toEqual([f, f === "services/dataQualityAi.ts"]);
     }
+    // The only hosts written anywhere in the module are the two cloud services' fixed addresses.
+    const hosts = files.flatMap((f) => [...read(f).matchAll(/https?:\/\/[a-z0-9.-]+/gi)].map((m) => m[0]));
+    expect([...new Set(hosts)].sort()).toEqual(["https://api.groq.com", "https://generativelanguage.googleapis.com"]);
   });
 });
 

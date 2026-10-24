@@ -1,7 +1,7 @@
 // Data Quality: standard checks on an uploaded file, the staging rows, and the prompt for the
-// optional AI score from the local Ollama server. The pure functions at the top are unit-tested;
-// the DB helpers below only READ existing tables (contacts, WhatsApp contacts, AI call customers,
-// call logs) and only WRITE data_quality_jobs / data_quality_records.
+// optional AI score (local Ollama, Groq or Gemini — DATA_QUALITY_AI_PROVIDER). The pure functions
+// at the top are unit-tested; the DB helpers below only READ existing tables (contacts, WhatsApp
+// contacts, AI call customers, call logs) and only WRITE data_quality_jobs / data_quality_records.
 
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
@@ -9,7 +9,8 @@ import { normalizePhoneE164 } from "@dispatch/shared";
 import { prisma } from "../prisma.js";
 import { loadDoNotCallPhones } from "./aiCalls.js";
 import { enqueueDataQuality } from "../queue/queues.js";
-import type { OllamaHealth } from "../services/ollama.js";
+import { PROVIDER_LABELS } from "../config/dataQuality.js";
+import type { AiHealth } from "../services/dataQualityAi.js";
 
 /* ------------------------------------------------------------------ columns */
 
@@ -70,7 +71,7 @@ export interface DqRecordDraft {
   issues: string[];
   flags: string[];
   ruleScore: number | null;
-  /** PENDING = waits for the AI score; NONE = never sent to Ollama. */
+  /** PENDING = waits for the AI score; NONE = never sent to the AI service. */
   aiState: "PENDING" | "NONE";
 }
 
@@ -115,7 +116,7 @@ export function ruleScoreFor(issues: string[]): number {
 /**
  * Check every row, in file order. Per row: unusable phone → INVALID; a number on the
  * do-not-call / not interested / wrong person lists → EXCLUDED (never scored, never sent to
- * Ollama); a number already seen earlier in the file → DUPLICATE; otherwise VALID with a
+ * the AI service); a number already seen earlier in the file → DUPLICATE; otherwise VALID with a
  * rule score and the AI score still to come.
  */
 export function checkRows(
@@ -173,7 +174,7 @@ export function checkRows(
   return { records, counts };
 }
 
-/* ------------------------------------------------------------------ AI score (local Ollama only) */
+/* ------------------------------------------------------------------ AI score (one service, name + business only) */
 
 /**
  * The prompt for one row. Only the name and business name are sent: never the phone number
@@ -236,7 +237,7 @@ export async function loadLookups(phones: string[], emails: string[], defaultCou
 
 /**
  * Check a parsed file and store it as a staging job. AI scoring runs in the background
- * (queue/dataQuality.ts) when Ollama is available and there is something to score;
+ * (queue/dataQuality.ts) when the AI service is available and there is something to score;
  * otherwise the job is DONE at once with the standard checks only.
  */
 export async function createDataQualityJob(input: {
@@ -244,7 +245,7 @@ export async function createDataQualityJob(input: {
   rows: Record<string, string>[];
   mapping: DqMapping;
   byEmail: string | null;
-  ollama: OllamaHealth;
+  ai: AiHealth;
   defaultCountryCode: string;
 }) {
   const col = (r: Record<string, string>, f: DqField) => (input.mapping[f] ? (r[input.mapping[f]!] ?? "") : "");
@@ -253,7 +254,8 @@ export async function createDataQualityJob(input: {
   const lookups = await loadLookups(phones, emails, input.defaultCountryCode);
   const { records, counts } = checkRows(input.rows, input.mapping, lookups, input.defaultCountryCode);
 
-  const aiRuns = input.ollama.available && counts.valid > 0;
+  const label = PROVIDER_LABELS[input.ai.provider];
+  const aiRuns = input.ai.available && counts.valid > 0;
   const runToken = aiRuns ? randomUUID() : null;
   const job = await prisma.dataQualityJob.create({
     data: {
@@ -261,9 +263,9 @@ export async function createDataQualityJob(input: {
       mapping: input.mapping as unknown as Prisma.InputJsonValue,
       ...counts,
       status: aiRuns ? "RUNNING" : "DONE",
-      aiStatus: aiRuns ? "pending" : input.ollama.available ? "done" : "unavailable",
-      aiModel: input.ollama.model,
-      note: input.ollama.available ? null : `Ollama not available: ${input.ollama.reason ?? "unknown"}`.slice(0, 300),
+      aiStatus: aiRuns ? "pending" : input.ai.available ? "done" : "unavailable",
+      aiModel: input.ai.model ? `${input.ai.model} (${label})`.slice(0, 100) : null,
+      note: input.ai.available ? null : `${label} not available: ${input.ai.reason ?? "unknown"}`.slice(0, 300),
       runToken,
       createdByEmail: input.byEmail,
       finishedAt: aiRuns ? null : new Date(),

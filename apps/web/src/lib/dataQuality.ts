@@ -46,8 +46,12 @@ export interface DqRecord {
   score: number | null;
 }
 
+export type AiProvider = "ollama" | "groq" | "gemini";
+export const AI_PROVIDER_LABELS: Record<AiProvider, string> = { ollama: "Ollama", groq: "Groq", gemini: "Gemini" };
+
 export interface DqStatusInfo {
-  ollama: { configured: boolean; available: boolean; model: string | null; reason: string | null };
+  /** The AI service picked by DATA_QUALITY_AI_PROVIDER on the server. */
+  ai: { provider: AiProvider; configured: boolean; available: boolean; model: string | null; reason: string | null };
   liveCalls: boolean;
 }
 
