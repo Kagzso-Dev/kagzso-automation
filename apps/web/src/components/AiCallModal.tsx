@@ -20,7 +20,7 @@ import type {
   AiCallStatus,
   AiCallsConfig,
 } from "../lib/aiCalls";
-import { useCallFlows } from "../lib/callFlows";
+import { initialFlowChoice, rememberedFlowChoice, rememberFlowChoice, unpublishedDraft, useCallFlows } from "../lib/callFlows";
 import { useToast } from "./toast";
 import { Badge, ErrorNote, Modal, Spinner, type BadgeTone } from "./ui";
 
@@ -128,11 +128,24 @@ function SetupFlow({
   const [greetingDelay, setGreetingDelay] = useState(String(AI_CALL_DEFAULT_GREETING_DELAY_SEC));
   const [maxCalls, setMaxCalls] = useState(Math.min(10, config.maxPerRun));
   const [plan, setPlan] = useState<AiCallPlanSummary | null>(null);
-  // "" = the default flow (whatever agent the server is configured with), exactly as before.
-  const [flowId, setFlowId] = useState("");
+  // "" = the default flow (whatever agent the server is configured with). A new window starts
+  // on the last flow picked here, else the most recently published one (initialFlowChoice).
+  const [flowId, setFlowIdState] = useState("");
   const flows = useCallFlows(config.flowEditor);
   const publishedFlows = (flows.data?.items ?? []).filter((f) => f.published);
   const chosenFlow = publishedFlows.find((f) => f.id === flowId) ?? null;
+  const pendingDraft = unpublishedDraft(chosenFlow);
+  const flowPicked = useRef(false);
+  useEffect(() => {
+    if (flowPicked.current || !flows.data) return;
+    flowPicked.current = true;
+    setFlowIdState(initialFlowChoice(publishedFlows, rememberedFlowChoice()));
+  }, [flows.data]); // eslint-disable-line react-hooks/exhaustive-deps
+  const setFlowId = (id: string) => {
+    flowPicked.current = true;
+    setFlowIdState(id);
+    rememberFlowChoice(id);
+  };
   // Where the customers come from: an uploaded file (as before) or the saved AI Call Customers.
   const [source, setSource] = useState<"upload" | "saved">(preselectedCustomerIds?.length ? "saved" : "upload");
   const [savedIds, setSavedIds] = useState<string[] | null>(null);
@@ -581,7 +594,7 @@ function SetupFlow({
         <div className="mb-4 max-w-md">
           <label className="label">Call flow</label>
           <select className="input" value={flowId} onChange={(e) => setFlowId(e.target.value)}>
-            <option value="">Default flow (server default)</option>
+            <option value="">Default flow (server agent, not a Voice Call Flow)</option>
             {publishedFlows.map((f) => (
               <option key={f.id} value={f.id}>
                 {f.name} — v{f.published!.version}
@@ -591,6 +604,17 @@ function SetupFlow({
           <span className="text-xs text-slate-550">
             Only published flows are listed. The version is fixed when the run starts.
           </span>
+          {flowId === "" && publishedFlows.length > 0 && (
+            <p className="mt-1 text-xs text-warn">
+              These calls won't use any flow from Voice Call Flows — pick one above to call with your edited script.
+            </p>
+          )}
+          {chosenFlow && pendingDraft && (
+            <p className="mt-1 text-xs text-warn">
+              {chosenFlow.name} has unpublished changes (draft v{pendingDraft.version}). These calls use the published
+              v{chosenFlow.published!.version} — publish the draft in Voice Call Flows to call with your latest edits.
+            </p>
+          )}
         </div>
       )}
 

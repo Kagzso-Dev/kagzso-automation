@@ -525,7 +525,12 @@ function CallFlowEditor({
   };
   const save = useMutation({
     mutationFn: (definition: CallFlowDefinition) =>
-      api(`/api/call-flows/${flowId}/draft`, { method: "PUT", json: { definition }, notify: "Draft saved" }),
+      api(`/api/call-flows/${flowId}/draft`, {
+        method: "PUT",
+        json: { definition },
+        // Real calls only use published versions: say so, so a saved edit isn't mistaken for live.
+        notify: published ? `Draft saved — real calls keep using v${published.version} until you publish` : "Draft saved",
+      }),
     onSuccess: invalidate,
   });
   const publish = useMutation({

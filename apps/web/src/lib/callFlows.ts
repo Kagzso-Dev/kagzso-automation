@@ -87,3 +87,42 @@ export function useCallFlowCatalog() {
     staleTime: 5 * 60_000,
   });
 }
+
+/* ------------------------------------------------------------ flow for a new AI call run */
+
+/** Stored choice for "Default flow (server agent)" — no flow pinned. */
+export const DEFAULT_FLOW_CHOICE = "default";
+const LAST_FLOW_KEY = "ai-call-last-flow";
+
+export function rememberedFlowChoice(): string | null {
+  try {
+    return localStorage.getItem(LAST_FLOW_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function rememberFlowChoice(flowId: string) {
+  try {
+    localStorage.setItem(LAST_FLOW_KEY, flowId || DEFAULT_FLOW_CHOICE);
+  } catch {
+    /* private window — the choice lasts for this visit */
+  }
+}
+
+/**
+ * The flow a new run starts with ("" = the server's default agent): the last choice
+ * in this browser while that flow is still published, otherwise the most recently
+ * published flow, so edits made in Voice Call Flows are what real calls use.
+ */
+export function initialFlowChoice(published: CallFlowListItem[], remembered: string | null): string {
+  if (remembered === DEFAULT_FLOW_CHOICE) return "";
+  if (remembered && published.some((f) => f.id === remembered)) return remembered;
+  const newest = [...published].sort((a, b) => (b.published?.publishedAt ?? "").localeCompare(a.published?.publishedAt ?? ""))[0];
+  return newest?.id ?? "";
+}
+
+/** The draft holds edits that calls don't use yet (only the published version is called). */
+export function unpublishedDraft(f: CallFlowListItem | null): CallFlowVersionSummary | null {
+  return f?.draft && f.published && f.draft.version > f.published.version ? f.draft : null;
+}
