@@ -10,6 +10,7 @@ export const QUEUE = {
   aiCallRun: "ai-call-run",
   aiCallFollowup: "ai-call-followup",
   whatsappMediaDownload: "whatsapp-media-download",
+  dataQuality: "data-quality",
 } as const;
 
 export interface CampaignDispatchJob {
@@ -119,4 +120,15 @@ export interface WhatsAppMediaDownloadJob {
 
 export function enqueueWhatsAppMediaDownload(job: WhatsAppMediaDownloadJob) {
   return enqueue(QUEUE.whatsappMediaDownload, job, { maxAttempts: 4, dedupeKey: `whatsapp-media:${job.mediaId}` });
+}
+
+/** Data Quality: AI-score one staging job's rows with the local Ollama server, one row per run. */
+export interface DataQualityJobPayload {
+  jobId: string;
+  /** data_quality_jobs.runToken when this run was queued; an older token stops at once. */
+  runToken: string;
+}
+
+export function enqueueDataQuality(job: DataQualityJobPayload) {
+  return enqueue(QUEUE.dataQuality, job, { maxAttempts: 3, dedupeKey: `data-quality:${job.jobId}:${job.runToken}` });
 }

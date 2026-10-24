@@ -38,6 +38,7 @@ import { aiCallCustomersRouter } from "./routes/aiCallCustomers.js";
 import { aiCallFollowupsRouter } from "./routes/aiCallFollowups.js";
 import { historyFilterRouter } from "./routes/historyFilter.js";
 import { sendQueueHistoryRouter } from "./routes/sendQueueHistory.js";
+import { dataQualityRouter } from "./routes/dataQuality.js";
 
 export function createApp() {
   const app = express();
@@ -106,6 +107,7 @@ export function createApp() {
   app.use("/api/ai-call-followups", aiCallFollowupsRouter);
   app.use("/api/send-queue/filter", historyFilterRouter); // read-only "filter new data"
   app.use("/api/send-queue/history", sendQueueHistoryRouter); // read-only "download all history"
+  app.use("/api/data-quality", dataQualityRouter); // admin only; staging tables + local Ollama only
   app.use("/api", callCostByFlowRouter);
   app.use("/api", statsRouter);
 

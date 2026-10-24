@@ -11,6 +11,7 @@ import { processWhatsAppBulkSend } from "./whatsappBulkSend.js";
 import { processAiCallRun } from "./aiCallRun.js";
 import { processAiCallFollowup } from "./aiCallFollowup.js";
 import { processWhatsAppMediaDownload } from "./whatsappMediaDownload.js";
+import { processDataQuality } from "./dataQuality.js";
 import { fanOutCampaign } from "./dispatch.js";
 import { parseContactFile } from "../domain/contactImport.js";
 import { domainAllowed, loadAllowedDomains } from "../domain/allowedDomains.js";
@@ -104,6 +105,16 @@ const whatsappMediaDownloadWorker = new QueueWorker({
   processor: (payload) => processWhatsAppMediaDownload(payload),
 });
 
+/* ----------------------------------------------------- data-quality (AI score via the local Ollama only) */
+
+const dataQualityWorker = new QueueWorker({
+  queue: QUEUE.dataQuality,
+  batch: 1, // one job per tick and one row per job run: never two Ollama requests at once
+  pollMs: 2000,
+  backoffMs: 15_000,
+  processor: (payload) => processDataQuality(payload),
+});
+
 /* ----------------------------------------------------- contact-import (csv / xlsx / pdf) */
 
 const contactImportWorker = new QueueWorker({
@@ -170,5 +181,6 @@ export function startAllWorkers(): QueueWorker[] {
     aiCallRunWorker.start(),
     aiCallFollowupWorker.start(),
     whatsappMediaDownloadWorker.start(),
+    dataQualityWorker.start(),
   ];
 }

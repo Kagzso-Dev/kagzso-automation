@@ -18,10 +18,11 @@ import { CampaignDetailPage } from "./pages/CampaignDetail";
 import { SendQueuePage } from "./pages/SendQueue";
 import { TriggersPage } from "./pages/Triggers";
 import { SettingsPage } from "./pages/Settings";
+import { DataQualityPage } from "./pages/DataQuality";
 import { canSeePath } from "./lib/navAccess";
 import type { ReactNode } from "react";
 
-/** A page editors don't get (lib/navAccess): a typed-in URL goes to the Dashboard instead. */
+/** A page this role doesn't get (lib/navAccess): a typed-in URL goes to the Dashboard instead. */
 function RoleRoute({ path, children }: { path: string; children: ReactNode }) {
   const { user } = useAuth();
   return canSeePath(path, user?.role) ? <>{children}</> : <Navigate to="/" replace />;
@@ -47,6 +48,7 @@ export function App() {
     <Layout>
       <Routes>
         <Route path="/" element={<DashboardPage />} />
+        <Route path="/data-quality" element={<RoleRoute path="/data-quality"><DataQualityPage /></RoleRoute>} />
         <Route path="/insights" element={<InsightsPage />} />
         <Route path="/contacts" element={<ContactsPage />} />
         <Route path="/whatsapp-contacts" element={<WhatsAppContactsPage />} />

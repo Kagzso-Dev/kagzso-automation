@@ -860,3 +860,91 @@ model BrandingSetting {
 
   @@map("branding_settings")
 }
+
+// ---------------------------------------------------------------- Data Quality (staging only)
+// Admin page "Data Quality": an uploaded file is checked (phone, duplicates, do-not-call,
+// not interested, wrong person, name / business / email) and optionally scored by the local
+// Ollama server. Rows live only in these two tables until an admin approves them; nothing here
+// writes to contacts, WhatsApp contacts, AI call customers, queues, flows or history.
+// New tables only — no existing table is altered (rollback: 0027_data_quality/down.sql).
+enum DataQualityJobStatus {
+  RUNNING
+  PAUSED
+  CANCELLED
+  DONE
+}
+
+enum DataQualityRecordStatus {
+  VALID
+  INVALID
+  DUPLICATE
+  EXCLUDED
+}
+
+enum DataQualityReview {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model DataQualityJob {
+  id             String               @id @default(cuid())
+  filename       String               @db.VarChar(200)
+  status         DataQualityJobStatus @default(RUNNING)
+  // Detected columns: { name, phone, business, email } → header in the file (or null).
+  mapping        Json
+  total          Int                  @default(0)
+  valid          Int                  @default(0)
+  invalid        Int                  @default(0)
+  duplicates     Int                  @default(0)
+  excluded       Int                  @default(0)
+  // AI scoring by the local Ollama server: pending | done | unavailable | cancelled.
+  aiStatus       String               @default("pending") @db.VarChar(16)
+  aiModel        String?              @db.VarChar(100)
+  aiDone         Int                  @default(0)
+  aiFailures     Int                  @default(0)
+  // Why AI scoring stopped or never ran ("Ollama not available: ...").
+  note           String?              @db.VarChar(300)
+  // Set while the job waits on its own (live AI calls are running); cleared when it goes on.
+  waitingReason  String?              @db.VarChar(200)
+  // Changes on every start / resume: a queued run carrying an older token stops (no double runs).
+  runToken       String?              @db.VarChar(40)
+  createdByEmail String?              @db.VarChar(191)
+  finishedAt     DateTime?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  records        DataQualityRecord[]
+
+  @@index([createdAt])
+  @@map("data_quality_jobs")
+}
+
+model DataQualityRecord {
+  id             String                  @id @default(cuid())
+  jobId          String
+  rowIndex       Int // 0-based data row in the uploaded file
+  name           String?                 @db.VarChar(160)
+  phoneRaw       String?                 @db.VarChar(64)
+  phone          String?                 @db.VarChar(20) // E.164, null when the number is not usable
+  businessName   String?                 @db.VarChar(200)
+  email          String?                 @db.VarChar(191)
+  status         DataQualityRecordStatus
+  // do_not_call | not_interested | wrong_person (EXCLUDED rows only; they are never scored).
+  excludedReason String?                 @db.VarChar(32)
+  issues         Json // string[] of issue codes (bad_phone, missing_name, …)
+  flags          Json // string[] of notes that are not problems (in_voicecall, in_whatsapp, …)
+  ruleScore      Int? // 0-100 from the standard checks; VALID rows only
+  // PENDING → DONE | ERROR | SKIPPED; NONE for rows that are never sent to Ollama.
+  aiState        String                  @default("NONE") @db.VarChar(16)
+  aiScore        Int?
+  aiNotes        String?                 @db.VarChar(500)
+  review         DataQualityReview       @default(PENDING)
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+  job            DataQualityJob          @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, rowIndex])
+  @@index([jobId, status])
+  @@index([jobId, aiState])
+  @@map("data_quality_records")
+}

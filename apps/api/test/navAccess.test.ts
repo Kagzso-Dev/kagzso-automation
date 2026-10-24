@@ -40,3 +40,13 @@ describe("editor access to the template and call-flow editors", () => {
     }
   });
 });
+
+describe("admin-only pages (Data Quality)", () => {
+  it("only an admin sees /data-quality, in the menu and by URL", () => {
+    expect(canSeePath("/data-quality", "ADMIN")).toBe(true);
+    for (const role of ["EDITOR", undefined, null, "VIEWER"]) expect(canSeePath("/data-quality", role)).toBe(false);
+    const withDq = [{ label: "Main", items: [{ to: "/" }, { to: "/data-quality" }] }, ...NAV.slice(1)];
+    expect(paths(navForRole(withDq, "ADMIN"))).toEqual(["/", "/data-quality", ...paths(NAV).slice(1)]);
+    expect(navForRole(withDq, "EDITOR")).toEqual(navForRole(NAV, "EDITOR")); // editors: exactly as before
+  });
+});

@@ -1,12 +1,16 @@
-// Pages editors don't get: the template and call-flow editors. Admins see everything.
+// Pages editors don't get: the template and call-flow editors, and the admin-only pages. Admins see everything.
 // Used by the sidebar (Layout) and the routes (App), so menu and URL access can't drift.
 // No JSX here, so the rule is unit-tested from the API test suite.
 
 /** Paths hidden from the EDITOR role (menu item and the page itself). */
 export const EDITOR_HIDDEN_PATHS: readonly string[] = ["/templates", "/whatsapp-templates", "/call-flows"];
 
-/** Whether `role` may see the page at `path`. Only EDITOR is restricted; other roles keep everything. */
+/** Paths only ADMIN may see (menu item and the page itself). */
+export const ADMIN_ONLY_PATHS: readonly string[] = ["/data-quality"];
+
+/** Whether `role` may see the page at `path`. EDITOR loses EDITOR_HIDDEN_PATHS; only ADMIN gets ADMIN_ONLY_PATHS. */
 export function canSeePath(path: string, role: string | null | undefined): boolean {
+  if (ADMIN_ONLY_PATHS.includes(path)) return role === "ADMIN";
   return !(role === "EDITOR" && EDITOR_HIDDEN_PATHS.includes(path));
 }
 

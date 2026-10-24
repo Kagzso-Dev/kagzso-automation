@@ -21,11 +21,12 @@ type NavEntry = {
 
 type NavGroup = { label: string; items: NavEntry[] };
 
-const NAV_GROUPS: NavGroup[] = [
+export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Main",
     items: [
       { to: "/", label: "Dashboard", icon: "dashboard", end: true },
+      { to: "/data-quality", label: "Data Quality", icon: "quality" }, // admins only (lib/navAccess)
       { to: "/insights", label: "Insights", icon: "insights", hideKey: "insights" },
       { to: "/lists", label: "Lists", icon: "lists", hideKey: "lists" },
     ],
