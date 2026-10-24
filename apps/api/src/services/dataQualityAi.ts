@@ -16,6 +16,8 @@ export class AiError extends Error {
     message: string,
     /** The service said "too many requests": wait and try the same row again. */
     public readonly retryAfterMs: number | null = null,
+    /** The key or account was refused (401 / 403): no other row can work either. */
+    public readonly denied = false,
   ) {
     super(message);
     this.name = "AiError";
@@ -76,7 +78,7 @@ async function request(path: string, init: RequestInit, timeoutMs: number, s: Ai
       const after = Number.parseFloat(res.headers.get("retry-after") ?? "");
       throw new AiError(`${label} rate limit reached`, Number.isFinite(after) && after > 0 ? Math.min(after * 1000, 300_000) : 30_000);
     }
-    if (!res.ok) throw new AiError(`${label} ${res.status}: ${errorText(body, res.statusText)}`);
+    if (!res.ok) throw new AiError(`${label} ${res.status}: ${errorText(body, res.statusText)}`, null, res.status === 401 || res.status === 403);
     return body;
   });
 }

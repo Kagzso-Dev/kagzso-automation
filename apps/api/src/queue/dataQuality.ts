@@ -7,7 +7,7 @@
 //   - "too many requests" → the same row is tried again later (not counted as a failure)
 //   - waits while live AI calls are running, so the voice server stays fast
 //   - PAUSED / CANCELLED / a newer runToken (resume) stop this run at its next step
-//   - service down or 5 failed rows → the rest is SKIPPED, the standard checks stay
+//   - service down, key refused (401 / 403) or 5 failed rows → the rest is SKIPPED, the standard checks stay
 
 import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
@@ -74,6 +74,11 @@ export async function processDataQuality(payload: Record<string, unknown>): Prom
       throw deferFor(err.retryAfterMs);
     }
     const message = (err instanceof Error ? err.message : String(err)).slice(0, 500);
+    if (err instanceof AiError && err.denied) {
+      // Wrong / blocked key: every row would fail the same way, so stop now (the row stays unscored).
+      await stopAi(jobId, `${label} refused the key: ${message}`);
+      return { stopped: "ai access denied" };
+    }
     await prisma.dataQualityRecord.update({ where: { id: next.id }, data: { aiState: "ERROR", aiNotes: message } });
     await prisma.dataQualityJob.update({ where: { id: jobId }, data: { aiFailures: { increment: 1 }, waitingReason: null } });
     if (job.aiFailures + 1 >= MAX_AI_FAILURES) {

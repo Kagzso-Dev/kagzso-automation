@@ -104,6 +104,8 @@ vi.mock("../src/queue/queues.js", async (orig) => ({
 
 let ollamaUp = true;
 let rateLimitNext = false; // the next generation answers 429 "too many requests"
+let denyAccess = false; // every generation answers 403 (a blocked key / project)
+let generations = 0;
 const prompts: string[] = [];
 let ollama: Server;
 let ollamaBase = "";
@@ -129,6 +131,11 @@ beforeAll(async () => {
         return res.end(JSON.stringify({ error: "server is starting" }));
       }
       if (req.url === "/api/tags") return res.end(JSON.stringify({ models: [{ name: "llama3.2:latest" }] }));
+      generations++;
+      if (denyAccess) {
+        res.statusCode = 403;
+        return res.end(JSON.stringify({ error: "Your project has been denied access. Please contact support." }));
+      }
       if (rateLimitNext) {
         rateLimitNext = false;
         res.statusCode = 429;
@@ -174,6 +181,8 @@ beforeEach(() => {
   ollamaUp = true;
   liveRun = false;
   rateLimitNext = false;
+  denyAccess = false;
+  generations = 0;
 });
 afterEach(() => {
   // The rule for every test: the server talked to nothing but the local Ollama.
@@ -290,6 +299,16 @@ describe("Ollama not available", () => {
     expect(job()).toMatchObject({ status: "DONE", aiStatus: "unavailable" });
     expect(records().filter((r) => r.aiState === "PENDING")).toHaveLength(0);
     expect(prompts).toHaveLength(0);
+  });
+
+  it("a refused key (403) stops after one try, not five, and says why", async () => {
+    await uploadFixture();
+    denyAccess = true;
+    expect(await drain(enqueued[0]!)).toEqual({ stopped: "ai access denied" });
+    expect(generations).toBe(1);
+    expect(job()).toMatchObject({ status: "DONE", aiStatus: "unavailable", aiFailures: 0 });
+    expect(job().note).toMatch(/^Ollama refused the key: Ollama 403: Your project has been denied access/);
+    expect(records().filter((r) => r.aiState === "PENDING")).toHaveLength(0);
   });
 });
 
