@@ -26,6 +26,7 @@ import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import {
   addTestCallNumberInput,
+  AI_CALL_DEFAULT_GREETING_DELAY_SEC,
   CALL_FLOW_BASES,
   CALL_FLOW_IMPORT_WARN_CHARS,
   callFlowDefinition,
@@ -473,7 +474,8 @@ callFlowsRouter.post(
         total: 1,
         createdById: req.user!.id,
         createdByEmail: req.user!.email,
-        skipped: { invalid: 0, duplicates: 0, doNotCall: 0, capped: 0, testCall: true },
+        // Same greeting timing as a real run started with the default "AI Greeting Delay".
+        skipped: { invalid: 0, duplicates: 0, doNotCall: 0, capped: 0, testCall: true, greetingDelaySec: AI_CALL_DEFAULT_GREETING_DELAY_SEC },
         flow: { create: { flowVersionId: version.id } },
         logs: {
           create: {

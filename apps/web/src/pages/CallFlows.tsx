@@ -24,6 +24,7 @@ import { api } from "../lib/api";
 import { useAiCallsConfig, type AiCallRun } from "../lib/aiCalls";
 import {
   BASE_LABELS,
+  testCallDefaultVersion,
   useCallFlowCatalog,
   useCallFlows,
   type CallFlowCatalog,
@@ -1240,7 +1241,8 @@ function TestCallModal({
   const toast = useToast();
   const confirm = useConfirm();
   const qc = useQueryClient();
-  const [version, setVersion] = useState(versions[0]?.version ?? 1);
+  const [version, setVersion] = useState(() => testCallDefaultVersion(versions));
+  const pickedDraft = versions.find((v) => v.version === version)?.status === "DRAFT";
   const [numberId, setNumberId] = useState("");
   const [newPhone, setNewPhone] = useState("");
   const [newLabel, setNewLabel] = useState("");
@@ -1388,6 +1390,11 @@ function TestCallModal({
                   </option>
                 ))}
               </select>
+              {pickedDraft && (
+                <p className="-mt-2 mb-3 text-xs text-warn">
+                  This is an unpublished draft. Real calls use the published version until you publish it.
+                </p>
+              )}
               <label className="label">Number to call</label>
               <select className="input mb-3" value={selectedId} onChange={(e) => setNumberId(e.target.value)}>
                 {items.map((n) => (

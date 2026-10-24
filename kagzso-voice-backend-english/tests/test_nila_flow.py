@@ -343,3 +343,27 @@ def test_stuck_old_call_does_not_block_the_main_voice(client, auth, sync_engine,
     with sync_engine.begin() as c:  # never got a hangup webhook, started long ago
         c.execute(text("update calls set created_at = '2020-01-01 00:00:00' where id = :id"), {"id": old})
     assert _voice(sync_engine, _place(client, auth)) == "ishita"
+
+
+def _place_flow(client, auth, voice_id, version=1):
+    from tests.test_flows import nila_copy
+
+    r = client.post("/api/calls/outbound", headers=auth,
+                    json={"phone_number": PHONE, "customer_name": "Ragul", "agent_id": _nila_id(client, auth),
+                          "flow_id": "flow_voice", "flow_version": version, "flow": nila_copy(voice_id=voice_id)})
+    assert r.status_code == 200, r.text
+    time.sleep(0.01)
+    return r.json()["call_id"]
+
+
+def test_a_flows_own_voice_wins_over_the_main_voice(client, auth, sync_engine, concurrent_voices):
+    call_id = _place_flow(client, auth, "ritu")
+    assert _voice(sync_engine, call_id) == "ritu"  # not SARVAM_TTS_SPEAKER (ishita)
+    _end(client, call_id)
+    # Busy: the next call at the same time gets the first free rotation voice instead.
+    ids = [_place_flow(client, auth, "ritu") for _ in range(2)]
+    assert [_voice(sync_engine, i) for i in ids] == ["ritu", "roopa"]
+
+
+def test_a_flow_without_a_voice_keeps_the_main_voice(client, auth, sync_engine, concurrent_voices):
+    assert _voice(sync_engine, _place_flow(client, auth, None, version=2)) == "ishita"

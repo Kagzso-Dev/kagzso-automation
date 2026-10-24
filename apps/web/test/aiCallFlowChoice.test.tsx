@@ -4,6 +4,7 @@ import {
   initialFlowChoice,
   rememberedFlowChoice,
   rememberFlowChoice,
+  testCallDefaultVersion,
   unpublishedDraft,
   type CallFlowListItem,
   type CallFlowVersionSummary,
@@ -66,5 +67,16 @@ describe("unpublished edits warning", () => {
   it("no draft, or no flow picked: no warning", () => {
     expect(unpublishedDraft(thaara)).toBeNull();
     expect(unpublishedDraft(null)).toBeNull();
+  });
+});
+
+describe("test call version", () => {
+  it("starts on the live (newest published) version, not a newer draft", () => {
+    expect(testCallDefaultVersion([v(18, "DRAFT"), v(17, "PUBLISHED"), v(16, "PUBLISHED")])).toBe(17);
+  });
+
+  it("a never-published flow starts on its newest version", () => {
+    expect(testCallDefaultVersion([v(1, "DRAFT")])).toBe(1);
+    expect(testCallDefaultVersion([])).toBe(1);
   });
 });

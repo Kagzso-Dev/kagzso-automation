@@ -15,7 +15,7 @@ type Row = { id: string; phone: string; label: string | null; createdBy: string;
 let rows: Row[] = [];
 let seq = 0;
 let missing = false; // simulate "migration 0023 not applied yet"
-const runs: { data: { logs: { create: { phone: string } } } }[] = [];
+const runs: { data: { skipped: { greetingDelaySec?: number }; logs: { create: { phone: string } } } }[] = [];
 const dnc = new Set<string>();
 
 const missingErr = () => new Prisma.PrismaClientKnownRequestError("table does not exist", { code: "P2021", clientVersion: "test" });
@@ -216,6 +216,8 @@ describe("test call allowlist", () => {
     const res = await testCall(id, "u-a3");
     expect(res.status).toBe(201);
     expect(runs[before]!.data.logs.create.phone).toBe("+919876543211");
+    // Same greeting delay a real run starts with by default.
+    expect(runs[before]!.data.skipped.greetingDelaySec).toBe(2);
     expect(enqueued).toContain(((await res.json()) as { runId: string }).runId);
   });
 

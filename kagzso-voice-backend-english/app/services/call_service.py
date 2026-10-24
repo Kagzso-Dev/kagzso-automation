@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, settings as default_settings
 from app.core.logging import call_context, get_logger
+from app.core.voices import offered_voice
 from app.db import repositories as repo
 from app.db.database import session_factory
 from app.db.models import FINAL_CALL_STATUSES, LOCKED_OUTCOMES, Call, CallOutcome, CallStatus, utcnow
@@ -549,6 +550,7 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
     flow_vars: Dict[str, Optional[str]] = {}
     flow_event: Optional[Tuple[str, dict]] = None
     time_limit: Optional[int] = None
+    flow_voice: Optional[str] = None  # the voice picked in the call flow (wins over SARVAM_TTS_SPEAKER)
     if req.flow_id is not None:
         try:
             resolved = await resolve_flow_agent(db, req.flow_id, req.flow_version or 0, req.flow_draft, req.flow)
@@ -559,6 +561,7 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
             flow_event = ("flow:fallback", {**flow_vars, "agent_id": agent.id, "errors": exc.errors[:5]})
         else:
             agent = resolved.agent
+            flow_voice = offered_voice(resolved.flow.voice_id)
             flow_vars = {**resolved.info, "flow_silence_reprompt": resolved.flow.silence.reprompt,
                          "flow_silence_closing": resolved.flow.silence.closing}
             if resolved.flow.recording_notice:
@@ -604,7 +607,8 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
         elif cfg.voice_rotation_mode == "concurrent":
             # Ignore calls stuck in a live status (e.g. a missed hangup webhook) after the max duration.
             since = utcnow() - timedelta(seconds=cfg.MAX_CALL_DURATION_SECONDS + 300)
-            voice_id = await repo.free_call_voice(db, cfg.tts_speaker, rotation, since)
+            # A flow's own voice is the first choice; a rotation voice only while it is busy.
+            voice_id = await repo.free_call_voice(db, flow_voice or cfg.tts_speaker, rotation, since)
         else:
             voice_id = await repo.next_rotation_voice(db, rotation)
         call = await repo.create_call(

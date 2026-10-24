@@ -125,6 +125,15 @@ export function initialFlowChoice(published: CallFlowListItem[], remembered: str
   return newest?.id ?? "";
 }
 
+/**
+ * The version "Test call" starts on: the live one (newest published), so a test call
+ * sounds like a real call. A flow that was never published starts on its newest version.
+ */
+export function testCallDefaultVersion(versions: Pick<CallFlowVersionSummary, "version" | "status">[]): number {
+  const live = versions.filter((v) => v.status === "PUBLISHED").sort((a, b) => b.version - a.version)[0];
+  return live?.version ?? Math.max(1, ...versions.map((v) => v.version));
+}
+
 /** The draft holds edits that calls don't use yet (only the published version is called). */
 export function unpublishedDraft(f: CallFlowListItem | null): CallFlowVersionSummary | null {
   return f?.draft && f.published && f.draft.version > f.published.version ? f.draft : null;
