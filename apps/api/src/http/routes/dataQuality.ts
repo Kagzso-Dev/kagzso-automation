@@ -11,6 +11,7 @@
 //   POST   /api/data-quality/jobs/:id/resume     go on with AI scoring
 //   POST   /api/data-quality/jobs/:id/cancel     stop AI scoring for good (checks stay)
 //   POST   /api/data-quality/jobs/:id/review     approve / reject VALID rows (staging only)
+//   POST   /api/data-quality/jobs/:id/review-by-score  approve rows >= minScore / reject rows below it
 //   GET    /api/data-quality/jobs/:id/export     CSV of approved (or all valid) rows
 //   DELETE /api/data-quality/jobs/:id            remove a job that is not running
 
@@ -49,6 +50,7 @@ const statusFilter = z.object({ status: z.enum(["VALID", "INVALID", "DUPLICATE",
 const reviewInput = z
   .object({ ids: z.array(z.string().min(1).max(64)).min(1).max(5000), review: z.enum(["APPROVED", "REJECTED", "PENDING"]) })
   .strict();
+const reviewByScoreInput = z.object({ minScore: z.number().int().min(0).max(100), review: z.enum(["APPROVED", "REJECTED"]) }).strict();
 const exportQuery = z.object({ rows: z.enum(["approved", "valid"]).default("approved") });
 
 async function jobOr404(id: string) {
@@ -182,6 +184,35 @@ dataQualityRouter.post(
       data: { review: body.review },
     });
     logger.info({ jobId: id, by: req.user!.email, review: body.review, rows: count }, "data quality rows reviewed");
+    res.json({ updated: count });
+  }),
+);
+
+dataQualityRouter.post(
+  "/jobs/:id/review-by-score",
+  wrap(async (req, res) => {
+    const { id } = idParam.parse(req.params);
+    const { minScore, review } = reviewByScoreInput.parse(req.body);
+    await jobOr404(id);
+    // A score is final only once its AI score is in (or will never come).
+    if (await prisma.dataQualityRecord.findFirst({ where: { jobId: id, status: "VALID", aiState: "PENDING" }, select: { id: true } })) {
+      throw conflict("Some rows are still waiting for their AI score. Let scoring finish, or cancel it, then review by score.");
+    }
+    // APPROVED: score >= minScore; REJECTED: score < minScore. Rows already reviewed by hand keep their decision.
+    const pending = await prisma.dataQualityRecord.findMany({
+      where: { jobId: id, status: "VALID", review: "PENDING" },
+      select: { id: true, ruleScore: true, aiScore: true },
+    });
+    const ids = pending
+      .filter((r) => {
+        const score = overallScore(r.ruleScore, r.aiScore);
+        return score != null && (review === "APPROVED" ? score >= minScore : score < minScore);
+      })
+      .map((r) => r.id);
+    const { count } = ids.length
+      ? await prisma.dataQualityRecord.updateMany({ where: { jobId: id, id: { in: ids }, status: "VALID", review: "PENDING" }, data: { review } })
+      : { count: 0 };
+    logger.info({ jobId: id, by: req.user!.email, review, minScore, rows: count }, "data quality rows reviewed by score");
     res.json({ updated: count });
   }),
 );

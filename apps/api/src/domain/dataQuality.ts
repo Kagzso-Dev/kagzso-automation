@@ -88,11 +88,27 @@ const PLACEHOLDER_NAMES = new Set([
   "customer", "client", "sir", "madam", "mr", "mrs", "ms", "name", "no name", "nobody",
 ]);
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+// Compared without dots, dashes and underscores: "no-email", "n.a", "not_available" match too.
+const PLACEHOLDER_EMAIL_USERS = new Set([
+  "test", "testing", "noemail", "nomail", "none", "na", "nil", "null", "dummy", "sample", "xxx", "xyz", "abc", "asdf",
+  "unknown", "notavailable",
+]);
+const PLACEHOLDER_EMAIL_DOMAINS = new Set(["example.com", "example.org", "example.net", "test.com", "domain.com", "na.com", "none.com", "noemail.com"]);
+const RESERVED_TLDS = new Set(["test", "example", "invalid", "localhost"]); // RFC 2606: never a real mailbox
+
+/** A well-formed address that is clearly a stand-in: test@…, noemail@…, na@…, …@example.com, …@shop.test. */
+export function isPlaceholderEmail(email: string): boolean {
+  const at = email.lastIndexOf("@");
+  const user = email.slice(0, at).toLowerCase().replace(/[._-]+/g, "");
+  const domain = email.slice(at + 1).toLowerCase();
+  return PLACEHOLDER_EMAIL_USERS.has(user) || PLACEHOLDER_EMAIL_DOMAINS.has(domain) || RESERVED_TLDS.has(domain.split(".").at(-1)!);
+}
 
 /** How much each issue costs from 100 (VALID rows only). */
 export const ISSUE_PENALTY: Record<string, number> = {
   missing_name: 30,
   suspicious_name: 25,
+  not_mobile: 20,
   missing_business: 15,
   bad_email: 10,
 };
@@ -109,12 +125,26 @@ export function nameIssues(name: string | null): string[] {
   return [];
 }
 
+/**
+ * Extra checks on a dialable Indian number (+91 and 10 digits; other countries get none):
+ * a placeholder → fake_phone (the row is INVALID): 8+ of one digit in a row (9999999999,
+ * 9000000001), a straight run (1234567890, 9876543210) or one pair five times (9898989898);
+ * a first digit other than 6-9 → not_mobile (a landline: callable, but no WhatsApp or SMS).
+ */
+export function indianPhoneIssues(phone: string): string[] {
+  const n = /^\+91(\d{10})$/.exec(phone)?.[1];
+  if (!n) return [];
+  const run = "01234567890123456789".includes(n) || "98765432109876543210".includes(n);
+  if (/(\d)\1{7}/.test(n) || run || /^(\d\d)\1{4}$/.test(n)) return ["fake_phone"];
+  return /^[6-9]/.test(n) ? [] : ["not_mobile"];
+}
+
 export function ruleScoreFor(issues: string[]): number {
   return Math.max(0, 100 - issues.reduce((sum, i) => sum + (ISSUE_PENALTY[i] ?? 0), 0));
 }
 
 /**
- * Check every row, in file order. Per row: unusable phone → INVALID; a number on the
+ * Check every row, in file order. Per row: unusable or placeholder phone → INVALID; a number on the
  * do-not-call / not interested / wrong person lists → EXCLUDED (never scored, never sent to
  * the AI service); a number already seen earlier in the file → DUPLICATE; otherwise VALID with a
  * rule score and the AI score still to come.
@@ -127,6 +157,7 @@ export function checkRows(
 ): { records: DqRecordDraft[]; counts: DqCounts } {
   const col = (r: Record<string, string>, f: DqField) => (mapping[f] ? r[mapping[f]!] : undefined);
   const seen = new Map<string, number>();
+  const seenEmail = new Map<string, number>(); // usable addresses on VALID rows → first row
   const counts: DqCounts = { total: rows.length, valid: 0, invalid: 0, duplicates: 0, excluded: 0 };
   const records = rows.map((row, rowIndex): DqRecordDraft => {
     const name = cut(col(row, "name"), 160);
@@ -136,9 +167,10 @@ export function checkRows(
     const phone = phoneRaw ? normalizePhoneE164(phoneRaw, defaultCountryCode) : null;
     const base = { rowIndex, name, phoneRaw, phone, businessName, email, excludedReason: null, flags: [], ruleScore: null, aiState: "NONE" as const };
 
-    if (!phone) {
+    const phoneIssues = phone ? indianPhoneIssues(phone) : [];
+    if (!phone || phoneIssues.includes("fake_phone")) {
       counts.invalid++;
-      return { ...base, status: "INVALID", issues: [phoneRaw ? "bad_phone" : "missing_phone"] };
+      return { ...base, status: "INVALID", issues: [phone ? "fake_phone" : phoneRaw ? "bad_phone" : "missing_phone"] };
     }
     const excludedReason: DqExcludedReason | null = lookups.doNotCall.has(phone)
       ? "do_not_call"
@@ -158,15 +190,22 @@ export function checkRows(
     }
     seen.set(phone, rowIndex);
 
+    const badEmail = !!email && (!EMAIL_RE.test(email) || isPlaceholderEmail(email));
     const issues = [
+      ...phoneIssues,
       ...nameIssues(name),
       ...(businessName ? [] : ["missing_business"]),
-      ...(email && !EMAIL_RE.test(email) ? ["bad_email"] : []),
+      ...(badEmail ? ["bad_email"] : []),
     ];
+    // The same address on two valid rows is a note, not a penalty (a family business can share one).
+    const emailKey = email && !badEmail ? email.toLowerCase() : null;
+    const firstWithEmail = emailKey ? seenEmail.get(emailKey) : undefined;
+    if (emailKey && firstWithEmail === undefined) seenEmail.set(emailKey, rowIndex);
     const flags = [
       ...(lookups.inVoicecall.has(phone) ? ["in_voicecall"] : []),
       ...(lookups.inWhatsapp.has(phone) ? ["in_whatsapp"] : []),
       ...(email && lookups.emailContacts.has(email.toLowerCase()) ? ["in_email_contacts"] : []),
+      ...(firstWithEmail !== undefined ? [`same_email_as_row_${firstWithEmail + 2}`] : []),
     ];
     counts.valid++;
     return { ...base, status: "VALID", issues, flags, ruleScore: ruleScoreFor(issues), aiState: "PENDING" };

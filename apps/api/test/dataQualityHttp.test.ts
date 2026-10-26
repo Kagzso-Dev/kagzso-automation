@@ -87,7 +87,7 @@ const db = {
   aiCallLog: readOnly(callLogs),
   aiCallCustomer: readOnly(customers),
   whatsAppContact: readOnly([{ phone: DQ_IN_WHATSAPP.slice(1) }]),
-  contact: readOnly([{ email: "mohan@example.com" }]),
+  contact: readOnly([{ email: "mohan@mohanpharmacy.in" }]),
 };
 vi.mock("../src/prisma.js", () => ({ prisma: db }));
 vi.mock("../src/domain/aiCalls.js", async (orig) => ({
@@ -271,10 +271,33 @@ describe("the 20-row file with Ollama running", () => {
     const csv = await (await call(`/api/data-quality/jobs/${created.id}/export?rows=approved`)).text();
     const lines = csv.trim().split("\r\n");
     expect(lines).toHaveLength(2);
-    expect(lines[1]).toMatch(/^2,Ravi Kumar,\+919876500001,Ravi Traders,ravi@example.com,/);
+    expect(lines[1]).toMatch(/^2,Ravi Kumar,\+919876500001,Ravi Traders,ravi@ravitraders\.in,/);
     const all = await (await call(`/api/data-quality/jobs/${created.id}/export?rows=valid`)).text();
     expect(all.trim().split("\r\n")).toHaveLength(1 + DQ_EXPECTED.valid);
     expect(all).not.toContain("Dinesh");
+  });
+
+  it("review by score waits for the AI scores, then approves >= the minimum and rejects below it, never overriding a hand review", async () => {
+    const { job: created } = (await (await uploadFixture()).json()) as { job: Row };
+    const byScore = (json: unknown) => call(`/api/data-quality/jobs/${created.id}/review-by-score`, { method: "POST", json });
+    expect((await byScore({ minScore: 80, review: "APPROVED" })).status).toBe(409); // AI scores still to come
+
+    const ravi = records().find((r) => r.rowIndex === 0)!;
+    await call(`/api/data-quality/jobs/${created.id}/review`, { method: "POST", json: { ids: [ravi.id], review: "REJECTED" } });
+    expect(await drain(enqueued[0]!)).toEqual({ done: true });
+
+    // AI 80 everywhere: rules 100 → 90, 85 → 83, 90 → 85, 75 → 78 (row 5), 70 → 75 (row 6).
+    expect(await (await byScore({ minScore: 80, review: "APPROVED" })).json()).toEqual({ updated: 11 }); // 12 at 80+, minus Ravi
+    expect(await (await byScore({ minScore: 80, review: "REJECTED" })).json()).toEqual({ updated: 2 });
+    expect(await (await byScore({ minScore: 80, review: "APPROVED" })).json()).toEqual({ updated: 0 });
+
+    const reviewOf = (n: number) => records().find((r) => r.rowIndex === n - 2)!.review; // spreadsheet row number
+    expect([reviewOf(2), reviewOf(4), reviewOf(5), reviewOf(6), reviewOf(13)]).toEqual(["REJECTED", "APPROVED", "REJECTED", "REJECTED", "APPROVED"]);
+    for (const r of records().filter((x) => x.status !== "VALID")) expect(r.review).toBe("PENDING");
+
+    for (const bad of [{ minScore: 101, review: "APPROVED" }, { minScore: 70, review: "PENDING" }, { minScore: 70 }]) {
+      expect((await byScore(bad)).status).toBe(400);
+    }
   });
 });
 

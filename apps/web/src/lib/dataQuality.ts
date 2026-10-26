@@ -58,10 +58,12 @@ export interface DqStatusInfo {
 const ISSUE_LABELS: Record<string, string> = {
   bad_phone: "Bad phone number",
   missing_phone: "No phone number",
+  fake_phone: "Fake / placeholder number",
+  not_mobile: "Not a mobile (landline: no WhatsApp)",
   missing_name: "No name",
   suspicious_name: "Name looks wrong",
   missing_business: "No business name",
-  bad_email: "Bad email",
+  bad_email: "Bad or placeholder email",
   in_voicecall: "Already in Voicecall Contact",
   in_whatsapp: "Already in WhatsApp Contacts",
   in_email_contacts: "Already in Email Contacts",
@@ -73,10 +75,12 @@ export const EXCLUDED_LABELS: Record<string, string> = {
   wrong_person: "Wrong person",
 };
 
-/** "duplicate_of_row_5" → "Same number as row 5"; other codes from ISSUE_LABELS. */
+/** "duplicate_of_row_5" → "Same number as row 5", "same_email_as_row_5" → "Same email as row 5"; other codes from ISSUE_LABELS. */
 export function issueLabel(code: string): string {
   const dup = /^duplicate_of_row_(\d+)$/.exec(code);
   if (dup) return `Same number as row ${dup[1]}`;
+  const sameEmail = /^same_email_as_row_(\d+)$/.exec(code);
+  if (sameEmail) return `Same email as row ${sameEmail[1]}`;
   return ISSUE_LABELS[code] ?? code.replace(/_/g, " ");
 }
 

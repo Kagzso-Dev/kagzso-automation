@@ -25,6 +25,8 @@ const ROW_TONE: Record<DqRecordStatus, BadgeTone> = { VALID: "ok", INVALID: "cri
 const REVIEW_TONE: Record<DqReview, BadgeTone> = { PENDING: "neutral", APPROVED: "ok", REJECTED: "crit" };
 type Filter = "ALL" | DqRecordStatus;
 
+const clampScore = (v: string) => Math.min(100, Math.max(0, Math.round(Number(v) || 0)));
+
 function aiLine(job: DqJob): string {
   if (job.aiStatus === "unavailable") return job.note ?? "AI not available";
   if (job.aiStatus === "cancelled") return `Cancelled after ${job.aiDone} of ${job.valid}`;
@@ -134,7 +136,8 @@ export function DataQualityPage() {
       )}
       <p className="mb-4 text-xs text-slate-550">
         Columns are found by their header: Name, Phone (or Mobile), Business name (or Company), Email. Do not call, Not interested and Wrong
-        person numbers are excluded and never scored.
+        person numbers are excluded and never scored. Placeholder numbers (9999999999, 1234567890, 9000000001) are invalid; Indian
+        landlines are kept but lose 20 points (no WhatsApp). Placeholder emails (test@…, noemail@…, …@example.com) count as bad emails.
       </p>
 
       {jobs.isLoading ? (
@@ -202,21 +205,31 @@ export function DataQualityPage() {
 function JobDetail({ jobId }: { jobId: string }) {
   const qc = useQueryClient();
   const toast = useToast();
+  const confirm = useConfirm();
   const [filter, setFilter] = useState<Filter>("ALL");
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [minScore, setMinScore] = useState(70);
+  const [aboveOnly, setAboveOnly] = useState(false);
   const detail = useQuery({
     queryKey: ["data-quality-job", jobId],
     queryFn: () => api<{ job: DqJob; records: DqRecord[] }>(`/api/data-quality/jobs/${jobId}`),
     refetchInterval: (q) => (q.state.data?.job.status === "RUNNING" ? 3000 : false),
   });
+  const reviewed = (updated: number, value: DqReview) => {
+    toast.success(value === "APPROVED" ? "Approved" : value === "REJECTED" ? "Rejected" : "Back to pending", [`${updated} row${updated === 1 ? "" : "s"}`]);
+    setPicked(new Set());
+    void qc.invalidateQueries({ queryKey: ["data-quality-job", jobId] });
+  };
   const review = useMutation({
     mutationFn: ({ ids, value }: { ids: string[]; value: DqReview }) =>
       api<{ updated: number }>(`/api/data-quality/jobs/${jobId}/review`, { method: "POST", json: { ids, review: value }, notify: false }),
-    onSuccess: ({ updated }, { value }) => {
-      toast.success(value === "APPROVED" ? "Approved" : value === "REJECTED" ? "Rejected" : "Back to pending", [`${updated} row${updated === 1 ? "" : "s"}`]);
-      setPicked(new Set());
-      void qc.invalidateQueries({ queryKey: ["data-quality-job", jobId] });
-    },
+    onSuccess: ({ updated }, { value }) => reviewed(updated, value),
+    onError: (err) => toast.fromError(err),
+  });
+  const reviewByScore = useMutation({
+    mutationFn: (value: "APPROVED" | "REJECTED") =>
+      api<{ updated: number }>(`/api/data-quality/jobs/${jobId}/review-by-score`, { method: "POST", json: { minScore, review: value }, notify: false }),
+    onSuccess: ({ updated }, value) => reviewed(updated, value),
     onError: (err) => toast.fromError(err),
   });
   const exportRows = async (rows: "approved" | "valid") => {
@@ -230,8 +243,24 @@ function JobDetail({ jobId }: { jobId: string }) {
   if (detail.isLoading) return <div className="card mt-6"><Spinner /></div>;
   if (detail.error) return <div className="mt-6"><ErrorNote error={detail.error} /></div>;
   const { job, records } = detail.data!;
-  const shown = filter === "ALL" ? records : records.filter((r) => r.status === filter);
+  const byStatus = filter === "ALL" ? records : records.filter((r) => r.status === filter);
+  const shown = aboveOnly ? byStatus.filter((r) => r.score != null && r.score >= minScore) : byStatus;
   const pickable = shown.filter((r) => r.status === "VALID");
+  // Review by score: valid rows nobody has reviewed yet, once no AI score is still to come.
+  const waitingForAi = records.some((r) => r.status === "VALID" && r.aiState === "PENDING");
+  const unreviewed = records.filter((r) => r.status === "VALID" && r.review === "PENDING" && r.score != null);
+  const atOrAbove = unreviewed.filter((r) => r.score! >= minScore).length;
+  const below = unreviewed.length - atOrAbove;
+  const byScore = async (value: "APPROVED" | "REJECTED") => {
+    const n = value === "APPROVED" ? atOrAbove : below;
+    const ok = await confirm({
+      title: `${value === "APPROVED" ? "Approve" : "Reject"} ${n} row${n === 1 ? "" : "s"} scoring ${value === "APPROVED" ? `${minScore} or more` : `below ${minScore}`}?`,
+      body: "Only valid rows not reviewed yet change. Rows you already approved or rejected stay as they are, and nothing leaves Data Quality.",
+      confirmText: value === "APPROVED" ? "Approve" : "Reject",
+      tone: value === "REJECTED" ? "danger" : "default",
+    });
+    if (ok) reviewByScore.mutate(value);
+  };
   const approved = records.filter((r) => r.review === "APPROVED").length;
   const count = (s: DqRecordStatus) => records.filter((r) => r.status === s).length;
   const toggle = (id: string) =>
@@ -264,6 +293,30 @@ function JobDetail({ jobId }: { jobId: string }) {
       <p className="mb-3 text-xs text-slate-550">
         Approving only marks rows here. To use them, export the approved rows and import the file where you need it.
       </p>
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+        <label className="flex items-center gap-2 text-slate-550">
+          Score ≥
+          <input type="number" className="input w-20" min={0} max={100} value={minScore} aria-label="Minimum score" onChange={(e) => setMinScore(clampScore(e.target.value))} />
+        </label>
+        <button type="button" className="btn-ghost" disabled={waitingForAi || atOrAbove === 0 || reviewByScore.isPending} onClick={() => void byScore("APPROVED")}>
+          Approve {atOrAbove}
+        </button>
+        <button type="button" className="btn-ghost" disabled={waitingForAi || below === 0 || reviewByScore.isPending} onClick={() => void byScore("REJECTED")}>
+          Reject {below} below
+        </button>
+        <label className="flex items-center gap-2 text-slate-550">
+          <input
+            type="checkbox"
+            checked={aboveOnly}
+            onChange={(e) => {
+              setAboveOnly(e.target.checked);
+              setPicked(new Set());
+            }}
+          />
+          Only show rows scoring {minScore}+
+        </label>
+        {waitingForAi && <span className="text-xs text-slate-550">Review by score opens once AI scoring finishes (or is cancelled).</span>}
+      </div>
       <Tabs<Filter>
         tabs={[
           { value: "ALL", label: `All (${records.length})` },

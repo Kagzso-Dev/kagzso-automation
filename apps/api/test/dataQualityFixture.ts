@@ -4,7 +4,7 @@
 export const DQ_HEADERS = ["Name", "Phone", "Business Name", "Email"] as const;
 
 export const DQ_ROWS: [string, string, string, string][] = [
-  ["Ravi Kumar", "9876500001", "Ravi Traders", "ravi@example.com"], //   row 2  valid
+  ["Ravi Kumar", "9876500001", "Ravi Traders", "ravi@ravitraders.in"], // row 2  valid
   ["Priya S", "9876500002", "Priya Boutique", ""], //                    row 3  valid
   ["Arun", "9876500003", "", ""], //                                      row 4  valid, no business
   ["test", "9876500004", "Test Shop", ""], //                             row 5  valid, placeholder name
@@ -18,7 +18,7 @@ export const DQ_ROWS: [string, string, string, string][] = [
   ["Lakshmi", "+91 98765 00012", "Lakshmi Silks", "lakshmi@@bad"], //     row 13 valid, bad email
   ["Gopal", "9876500013", "Gopal Sweets", ""], //                         row 14 valid, already in Voicecall Contact
   ["Anitha", "9876500014", "Anitha Beauty Parlour", ""], //               row 15 valid, already in WhatsApp Contacts
-  ["Mohan Raj", "9876500015", "Mohan Pharmacy", "mohan@example.com"], //  row 16 valid
+  ["Mohan Raj", "9876500015", "Mohan Pharmacy", "mohan@mohanpharmacy.in"], // row 16 valid
   ["Deepa", "9876500016", "Deepa Bakery", ""], //                         row 17 valid
   ["Senthil", "9876500017", "Senthil Textiles", ""], //                   row 18 valid
   ["Kavya", "9876500018", "Kavya Cafe", ""], //                           row 19 valid

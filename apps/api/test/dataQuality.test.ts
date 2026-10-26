@@ -5,6 +5,8 @@ import {
   aiPrompt,
   checkRows,
   detectDataQualityColumns,
+  indianPhoneIssues,
+  isPlaceholderEmail,
   overallScore,
   parseAiAnswer,
   type DqLookups,
@@ -32,7 +34,7 @@ const lookups = (): DqLookups => ({
   wrongPerson: new Set([DQ_WRONG_PERSON]),
   inVoicecall: new Set([DQ_IN_VOICECALL]),
   inWhatsapp: new Set([DQ_IN_WHATSAPP]),
-  emailContacts: new Set(["mohan@example.com"]),
+  emailContacts: new Set(["mohan@mohanpharmacy.in"]),
 });
 
 describe("standard checks on the 20-row file", () => {
@@ -85,6 +87,58 @@ describe("standard checks on the 20-row file", () => {
     expect([row(14).status, row(14).flags]).toEqual(["VALID", ["in_voicecall"]]);
     expect([row(15).status, row(15).flags]).toEqual(["VALID", ["in_whatsapp"]]);
     expect(row(16).flags).toEqual(["in_email_contacts"]);
+  });
+
+  it("placeholder numbers are INVALID; Indian landlines stay VALID but lose 20 points", () => {
+    for (const p of ["+919999999999", "+919000000001", "+911234567890", "+919876543210", "+919898989898"]) {
+      expect([p, indianPhoneIssues(p)]).toEqual([p, ["fake_phone"]]);
+    }
+    expect(indianPhoneIssues("+914423456789")).toEqual(["not_mobile"]);
+    for (const p of ["+919840012345", "+916380112233", "+447700900123"]) expect([p, indianPhoneIssues(p)]).toEqual([p, []]);
+
+    const phoneOnly = { name: "Name", phone: "Phone", business: "Business", email: null };
+    const rows = ["99999 99999", "+91 90000 00005", "1234567890", "044 2345 6789", "98400 12345", "9999999999"].map((Phone) => ({
+      Name: "Ravi Kumar",
+      Phone,
+      Business: "Ravi Traders",
+    }));
+    const { records: rs, counts: c } = checkRows(rows, phoneOnly, lookups());
+    expect(rs.map((r) => [r.status, r.issues, r.ruleScore])).toEqual([
+      ["INVALID", ["fake_phone"], null],
+      ["INVALID", ["fake_phone"], null],
+      ["INVALID", ["fake_phone"], null],
+      ["VALID", ["not_mobile"], 80],
+      ["VALID", [], 100],
+      ["INVALID", ["fake_phone"], null], // a placeholder listed twice is never a duplicate to approve
+    ]);
+    expect(rs[0]!.phone).toBe("+919999999999");
+    expect(c).toMatchObject({ valid: 2, invalid: 4, duplicates: 0 });
+  });
+
+  it("placeholder emails are bad emails; the same email on two valid rows is a note, not a penalty", () => {
+    for (const e of ["test@gmail.com", "no-email@shop.in", "N.A@gmail.com", "ravi@example.com", "owner@na.com", "ravi@shop.test"]) {
+      expect([e, isPlaceholderEmail(e)]).toEqual([e, true]);
+    }
+    for (const e of ["ravi@ravitraders.in", "info@shop.in", "contact@gmail.com", "testingteam@tcs.com"]) expect([e, isPlaceholderEmail(e)]).toEqual([e, false]);
+
+    const cols = { name: "Name", phone: "Phone", business: "Business", email: "Email" };
+    const rows = [
+      ["9840012301", "ravi@ravitraders.in"], // row 2
+      ["9840012302", "RAVI@ravitraders.in"], // row 3: same address, other case
+      ["9840012303", "test@test.com"], // row 4
+      ["9840012304", "test@test.com"], // row 5: placeholders are not compared
+      ["12345", "shop@shop.in"], // row 6: INVALID, its email is not remembered
+      ["9840012306", "shop@shop.in"], // row 7
+    ].map(([Phone, Email]) => ({ Name: "Ravi Kumar", Phone: Phone!, Business: "Ravi Traders", Email: Email! }));
+    const { records: rs } = checkRows(rows, cols, lookups());
+    expect(rs.map((r) => [r.status, r.issues, r.flags, r.ruleScore])).toEqual([
+      ["VALID", [], [], 100],
+      ["VALID", [], ["same_email_as_row_2"], 100],
+      ["VALID", ["bad_email"], [], 90],
+      ["VALID", ["bad_email"], [], 90],
+      ["INVALID", ["bad_phone"], [], null],
+      ["VALID", [], [], 100],
+    ]);
   });
 
   it("a do-not-call number listed twice stays EXCLUDED both times (never a duplicate to approve)", () => {
