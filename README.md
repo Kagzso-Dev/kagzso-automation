@@ -18,7 +18,10 @@ suppression enforcement. See [`docs/technical-design.html`](docs/technical-desig
 
 ## Quick start
 
-Prerequisites: **Node 20+** and a local **MySQL 8** server. That's it.
+Prerequisites: **Node 20+** and a local **MySQL 8** server. Optional: **Python 3.10** for the AI
+voice backend (`kagzso-voice-backend-english/`) and **Ollama** for Data Quality AI scores.
+
+### First time
 
 ```bash
 cp .env.example .env                 # set DB_HOST/PORT/NAME/USER/PASSWORD + SEED_ADMIN_*, edit secrets
@@ -27,18 +30,59 @@ mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS dispatch CHARACTER SET utf8mb
 npm run prisma:deploy                # apply migrations
 npm run db:seed:plan                 # show what the seed would create/skip (read-only)
 npm run seed                         # bootstrap admin (idempotent; needs the seed-safety vars below)
-npm run dev                          # api :4000, worker, web :5173
+```
+
+`DB_PASSWORD` must be the MySQL user's real password (empty only if that user has none). Check it
+with `mysql -u root -p` first: the login that works there is the one to put in `.env`.
+
+For AI calls, set up the voice backend once as [its README](kagzso-voice-backend-english/README.md)
+describes (its own `.venv`, `.env` and MySQL database), then apply its migrations:
+
+```powershell
+cd kagzso-voice-backend-english
+.\.venv\Scripts\python -m alembic upgrade head
+```
+
+Without that `.venv`, `npm run dev` skips the voice backend and starts everything else.
+
+### Every day
+
+```bash
+npm run dev                          # api :4000, worker, web :5173, voice backend :8002
 ```
 
 Log in at http://localhost:5173 with `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`.
 Re-running the seed never overwrites an existing password; see [Users and passwords](#users-and-passwords)
 for resetting it and adding more users.
 
+Check that everything reached its database:
+
+```bash
+curl http://localhost:4000/health    # {"status":"ok","checks":{"db":"ok"}}
+curl http://localhost:8002/ready     # "status":"ready" with "mysql":"ok"
+```
+
+Stop with `Ctrl+C`, or from any terminal with `npm run dev:kill`. The processes read `.env` only
+when they start, so restart after editing it.
+
+### If it doesn't start
+
+| Symptom | Fix |
+| --- | --- |
+| `/health` returns 503 `"db":"fail"`; the log says `Authentication failed … credentials for root are not valid` | `DB_PASSWORD` doesn't match MySQL. Find the working login with `mysql -u root -p`, put that password in `.env` (and in the voice backend's `MYSQL_PASSWORD`), restart. |
+| Voice `/ready` shows `"mysql":"error"`, or `Could not seed default agent` at startup | The voice backend's `MYSQL_*` settings are wrong, or its database or migrations are missing: create the database and run `alembic upgrade head` there. |
+| `Cannot start npm run dev — a dev stack is already running` | `npm run dev:kill`, then `npm run dev` again. |
+| `[voice] No .venv in kagzso-voice-backend-english` | Create the `.venv` (voice backend README), or ignore it if you don't need AI calls. |
+| Data Quality says `OLLAMA_BASE_URL is not set` | Only the AI score needs it: start Ollama, pull a model, set `OLLAMA_BASE_URL=http://127.0.0.1:11434` and `OLLAMA_MODEL` in `.env`, restart. The standard checks work without it. |
+
 ### Processes
 
 - `npm run dev:api` — REST API + webhook ingestion (`apps/api/src/index.ts`)
 - `npm run dev:worker` — polling job workers + the scheduler (`apps/api/src/worker.ts`)
 - `npm run dev:web` — dashboard
+- `npm run dev:voice` — the voice backend from `kagzso-voice-backend-english/.venv`, auto-reloading, on
+  the port in `VOICE_BACKEND_URL` (default `8002`); skipped with a message when its folder or `.venv`
+  is missing or the port is taken
 
 Run **one** worker process. The queue engine is safe under concurrent workers (jobs are
 claimed with a conditional `UPDATE`), but the scheduler assumes a single instance.
@@ -48,7 +92,7 @@ already listening it stops with a message instead of half-starting a second stac
 drifting to `:5174`, the API crashing with `EADDRINUSE`). Free the ports and retry:
 
 ```powershell
-npm run dev:kill   # Windows: stops only this repo's dev processes + frees 4000/5173/5174
+npm run dev:kill   # Windows: stops only this repo's dev processes + frees 4000/5173/5174/8002
 ```
 
 The API port (`4000`) and web port (`5173`, `strictPort`) are fixed on purpose — don't
