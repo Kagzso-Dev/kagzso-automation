@@ -35,6 +35,16 @@ log = get_logger("llm")
 
 Message = Dict[str, str]  # {"role": "user" | "assistant", "content": "..."}
 
+# Temperature for requests made in the current task (set by complete_raw for outcome classification).
+# A context variable, not a provider attribute: one provider serves every live call, and a conversation
+# streaming at the same moment must keep LLM_TEMPERATURE.
+_TEMPERATURE: ContextVar[Optional[float]] = ContextVar("llm_temperature", default=None)
+
+
+def request_temperature(cfg: Settings) -> float:
+    t = _TEMPERATURE.get()
+    return cfg.LLM_TEMPERATURE if t is None else t
+
 END_CALL_TOKEN = "[[END_CALL]]"
 
 # --------------------------------------------------------------------------
