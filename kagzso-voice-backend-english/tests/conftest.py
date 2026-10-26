@@ -18,6 +18,8 @@ os.environ.update({
     "ADMIN_API_KEY": "test-admin-key-1234567890",
     "APP_SECRET_KEY": "test-secret-key-0123456789abcdef0123456789",
     "PUBLIC_BASE_URL": "https://test.example.com",
+    "PUBLIC_URL_CHECK": "false",  # no real request to test.example.com; tests/test_public_url.py turns it on
+    "NO_PROVIDER_CALLBACK_SECONDS": "0",  # no timers left behind; tests/test_public_url.py turns it on
     "PLIVO_AUTH_ID": "MATESTAUTHID000000",
     "PLIVO_AUTH_TOKEN": "plivo-test-token-abcdef",
     "PLIVO_FROM_NUMBER": "+918035000000",

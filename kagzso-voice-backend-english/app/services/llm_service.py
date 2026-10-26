@@ -18,6 +18,7 @@ import json
 import re
 import time
 from abc import ABC, abstractmethod
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any, AsyncIterator, Dict, Iterable, List, Mapping, Optional, Tuple
 
@@ -780,9 +781,14 @@ class LLMProvider(ABC):
         parts = [d async for d in self.stream_response(system_prompt, conversation_history, user_message, variables)]
         return clean_spoken_text("".join(parts))
 
-    async def complete_raw(self, system_text: str, user_text: str) -> str:
-        """Non-conversational completion (e.g. call outcome classification)."""
-        parts = [d async for d in self._stream_with_failover(system_text, [{"role": "user", "content": user_text}])]
+    async def complete_raw(self, system_text: str, user_text: str, temperature: Optional[float] = 0.0) -> str:
+        """Non-conversational completion (call outcome classification). Temperature 0 by default: the
+        same transcript always gets the same answer (at LLM_TEMPERATURE it varied from run to run)."""
+        token = _TEMPERATURE.set(temperature)
+        try:
+            parts = [d async for d in self._stream_with_failover(system_text, [{"role": "user", "content": user_text}])]
+        finally:
+            _TEMPERATURE.reset(token)
         return "".join(parts).strip()
 
     async def aclose(self) -> None:
@@ -811,7 +817,7 @@ class GeminiProvider(LLMProvider):
         body = {
             "systemInstruction": {"parts": [{"text": system_text}]},
             "contents": contents,
-            "generationConfig": {"temperature": self.cfg.LLM_TEMPERATURE, "maxOutputTokens": self.cfg.LLM_MAX_OUTPUT_TOKENS},
+            "generationConfig": {"temperature": request_temperature(self.cfg), "maxOutputTokens": self.cfg.LLM_MAX_OUTPUT_TOKENS},
         }
         if self.cfg.LLM_THINKING_LEVEL:
             body["generationConfig"]["thinkingConfig"] = {"thinkingLevel": self.cfg.LLM_THINKING_LEVEL}
@@ -863,7 +869,7 @@ class OpenAICompatibleProvider(LLMProvider):
             "model": model,
             "messages": [{"role": "system", "content": system_text}, *messages],
             "stream": True,
-            "temperature": self.cfg.LLM_TEMPERATURE,
+            "temperature": request_temperature(self.cfg),
             self.TOKEN_PARAM: self.cfg.LLM_MAX_OUTPUT_TOKENS,
             **self._extra_body(),
         }

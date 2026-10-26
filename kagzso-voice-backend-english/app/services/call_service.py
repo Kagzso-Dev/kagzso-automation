@@ -37,6 +37,7 @@ from app.services import audio_service as audio
 from app.services import status_callback
 from app.services import recording
 from app.services.noise_suppression import InputCleaner
+from app.services.public_url import check_public_url
 from app.services.sarvam_tts import SarvamTTS
 from app.services.tts import TTSError, TTSProvider, create_tts_provider
 from app.services.llm_service import (
@@ -642,12 +643,88 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
         await repo.add_event(db, call.id, f"{call.telephony_provider}:call_fired", {"request_uuid": result.request_uuid})
         await get_session_store().set_fields(call.id, provider_request_id=result.request_uuid)
         log.info("Plivo outbound call fired")
+        watch_for_provider_callback(call.id, cfg.NO_PROVIDER_CALLBACK_SECONDS)
         if cfg.GREETING_PRERENDER and agent.first_message:
             greeting = opening_line(agent.first_message, variables)
             if greeting:
                 schedule_greeting_prerender(call.id, greeting, call.voice_id or agent.voice_id,
                                             greeting_pace(agent.first_message, cfg), pauses_from_variables(variables))
     return call
+
+
+# ===========================================================================
+# No word from the telephony provider
+# ===========================================================================
+# Plivo calls ring_url within seconds of dialling and always sends the hang-up (ring timeout
+# 45 s); Twilio's status callback is the same. Hearing nothing at all for
+# NO_PROVIDER_CALLBACK_SECONDS means the provider can't reach PUBLIC_BASE_URL (e.g. the ngrok
+# tunnel is down): the call is failed then, with a reason Dispatch shows, instead of staying
+# "initiating" until Dispatch gives up on it (AI_CALLS_CALL_TIMEOUT_SEC, 15 min).
+_WAITING_FOR_PROVIDER = (CallStatus.created.value, CallStatus.initiating.value)
+_PROVIDER_WATCHES: Set["asyncio.Task[None]"] = set()  # strong refs: an unreferenced task can be collected
+
+
+def watch_for_provider_callback(call_id: str, delay_seconds: float) -> None:
+    """Fail the call if the provider has not reported on it after delay_seconds (<= 0: off)."""
+    if delay_seconds <= 0:
+        return
+    task = asyncio.create_task(_fail_if_still_waiting(call_id, delay_seconds))
+    _PROVIDER_WATCHES.add(task)
+    task.add_done_callback(_PROVIDER_WATCHES.discard)
+
+
+async def _fail_if_still_waiting(call_id: str, delay_seconds: float) -> None:
+    await asyncio.sleep(delay_seconds)
+    with call_context(call_id):
+        try:
+            async with session_factory()() as db:
+                call = await repo.get_call(db, call_id)
+                if call is not None and call.status in _WAITING_FOR_PROVIDER:
+                    why = (await check_public_url(force=True)).reason
+                    await fail_unreported_call(db, call, why)
+        except Exception as exc:
+            log.warning("No-callback check failed: %s", type(exc).__name__)
+
+
+def no_callback_cause(provider: str, why: Optional[str], seconds: int) -> str:
+    """hangup_cause (max 100 chars) for a call the provider never reported on."""
+    if why:
+        return f"No word from {provider}: PUBLIC_BASE_URL unreachable ({why}). Start ngrok or fix it"[:100]
+    return f"No word from {provider} within {seconds}s of dialling. Check the {provider} console"[:100]
+
+
+async def fail_unreported_call(db: AsyncSession, call: Call, why: Optional[str], *, at_startup: bool = False,
+                               cfg: Settings = default_settings) -> None:
+    provider = (call.telephony_provider or "plivo").title()
+    if at_startup:
+        cause = f"No word from {provider} before the voice backend restarted"[:100]
+        log.warning("No word from %s for this call before the restart - marking it failed", provider)
+    else:
+        cause = no_callback_cause(provider, why, cfg.NO_PROVIDER_CALLBACK_SECONDS)
+        log.warning("No word from %s for this call - marking it failed (%s)", provider, why or "the public URL answers")
+    await transition(db, call, CallStatus.failed, {"error": "no_provider_callback", "public_url": why, "at_startup": at_startup},
+                     outcome=CallOutcome.call_failed.value, ended_at=utcnow(), hangup_cause=cause)
+    await get_session_store().delete(call.id)  # it never became a conversation: not an active call
+
+
+async def recheck_unreported_calls(cfg: Settings = default_settings) -> int:
+    """At start-up: calls a restart left waiting for the provider. Fails those that waited too long,
+    watches the rest for their remaining time. Returns how many were failed."""
+    limit = cfg.NO_PROVIDER_CALLBACK_SECONDS
+    if limit <= 0:
+        return 0
+    failed = 0
+    async with session_factory()() as db:
+        for call in await repo.list_calls_in_status(db, _WAITING_FOR_PROVIDER):
+            since = call.started_at or call.created_at
+            waited = (utcnow() - since).total_seconds() if since else limit
+            with call_context(call.id):
+                if waited >= limit:
+                    await fail_unreported_call(db, call, None, at_startup=True, cfg=cfg)
+                    failed += 1
+                else:
+                    watch_for_provider_callback(call.id, limit - waited)
+    return failed
 
 
 # ===========================================================================

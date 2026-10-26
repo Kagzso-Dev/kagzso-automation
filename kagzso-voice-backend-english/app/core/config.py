@@ -81,6 +81,9 @@ class Settings(BaseSettings):
     TELEPHONY_PROVIDER: str = "plivo"
 
     PUBLIC_BASE_URL: str = ""  # e.g. https://abcd.ngrok-free.app (no trailing slash)
+    # /ready calls this server through PUBLIC_BASE_URL (at most once a minute) to prove Plivo / Twilio can
+    # reach it: a stopped ngrok tunnel or a stale URL shows as "unreachable". false = only check it is set.
+    PUBLIC_URL_CHECK: bool = True
 
     # --- Sarvam STT ---
     SARVAM_API_KEY: SecretStr = SecretStr("")
@@ -201,6 +204,9 @@ class Settings(BaseSettings):
     # --- Call behaviour ---
     CALL_LANGUAGE: str = "en"
     MAX_CALL_DURATION_SECONDS: int = 180
+    # A placed call that hears nothing at all from Plivo / Twilio (not even "ringing") within this many
+    # seconds is marked failed: the provider can't reach PUBLIC_BASE_URL. 0 = off (wait for the hang-up).
+    NO_PROVIDER_CALLBACK_SECONDS: int = 120
     # Time zone for the opening "Good morning / afternoon / evening" ({{time_greeting}}).
     CALL_GREETING_TIMEZONE: str = "Asia/Kolkata"
     # {{title_to_use}} when the contact's gender is missing or not male/female (never guessed).

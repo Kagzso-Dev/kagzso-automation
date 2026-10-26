@@ -54,7 +54,7 @@ import { CallFlowError, definitionHash, deleteVersion, latestPublished, publishD
 import { analyzeImport, changedBlockIds } from "../../domain/callFlowImport.js";
 import { addTestNumber, listTestNumbers, removeTestNumber, resolveTestNumber, TestNumberError } from "../../domain/callFlowTestNumbers.js";
 import { enqueueAiCallRun } from "../../queue/queues.js";
-import { getBuiltinFlows, previewFlow, VoiceBackendError, type VoiceFlowCatalog } from "../../services/voiceBackend.js";
+import { getBuiltinFlows, previewFlow, voiceCallsBlockedReason, VoiceBackendError, type VoiceFlowCatalog } from "../../services/voiceBackend.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
 import { AppError, badRequest, conflict, forbidden, notFound, wrap } from "../errors.js";
 
@@ -462,6 +462,9 @@ callFlowsRouter.post(
     if (await prisma.aiCallRun.findFirst({ where: { status: "RUNNING" }, select: { id: true } })) {
       throw conflict("Another AI call run is still in progress — wait for it to finish or cancel it first");
     }
+    // Plivo / Twilio can't reach the voice backend (e.g. ngrok stopped): the test call would ring, then go silent.
+    const blocked = await voiceCallsBlockedReason();
+    if (blocked) throw new AppError(503, blocked, "voice_unreachable");
     if ((await callsCountedTowardDailyCap()) + 1 > aiCallsConfig.dailyCap) {
       throw new AppError(429, `Daily AI call limit reached (${aiCallsConfig.dailyCap} in 24 hours)`, "rate_limited");
     }

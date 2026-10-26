@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.database import check_database
+from app.services.public_url import check_public_url, is_own_token
 from app.services.session_store import get_session_store
 
 router = APIRouter(tags=["health"])
@@ -17,6 +18,14 @@ log = get_logger("health")
 @router.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@router.get("/health/self/{token}")
+async def health_self(token: str) -> JSONResponse:
+    """Answers only this process's own random token: proves PUBLIC_BASE_URL reaches *this* server."""
+    if not is_own_token(token):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return JSONResponse({"status": "ok", "self": True})
 
 
 @router.get("/ready")
@@ -33,9 +42,11 @@ async def ready() -> JSONResponse:
     def c(ok: bool) -> str:
         return "configured" if ok else "missing"
 
+    # Set is not enough: Plivo / Twilio must reach this server through it (see services/public_url.py).
+    public = await check_public_url()
     providers = {
         "telephony": c(settings.telephony_configured()),
-        "public_base_url": c(settings.PUBLIC_BASE_URL.startswith("https://")),
+        "public_base_url": "unreachable" if public.reachable is False else c(settings.PUBLIC_BASE_URL.startswith("https://")),
         "sarvam": c(settings.sarvam_configured()),
         "tts": c(settings.tts_configured()),
         "llm": c(settings.llm_configured()),
@@ -46,6 +57,8 @@ async def ready() -> JSONResponse:
         "mysql": mysql_status,
         "active_calls": get_session_store().active_count(),
         "providers": providers,
+        # reachable: true / false, or null when not checked (PUBLIC_URL_CHECK=false).
+        "public_base_url_check": {"url": settings.PUBLIC_BASE_URL or None, "reachable": public.reachable, "reason": public.reason},
         "telephony_provider": settings.telephony_provider,
         "tts_provider": "sarvam",
         "llm_provider": settings.LLM_PROVIDER,

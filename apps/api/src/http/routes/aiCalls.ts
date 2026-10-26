@@ -20,6 +20,7 @@ import { aiCallFormatFromFilename, readAiCallSheet } from "../../domain/aiCallIm
 import { callsCountedTowardDailyCap, loadDoNotCallPhones, planAiCallRun } from "../../domain/aiCalls.js";
 import { enqueueAiCallRun } from "../../queue/queues.js";
 import { linkCustomersToRun, syncCustomerFromLog } from "../../domain/aiCallCustomerSync.js";
+import { voiceCallsBlockedReason } from "../../services/voiceBackend.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
 import { AppError, badRequest, conflict, notFound, wrap } from "../errors.js";
 
@@ -128,6 +129,9 @@ export async function planAndStartAiCallRun(
   if (running) {
     throw conflict("Another AI call run is still in progress — wait for it to finish or cancel it first");
   }
+  // Plivo / Twilio can't reach the voice backend (e.g. ngrok stopped): every call would ring, then go silent.
+  const blocked = await voiceCallsBlockedReason();
+  if (blocked) throw new AppError(503, blocked, "voice_unreachable");
   const used = await callsCountedTowardDailyCap();
   if (used + plan.targets.length > aiCallsConfig.dailyCap) {
     throw new AppError(

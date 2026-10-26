@@ -45,6 +45,16 @@ async def lifespan(app: FastAPI):
         log.warning("Could not seed default agent (%s). Is MySQL up and have you run 'alembic upgrade head'?",
                     type(exc).__name__)
 
+    # Calls a restart left waiting for Plivo / Twilio: fail the overdue ones, keep watching the rest.
+    from app.services import call_service
+
+    try:
+        closed = await call_service.recheck_unreported_calls(settings)
+        if closed:
+            log.warning("Closed %d call(s) that never heard from the telephony provider", closed)
+    except Exception as exc:
+        log.warning("Unreported-call check skipped (%s)", type(exc).__name__)
+
     # Call recording: recordings a restart interrupted can't be completed; expired ones are removed hourly.
     retention: "asyncio.Task | None" = None
     if settings.CALL_RECORDING_ENABLED or settings.RECORDINGS_DIR:
@@ -64,8 +74,6 @@ async def lifespan(app: FastAPI):
 
     if retention is not None:
         retention.cancel()
-
-    from app.services import call_service
 
     if plivo_stream._CLOSING:  # let in-flight call teardowns finish writing to MySQL
         await asyncio.wait(set(plivo_stream._CLOSING), timeout=20)

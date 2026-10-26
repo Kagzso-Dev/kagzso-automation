@@ -181,6 +181,10 @@ async def get_call_by_provider_id(db: AsyncSession, provider_id: str) -> Optiona
     return (await db.execute(stmt)).scalars().first()
 
 
+async def list_calls_in_status(db: AsyncSession, statuses: Sequence[str]) -> Sequence[Call]:
+    return (await db.execute(select(Call).where(Call.status.in_(statuses)).order_by(Call.created_at))).scalars().all()
+
+
 async def update_call(db: AsyncSession, call: Call, **fields: Any) -> Call:
     for k, v in fields.items():
         setattr(call, k, v)

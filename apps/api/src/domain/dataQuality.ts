@@ -274,6 +274,11 @@ export async function loadLookups(phones: string[], emails: string[], defaultCou
   };
 }
 
+/** The original row as stored: every header of the file, each value capped at 1,000 characters. */
+function rawRow(headers: string[], row: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(headers.map((h) => [h, (row[h] ?? "").slice(0, 1000)]));
+}
+
 /**
  * Check a parsed file and store it as a staging job. AI scoring runs in the background
  * (queue/dataQuality.ts) when the AI service is available and there is something to score;
@@ -281,6 +286,8 @@ export async function loadLookups(phones: string[], emails: string[], defaultCou
  */
 export async function createDataQualityJob(input: {
   filename: string;
+  /** Every header of the file, in order; each row is kept whole (raw) for the filters and the export. */
+  headers: string[];
   rows: Record<string, string>[];
   mapping: DqMapping;
   byEmail: string | null;
@@ -300,6 +307,7 @@ export async function createDataQualityJob(input: {
     data: {
       filename: input.filename.slice(0, 200),
       mapping: input.mapping as unknown as Prisma.InputJsonValue,
+      headers: input.headers,
       ...counts,
       status: aiRuns ? "RUNNING" : "DONE",
       aiStatus: aiRuns ? "pending" : input.ai.available ? "done" : "unavailable",
@@ -317,6 +325,7 @@ export async function createDataQualityJob(input: {
       aiState: aiRuns ? r.aiState : r.aiState === "PENDING" ? "SKIPPED" : "NONE",
       issues: r.issues as Prisma.InputJsonValue,
       flags: r.flags as Prisma.InputJsonValue,
+      raw: rawRow(input.headers, input.rows[r.rowIndex]!),
     })),
   });
   if (runToken) await enqueueDataQuality({ jobId: job.id, runToken });

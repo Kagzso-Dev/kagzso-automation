@@ -1,19 +1,34 @@
-import { useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import {
   AI_PROVIDER_LABELS,
+  CHECK_STATUS_OPTIONS,
+  cleanFilters,
   downloadDataQualityExport,
+  downloadFilteredExport,
+  DQ_COMPUTED_COLUMNS,
+  DQ_STORED_COLUMNS,
   EXCLUDED_LABELS,
+  EXPORT_PRESETS,
+  EXTRA_FIELD_LABELS,
   issueLabel,
+  PHONE_TYPE_OPTIONS,
+  presetColumns,
+  TIER_OPTIONS,
+  type DqExtraField,
+  type DqFacets,
+  type DqFilters,
   type DqJob,
   type DqRecord,
   type DqRecordStatus,
   type DqReview,
   type DqStatusInfo,
+  type ExportPreset,
+  type FilteredExportRequest,
 } from "../lib/dataQuality";
 import { PageHeader } from "../components/Layout";
-import { Badge, EmptyState, ErrorNote, Spinner, Table, Tabs, type BadgeTone } from "../components/ui";
+import { Badge, EmptyState, ErrorNote, Modal, Spinner, Table, Tabs, type BadgeTone } from "../components/ui";
 import { useConfirm } from "../components/confirm";
 import { useToast } from "../components/toast";
 
@@ -26,6 +41,15 @@ const REVIEW_TONE: Record<DqReview, BadgeTone> = { PENDING: "neutral", APPROVED:
 type Filter = "ALL" | DqRecordStatus;
 
 const clampScore = (v: string) => Math.min(100, Math.max(0, Math.round(Number(v) || 0)));
+
+function useDebounced<T>(value: T, ms: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const t = window.setTimeout(() => setSettled(value), ms);
+    return () => window.clearTimeout(t);
+  }, [value, ms]);
+  return settled;
+}
 
 function aiLine(job: DqJob): string {
   if (job.aiStatus === "unavailable") return job.note ?? "AI not available";
@@ -215,6 +239,26 @@ function JobDetail({ jobId }: { jobId: string }) {
     queryFn: () => api<{ job: DqJob; records: DqRecord[] }>(`/api/data-quality/jobs/${jobId}`),
     refetchInterval: (q) => (q.state.data?.job.status === "RUNNING" ? 3000 : false),
   });
+  // Filters: the server checks the whole file (500 rows at a time) and the table shows the result.
+  // The buttons above the table (approve / reject by score, export approved) still count the whole file.
+  const [filters, setFilters] = useState<DqFilters>({});
+  const typedKey = JSON.stringify(cleanFilters(filters));
+  const filterKey = useDebounced(typedKey, 300);
+  const filtering = filterKey !== "{}";
+  const [exportOpen, setExportOpen] = useState(false);
+  const facets = useQuery({
+    queryKey: ["data-quality-facets", jobId],
+    queryFn: () => api<DqFacets>(`/api/data-quality/jobs/${jobId}/facets`),
+    staleTime: Infinity,
+  });
+  const filtered = useQuery({
+    queryKey: ["data-quality-job", jobId, filterKey],
+    queryFn: () => api<{ job: DqJob; records: DqRecord[] }>(`/api/data-quality/jobs/${jobId}?filters=${encodeURIComponent(filterKey)}`),
+    enabled: filtering,
+    placeholderData: keepPreviousData,
+    refetchInterval: (q) => (q.state.data?.job.status === "RUNNING" ? 3000 : false),
+  });
+  useEffect(() => setPicked(new Set()), [filterKey]);
   const reviewed = (updated: number, value: DqReview) => {
     toast.success(value === "APPROVED" ? "Approved" : value === "REJECTED" ? "Rejected" : "Back to pending", [`${updated} row${updated === 1 ? "" : "s"}`]);
     setPicked(new Set());
@@ -243,8 +287,12 @@ function JobDetail({ jobId }: { jobId: string }) {
   if (detail.isLoading) return <div className="card mt-6"><Spinner /></div>;
   if (detail.error) return <div className="mt-6"><ErrorNote error={detail.error} /></div>;
   const { job, records } = detail.data!;
-  const byStatus = filter === "ALL" ? records : records.filter((r) => r.status === filter);
+  const tableRecords = filtering ? filtered.data?.records : records;
+  const byStatus = !tableRecords ? [] : filter === "ALL" ? tableRecords : tableRecords.filter((r) => r.status === filter);
   const shown = aboveOnly ? byStatus.filter((r) => r.score != null && r.score >= minScore) : byStatus;
+  // The export holds exactly the rows shown (excluded rows only when asked for), so wait until the table is current.
+  const settling = typedKey !== filterKey || (filtering && (!filtered.data || filtered.isPlaceholderData));
+  const exportable = shown.filter((r) => r.status !== "EXCLUDED").length;
   const pickable = shown.filter((r) => r.status === "VALID");
   // Review by score: valid rows nobody has reviewed yet, once no AI score is still to come.
   const waitingForAi = records.some((r) => r.status === "VALID" && r.aiState === "PENDING");
@@ -262,7 +310,7 @@ function JobDetail({ jobId }: { jobId: string }) {
     if (ok) reviewByScore.mutate(value);
   };
   const approved = records.filter((r) => r.review === "APPROVED").length;
-  const count = (s: DqRecordStatus) => records.filter((r) => r.status === s).length;
+  const count = (s: DqRecordStatus) => (tableRecords ?? []).filter((r) => r.status === s).length;
   const toggle = (id: string) =>
     setPicked((p) => {
       const n = new Set(p);
@@ -287,6 +335,9 @@ function JobDetail({ jobId }: { jobId: string }) {
           </button>
           <button type="button" className="btn-ghost" disabled={job.valid === 0} onClick={() => void exportRows("valid")}>
             Export all valid
+          </button>
+          <button type="button" className="btn-ghost" disabled={settling || shown.length === 0} onClick={() => setExportOpen(true)}>
+            Export filtered ({exportable.toLocaleString()} rows)
           </button>
         </div>
       </div>
@@ -317,9 +368,22 @@ function JobDetail({ jobId }: { jobId: string }) {
         </label>
         {waitingForAi && <span className="text-xs text-slate-550">Review by score opens once AI scoring finishes (or is cancelled).</span>}
       </div>
+      <FilterPanel
+        filters={filters}
+        onChange={setFilters}
+        facets={facets.data}
+        showing={`Showing ${shown.length.toLocaleString()} of ${job.total.toLocaleString()}`}
+        busy={settling}
+        onClear={() => {
+          setFilters({});
+          setFilter("ALL");
+          setAboveOnly(false);
+          setPicked(new Set());
+        }}
+      />
       <Tabs<Filter>
         tabs={[
-          { value: "ALL", label: `All (${records.length})` },
+          { value: "ALL", label: `All (${(tableRecords ?? []).length})` },
           { value: "VALID", label: `Valid (${count("VALID")})` },
           { value: "INVALID", label: `Invalid (${count("INVALID")})` },
           { value: "DUPLICATE", label: `Duplicate (${count("DUPLICATE")})` },
@@ -331,6 +395,12 @@ function JobDetail({ jobId }: { jobId: string }) {
           setPicked(new Set());
         }}
       />
+      {filtered.error && filtering && <ErrorNote error={filtered.error} />}
+      {!tableRecords ? (
+        <div className="card">
+          <Spinner />
+        </div>
+      ) : (
       <Table
         head={[
           <input
@@ -385,6 +455,314 @@ function JobDetail({ jobId }: { jobId: string }) {
           </tr>
         ))}
       </Table>
+      )}
+      <ExportDialog
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        jobId={jobId}
+        headers={facets.data?.headers ?? null}
+        count={exportable}
+        excludedCount={shown.length - exportable}
+        base={{
+          filters: JSON.parse(filterKey) as DqFilters,
+          view: { ...(filter !== "ALL" ? { status: filter } : {}), ...(aboveOnly ? { minScore } : {}) },
+        }}
+      />
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ filters */
+
+function toggleIn<T>(list: T[] | undefined, v: T): T[] {
+  const next = new Set(list ?? []);
+  if (next.has(v)) next.delete(v);
+  else next.add(v);
+  return [...next];
+}
+const yesNo = (v: boolean | undefined) => (v === undefined ? "" : v ? "yes" : "no");
+const fromYesNo = (s: string) => (s === "" ? undefined : s === "yes");
+const scoreOrUndefined = (s: string) => (s === "" ? undefined : clampScore(s));
+
+function CheckGroup<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: readonly (readonly [T, string])[];
+  value: T[] | undefined;
+  onChange: (v: T[]) => void;
+}) {
+  return (
+    <fieldset className="text-sm">
+      <legend className="mb-1 text-xs font-medium text-slate-550">{label}</legend>
+      <div className="flex flex-wrap gap-x-3 gap-y-1">
+        {options.map(([v, text]) => (
+          <label key={v} className="flex items-center gap-1.5">
+            <input type="checkbox" checked={value?.includes(v) ?? false} onChange={() => onChange(toggleIn(value, v))} />
+            {text}
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
+const EXTRA_FIELDS: DqExtraField[] = ["city", "state", "district", "pincode", "category", "source", "dateAdded"];
+
+function FilterPanel({
+  filters,
+  onChange,
+  facets,
+  showing,
+  busy,
+  onClear,
+}: {
+  filters: DqFilters;
+  onChange: (f: DqFilters) => void;
+  facets: DqFacets | undefined;
+  showing: string;
+  busy: boolean;
+  onClear: () => void;
+}) {
+  const set = <K extends keyof DqFilters>(key: K, value: DqFilters[K]) => onChange({ ...filters, [key]: value });
+  const searches: [keyof DqFilters, string][] = [
+    ["business", "Business name contains"],
+    ["name", "Contact name contains"],
+    ["email", "Email contains"],
+    ["phone", "Phone contains"],
+  ];
+  const fileColumns = EXTRA_FIELDS.filter((f) => facets?.columns[f] && facets.values[f]?.length);
+  return (
+    <div className="card mb-3 space-y-3 p-4">
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        {searches.map(([key, label]) => (
+          <input
+            key={key}
+            className="input"
+            placeholder={label}
+            aria-label={label}
+            value={(filters[key] as string | undefined) ?? ""}
+            onChange={(e) => set(key, e.target.value)}
+          />
+        ))}
+        {fileColumns.map((f) => (
+          <select key={f} className="input" aria-label={EXTRA_FIELD_LABELS[f]} value={filters[f] ?? ""} onChange={(e) => set(f, e.target.value)}>
+            <option value="">Any {EXTRA_FIELD_LABELS[f].toLowerCase()}</option>
+            {facets!.values[f]!.map(({ value, count }) => (
+              <option key={value} value={value}>
+                {value} ({count})
+              </option>
+            ))}
+          </select>
+        ))}
+        <select className="input" aria-label="Has email" value={yesNo(filters.hasEmail)} onChange={(e) => set("hasEmail", fromYesNo(e.target.value))}>
+          <option value="">Email: any</option>
+          <option value="yes">Has email</option>
+          <option value="no">No email</option>
+        </select>
+        <select className="input" aria-label="Has phone" value={yesNo(filters.hasPhone)} onChange={(e) => set("hasPhone", fromYesNo(e.target.value))}>
+          <option value="">Phone: any</option>
+          <option value="yes">Has phone</option>
+          <option value="no">No phone</option>
+        </select>
+        <div className="flex items-center gap-2 text-sm text-slate-550">
+          Score
+          <input type="number" className="input w-20" min={0} max={100} placeholder="min" aria-label="Score from" value={filters.scoreMin ?? ""} onChange={(e) => set("scoreMin", scoreOrUndefined(e.target.value))} />
+          to
+          <input type="number" className="input w-20" min={0} max={100} placeholder="max" aria-label="Score to" value={filters.scoreMax ?? ""} onChange={(e) => set("scoreMax", scoreOrUndefined(e.target.value))} />
+        </div>
+      </div>
+      <div className="grid gap-3 lg:grid-cols-2">
+        <CheckGroup label="Check status" options={CHECK_STATUS_OPTIONS} value={filters.status} onChange={(v) => set("status", v)} />
+        <CheckGroup label="Phone type" options={PHONE_TYPE_OPTIONS} value={filters.phoneType} onChange={(v) => set("phoneType", v)} />
+        <CheckGroup label="Tier" options={TIER_OPTIONS} value={filters.tier} onChange={(v) => set("tier", v)} />
+        <CheckGroup
+          label="Review"
+          options={[
+            ["PENDING", "Pending"],
+            ["APPROVED", "Approved"],
+            ["REJECTED", "Rejected"],
+          ] as const}
+          value={filters.review}
+          onChange={(v) => set("review", v)}
+        />
+      </div>
+      {facets && !facets.headers && (
+        <p className="text-xs text-slate-550">
+          This file was checked before the other columns were kept, so city, category and its other columns can't be filtered or exported. Upload it
+          again to use them.
+        </p>
+      )}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+        <span className="font-medium text-ink" aria-live="polite">
+          {showing}
+          {busy ? " …" : ""}
+        </span>
+        <button type="button" className="btn-ghost" onClick={onClear}>
+          Clear filters
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ filtered export */
+
+const EXPORT_CHOICE_KEY = "dq-export-choice";
+interface ExportChoice {
+  format: "csv" | "xlsx";
+  preset: ExportPreset;
+  columns: string[];
+}
+function loadExportChoice(): ExportChoice | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(EXPORT_CHOICE_KEY) ?? "null") as ExportChoice | null;
+    return v && (v.format === "csv" || v.format === "xlsx") && Array.isArray(v.columns) ? v : null;
+  } catch {
+    return null;
+  }
+}
+function saveExportChoice(c: ExportChoice) {
+  try {
+    localStorage.setItem(EXPORT_CHOICE_KEY, JSON.stringify(c));
+  } catch {
+    /* private window / storage blocked: the choice just isn't remembered */
+  }
+}
+
+function ExportDialog({
+  open,
+  onClose,
+  jobId,
+  headers,
+  count,
+  excludedCount,
+  base,
+}: {
+  open: boolean;
+  onClose: () => void;
+  jobId: string;
+  headers: string[] | null;
+  count: number;
+  excludedCount: number;
+  base: Pick<FilteredExportRequest, "filters" | "view">;
+}) {
+  const toast = useToast();
+  const remembered = useMemo(loadExportChoice, []);
+  const groups = useMemo(
+    () =>
+      [
+        ...(headers?.length ? [{ title: "From the file", items: headers.map((h) => [`col:${h}`, h] as const) }] : []),
+        { title: "Checked values", items: DQ_STORED_COLUMNS },
+        { title: "Data Quality", items: DQ_COMPUTED_COLUMNS },
+      ] as { title: string; items: readonly (readonly [string, string])[] }[],
+    [headers],
+  );
+  const allKeys = useMemo(() => groups.flatMap((g) => g.items.map(([k]) => k)), [groups]);
+  const [format, setFormat] = useState<"csv" | "xlsx">(remembered?.format ?? "xlsx");
+  const [preset, setPreset] = useState<ExportPreset>(remembered?.preset ?? "all");
+  const [custom, setCustom] = useState<Set<string>>(() => new Set(remembered?.preset === "custom" ? remembered.columns : []));
+  const [includeExcluded, setIncludeExcluded] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const columns = preset === "custom" ? allKeys.filter((k) => custom.has(k)) : presetColumns(preset, headers);
+  const rows = count + (includeExcluded ? excludedCount : 0);
+
+  const run = async () => {
+    setBusy(true);
+    saveExportChoice({ format, preset, columns: preset === "custom" ? [...custom] : [] });
+    try {
+      const written = await downloadFilteredExport(jobId, { ...base, columns, format, includeExcluded });
+      toast.success("Export downloaded", [`${written.toLocaleString()} row${written === 1 ? "" : "s"}`]);
+      onClose();
+    } catch (err) {
+      toast.fromError(err, "Export failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title={`Export filtered (${rows.toLocaleString()} rows)`} wide>
+      <div className="space-y-4 text-sm">
+        <fieldset>
+          <legend className="mb-1 text-xs font-medium text-slate-550">Format</legend>
+          <div className="flex flex-wrap gap-4">
+            <label className="flex items-center gap-1.5">
+              <input type="radio" name="dq-format" checked={format === "xlsx"} onChange={() => setFormat("xlsx")} />
+              Excel (.xlsx), keeps phone numbers and IDs as text
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input type="radio" name="dq-format" checked={format === "csv"} onChange={() => setFormat("csv")} />
+              CSV (UTF-8)
+            </label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend className="mb-1 text-xs font-medium text-slate-550">Columns</legend>
+          <div className="flex flex-wrap gap-4">
+            {EXPORT_PRESETS.map(([p, label]) => (
+              <label key={p} className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="dq-preset"
+                  checked={preset === p}
+                  onChange={() => {
+                    if (p === "custom" && preset !== "custom") setCustom(new Set(columns));
+                    setPreset(p);
+                  }}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        {preset === "custom" && (
+          <div className="grid gap-3 sm:grid-cols-3">
+            {groups.map((g) => (
+              <fieldset key={g.title}>
+                <legend className="mb-1 text-xs font-medium text-slate-550">{g.title}</legend>
+                <div className="space-y-1">
+                  {g.items.map(([k, label]) => (
+                    <label key={k} className="flex items-center gap-1.5">
+                      <input type="checkbox" checked={custom.has(k)} onChange={() => setCustom((c) => new Set(toggleIn([...c], k)))} />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            ))}
+          </div>
+        )}
+        {excludedCount > 0 && (
+          <div>
+            <label className="flex items-center gap-1.5">
+              <input type="checkbox" checked={includeExcluded} onChange={(e) => setIncludeExcluded(e.target.checked)} />
+              Include excluded rows (for audit only) — {excludedCount.toLocaleString()} in these filters
+            </label>
+            {includeExcluded && (
+              <p className="mt-1 rounded-lg bg-warn-soft px-3 py-2 text-warn">
+                Excluded rows are Do not call, Not interested or Wrong person. They are labelled EXCLUDED in the file. Never call or message them.
+              </p>
+            )}
+          </div>
+        )}
+        <p className="text-xs text-slate-550">
+          Only reads: no row, score, review or contact changes, and nothing is called or sent. The export is logged (who, when, filters, columns, row
+          count).
+        </p>
+        <div className="flex justify-end gap-2">
+          <button type="button" className="btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="btn-primary" disabled={busy || rows === 0 || columns.length === 0} onClick={() => void run()}>
+            {busy ? "Exporting…" : `Export ${rows.toLocaleString()} rows`}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }

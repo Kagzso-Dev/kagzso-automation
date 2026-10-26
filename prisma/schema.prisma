@@ -893,6 +893,8 @@ model DataQualityJob {
   status         DataQualityJobStatus @default(RUNNING)
   // Detected columns: { name, phone, business, email } → header in the file (or null).
   mapping        Json
+  // Every header of the uploaded file, in order. Null for files uploaded before 0028.
+  headers        Json?
   total          Int                  @default(0)
   valid          Int                  @default(0)
   invalid        Int                  @default(0)
@@ -939,6 +941,9 @@ model DataQualityRecord {
   aiScore        Int?
   aiNotes        String?                 @db.VarChar(500)
   review         DataQualityReview       @default(PENDING)
+  // The whole original row { header: text }, for the filters and the filtered export.
+  // Null for files uploaded before 0028 (only the mapped columns above were kept then).
+  raw            Json?
   createdAt      DateTime                @default(now())
   updatedAt      DateTime                @updatedAt
   job            DataQualityJob          @relation(fields: [jobId], references: [id], onDelete: Cascade)
@@ -947,4 +952,22 @@ model DataQualityRecord {
   @@index([jobId, status])
   @@index([jobId, aiState])
   @@map("data_quality_records")
+}
+
+// One filtered export from Data Quality: who, when, which file, the filters, the columns and the
+// row count. Holds no contact data (text searches are stored as "[search]", never their text).
+model DataQualityExportLog {
+  id              String   @id @default(cuid())
+  jobId           String // no relation: the log outlives a removed job
+  filename        String   @db.VarChar(200)
+  byEmail         String?  @db.VarChar(191)
+  format          String   @db.VarChar(8) // csv | xlsx
+  filters         Json
+  columns         Json // string[] of column keys
+  includeExcluded Boolean  @default(false)
+  rowCount        Int
+  createdAt       DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("data_quality_export_logs")
 }

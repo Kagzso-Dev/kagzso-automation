@@ -77,11 +77,18 @@ let base = "";
 const token = (role: "ADMIN" | "EDITOR", sub = `u-${role}`) =>
   jwt.sign({ sub, email: `${sub}@test`, role }, process.env.JWT_ACCESS_SECRET!);
 
+// The voice backend's /ready answer (null: like an older voice backend, it answers the preview body).
+let readyBody: Record<string, unknown> | null = null;
+
 beforeAll(async () => {
   voice = createServer((req, res) => {
     req.resume();
     req.on("end", () => {
       res.setHeader("Content-Type", "application/json");
+      if (req.url === "/ready" && readyBody) {
+        res.statusCode = readyBody.status === "ready" ? 200 : 503;
+        return res.end(JSON.stringify(readyBody));
+      }
       res.end(JSON.stringify({ valid: true, errors: [], greeting: "Hi", system_prompt: "…" }));
     });
   }).listen(0);
@@ -103,6 +110,7 @@ beforeEach(() => {
   seq = 0;
   missing = false;
   dnc.clear();
+  readyBody = null;
 });
 
 type Opts = { method?: string; body?: unknown; role?: "ADMIN" | "EDITOR"; sub?: string };
@@ -252,5 +260,43 @@ describe("test call allowlist", () => {
     expect(await errorOf(fourth)).toMatch(/3 test calls per hour/);
     // Per admin: another admin is unaffected.
     expect((await testCall(envId, "u-other")).status).toBe(201);
+  });
+});
+
+describe("test call when Plivo can't reach the voice backend", () => {
+  const ready = (publicUrl: "configured" | "unreachable", reason: string | null = null) => ({
+    status: publicUrl === "configured" ? "ready" : "not_ready",
+    mysql: "ok",
+    providers: { telephony: "configured", public_base_url: publicUrl, sarvam: "configured", tts: "configured", llm: "configured" },
+    public_base_url_check: { url: "https://steersman.ngrok-free.dev", reachable: publicUrl === "configured", reason },
+    telephony_provider: "plivo",
+  });
+
+  it("is refused with the reason (no run, no call), and goes ahead once the URL is reachable again", async () => {
+    const envId = (await list()).items.find((i) => i.source === "env")!.id;
+    const before = { runs: runs.length, enqueued: enqueued.length };
+
+    readyBody = ready("unreachable", "ngrok tunnel offline");
+    const refused = await testCall(envId, "u-ngrok");
+    expect(refused.status).toBe(503);
+    expect(await refused.json()).toMatchObject({
+      code: "voice_unreachable",
+      error:
+        "Calls can't connect: Plivo can't reach the voice backend at https://steersman.ngrok-free.dev (ngrok tunnel offline). " +
+        "Start ngrok, or fix PUBLIC_BASE_URL in the voice backend's .env and restart it, then try again.",
+    });
+    expect({ runs: runs.length, enqueued: enqueued.length }).toEqual(before);
+
+    readyBody = ready("configured");
+    expect((await testCall(envId, "u-ngrok")).status).toBe(201);
+    expect(runs).toHaveLength(before.runs + 1);
+  });
+
+  it("other /ready answers never block a call (not ready for another reason, an older voice backend)", async () => {
+    const envId = (await list()).items.find((i) => i.source === "env")!.id;
+    readyBody = { ...ready("configured"), status: "not_ready", providers: { ...ready("configured").providers, llm: "missing" } };
+    expect((await testCall(envId, "u-other-ready")).status).toBe(201);
+    readyBody = null; // the older voice backend: no /ready check at all
+    expect((await testCall(envId, "u-other-ready")).status).toBe(201);
   });
 });

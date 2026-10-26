@@ -1,5 +1,9 @@
+import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { basename } from "node:path";
+import { parse as parseCsv } from "csv-parse/sync";
+import ExcelJS from "exceljs";
 import jwt from "jsonwebtoken";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -17,7 +21,7 @@ import {
 // in-memory store that only allows writes to the two staging tables; existing tables are read-only.
 
 type Row = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-const tables: Record<"dataQualityJob" | "dataQualityRecord", Row[]> = { dataQualityJob: [], dataQualityRecord: [] };
+const tables: Record<"dataQualityJob" | "dataQualityRecord" | "dataQualityExportLog", Row[]> = { dataQualityJob: [], dataQualityRecord: [], dataQualityExportLog: [] };
 const writes: string[] = [];
 let seq = 0;
 let liveRun = false;
@@ -25,10 +29,17 @@ let liveRun = false;
 const clone = <T,>(v: T): T => structuredClone(v);
 function matches(row: Row, where: Row = {}): boolean {
   return Object.entries(where).every(([k, v]) => {
-    if (v && typeof v === "object" && !(v instanceof Date)) return "in" in v ? (v.in as unknown[]).includes(row[k]) : false;
+    if (v && typeof v === "object" && !(v instanceof Date)) {
+      if ("in" in v) return (v.in as unknown[]).includes(row[k]);
+      if ("gt" in v) return row[k] > v.gt;
+      return false;
+    }
     return row[k] === v;
   });
 }
+/** Prisma's select: only the fields set to true (so a test sees exactly what the code asked for). */
+const pickFields = (row: Row | null, select?: Row) =>
+  row && select ? Object.fromEntries(Object.entries(select).filter(([, on]) => on).map(([k]) => [k, row[k]])) : row;
 function apply(row: Row, data: Row) {
   for (const [k, v] of Object.entries(data)) row[k] = v && typeof v === "object" && "increment" in v ? row[k] + v.increment : v;
   row.updatedAt = new Date();
@@ -39,7 +50,8 @@ function sortRows(rows: Row[], orderBy?: Row) {
 }
 const DEFAULTS = {
   dataQualityJob: () => ({ status: "RUNNING", aiStatus: "pending", aiDone: 0, aiFailures: 0, note: null, waitingReason: null, runToken: null, finishedAt: null }),
-  dataQualityRecord: () => ({ aiState: "NONE", aiScore: null, aiNotes: null, review: "PENDING" }),
+  dataQualityRecord: () => ({ aiState: "NONE", aiScore: null, aiNotes: null, review: "PENDING", raw: null }),
+  dataQualityExportLog: () => ({}),
 };
 function stagingModel(name: keyof typeof tables) {
   const all = () => tables[name];
@@ -48,9 +60,10 @@ function stagingModel(name: keyof typeof tables) {
     create: async ({ data }: { data: Row }) => (writes.push(`${name}.create`), all().push(fresh(data)), clone(all().at(-1)!)),
     createMany: async ({ data }: { data: Row[] }) => (writes.push(`${name}.createMany`), all().push(...data.map(fresh)), { count: data.length }),
     findUnique: async ({ where }: { where: Row }) => clone(all().find((r) => matches(r, where)) ?? null),
-    findFirst: async ({ where, orderBy }: { where?: Row; orderBy?: Row }) => clone(sortRows(all().filter((r) => matches(r, where)), orderBy)[0] ?? null),
-    findMany: async ({ where, orderBy, take }: { where?: Row; orderBy?: Row; take?: number } = {}) =>
-      clone(sortRows(all().filter((r) => matches(r, where)), orderBy).slice(0, take ?? Infinity)),
+    findFirst: async ({ where, orderBy, select }: { where?: Row; orderBy?: Row; select?: Row }) =>
+      clone(pickFields(sortRows(all().filter((r) => matches(r, where)), orderBy)[0] ?? null, select)),
+    findMany: async ({ where, orderBy, take, select }: { where?: Row; orderBy?: Row; take?: number; select?: Row } = {}) =>
+      clone(sortRows(all().filter((r) => matches(r, where)), orderBy).slice(0, take ?? Infinity).map((r) => pickFields(r, select))),
     update: async ({ where, data }: { where: Row; data: Row }) => {
       writes.push(`${name}.update`);
       const r = all().find((x) => matches(x, where))!;
@@ -83,7 +96,8 @@ const readOnly = (rows: Row[]) => ({ findMany: async ({ where }: { where?: Row }
 const db = {
   dataQualityJob: stagingModel("dataQualityJob"),
   dataQualityRecord: stagingModel("dataQualityRecord"),
-  aiCallRun: { findFirst: async () => (liveRun ? { id: "run-live" } : null) },
+  dataQualityExportLog: stagingModel("dataQualityExportLog"),
+  aiCallRun:{ findFirst: async () => (liveRun ? { id: "run-live" } : null) },
   aiCallLog: readOnly(callLogs),
   aiCallCustomer: readOnly(customers),
   whatsAppContact: readOnly([{ phone: DQ_IN_WHATSAPP.slice(1) }]),
@@ -174,6 +188,7 @@ afterAll(async () => {
 beforeEach(() => {
   tables.dataQualityJob = [];
   tables.dataQualityRecord = [];
+  tables.dataQualityExportLog = [];
   writes.length = 0;
   enqueued.length = 0;
   prompts.length = 0;
@@ -189,11 +204,14 @@ afterEach(() => {
   for (const line of outbound) expect(line.split(" ")[1]!.startsWith(`${ollamaBase}/api/`)).toBe(true);
 });
 
-const token = (role: "ADMIN" | "EDITOR") => jwt.sign({ sub: `u-${role}`, email: `${role.toLowerCase()}@test`, role }, process.env.JWT_ACCESS_SECRET!);
-const call = (path: string, { method = "GET", role = "ADMIN" as "ADMIN" | "EDITOR", json, body }: { method?: string; role?: "ADMIN" | "EDITOR"; json?: unknown; body?: FormData } = {}) =>
+const token = (role: "ADMIN" | "EDITOR", sub = `u-${role}`) => jwt.sign({ sub, email: `${role.toLowerCase()}@test`, role }, process.env.JWT_ACCESS_SECRET!);
+const call = (
+  path: string,
+  { method = "GET", role = "ADMIN" as "ADMIN" | "EDITOR", json, body, sub }: { method?: string; role?: "ADMIN" | "EDITOR"; json?: unknown; body?: FormData; sub?: string } = {},
+) =>
   realFetch(apiBase + path, {
     method,
-    headers: { Authorization: `Bearer ${token(role)}`, ...(json !== undefined ? { "Content-Type": "application/json" } : {}) },
+    headers: { Authorization: `Bearer ${token(role, sub)}`, ...(json !== undefined ? { "Content-Type": "application/json" } : {}) },
     body: body ?? (json !== undefined ? JSON.stringify(json) : undefined),
   });
 const uploadFixture = async (role: "ADMIN" | "EDITOR" = "ADMIN") => {
@@ -380,4 +398,260 @@ describe("background job controls", () => {
     expect(records().filter((r) => r.aiState === "PENDING")).toHaveLength(0);
     expect((await call(`/api/data-quality/jobs/${again.id}/resume`, { method: "POST" })).status).toBe(409);
   });
+});
+
+/* ---------------------------------------------------------------- filtered export */
+
+// A file with more columns than the four Data Quality checks: kept whole (raw) since 0028.
+const EXPORT_CSV =
+  [
+    "client_id,business_name,contact_name,email,phone,city,industry,source,first_seen",
+    "000123,Sri Murugan Bakery,Ravi Kumar,ravi@murugan.in,9876500101,Chennai,Restaurants & Food Service,Google Places,2026-10-20", // row 2 valid 100
+    "000124,முருகன் ஸ்டோர்ஸ்,,,9876500102,Chennai,Retail,Google Places,2026-10-20", //             row 3 valid, no name: 70
+    '000125,"=HYPERLINK(""http://x.example"")",Meena,,9876500103,Coimbatore,Retail,Crustdata,2026-10-21', // row 4 valid 100
+    "000126,Deepa Bakery,Deepa,info@deepabakery.in,,Chennai,Restaurants & Food Service,Google Places,2026-10-21", // row 5 INVALID: email, no phone
+    "000127,Chennai Dental Care,Arun Kumar,,044 2345 6789,Chennai,Healthcare,Google Places,2026-10-21", // row 6 valid landline: 80
+    "000128,Dinesh Hardware,Dinesh,,9876500009,Chennai,Retail,Google Places,2026-10-21", //          row 7 EXCLUDED do not call
+    "000129,Bala Bakes,Bala,bala@balabakes.in,9876500107,Bengaluru,Restaurants & Food Service,Google Places,2026-10-22", // row 8 valid 100
+    "000130,Kavya Cafe,,,9876500108,Bengaluru,Restaurants & Food Service,Google Places,2026-10-22", // row 9 valid, no name: 70
+  ].join("\n") + "\n";
+
+const DQ_ALL_COMPUTED = [
+  "dq:phone", "dq:phone_extension", "dq:phone_type", "dq:check_status", "dq:excluded_reason", "dq:score", "dq:rule_score", "dq:ai_score",
+  "dq:score_breakdown", "dq:tier", "dq:notes", "dq:ai_notes", "dq:review", "dq:file_name", "dq:row", "dq:upload_date",
+];
+
+// Uploads (10 a minute) and exports (20 a minute) are rate-limited per user: each call below is made
+// as its own admin user so this file's many calls stay under the limits the earlier tests already use.
+let callers = 0;
+const freshAdmin = () => `u-ADMIN-${++callers}`;
+
+async function uploadFile(content: string | Buffer, filename: string): Promise<Row> {
+  const fd = new FormData();
+  fd.append("file", new Blob([content]), filename);
+  const res = await call("/api/data-quality/jobs", { method: "POST", body: fd, sub: freshAdmin() });
+  expect(res.status).toBe(201);
+  return ((await res.json()) as { job: Row }).job;
+}
+const uploadExportFixture = async () => {
+  ollamaUp = false; // standard checks only, so every score below is fixed
+  return (await uploadFile(EXPORT_CSV, "client-research (1).csv")).id as string;
+};
+const shownFor = async (id: string, filters: Row) =>
+  ((await (await call(`/api/data-quality/jobs/${id}?filters=${encodeURIComponent(JSON.stringify(filters))}`)).json()) as { records: Row[] }).records;
+const exportFor = (id: string, body: Row) => call(`/api/data-quality/jobs/${id}/export-filtered`, { method: "POST", json: body, sub: freshAdmin() });
+const csvRows = async (res: Response) => parseCsv(await res.text(), { bom: true, columns: true }) as Record<string, string>[];
+async function xlsxRows(res: Response): Promise<unknown[][]> {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(Buffer.from(await res.arrayBuffer()) as unknown as ExcelJS.Buffer);
+  const out: unknown[][] = [];
+  wb.worksheets[0]!.eachRow((row) => out.push((row.values as unknown[]).slice(1)));
+  return out;
+}
+
+describe("filtered export", () => {
+  it("exports exactly the rows the table shows, for each filter and combination", async () => {
+    const id = await uploadExportFixture();
+    const cases: [string, Row, number][] = [
+      ["business name word", { business: "bakery" }, 2],
+      ["city", { city: "Chennai" }, 4], // 5 shown, one of them excluded
+      ["score 70+", { scoreMin: 70 }, 6],
+      ["has email, no phone", { hasEmail: true, hasPhone: false }, 1],
+      ["city + category + score", { city: "Chennai", category: "Restaurants & Food Service", scoreMin: 70 }, 1],
+      ["likely landline", { status: ["LANDLINE"] }, 1],
+      ["high priority tier", { tier: ["HIGH_PRIORITY"] }, 3],
+      ["phone contains", { phone: "500108" }, 1],
+      ["source + date added", { source: "Google Places", dateAdded: "2026-10-22" }, 2],
+    ];
+    for (const [what, filters, expected] of cases) {
+      const shown = (await shownFor(id, filters)).filter((r) => r.status !== "EXCLUDED");
+      const res = await exportFor(id, { filters, columns: ["dq:row", "dq:name", "dq:phone"], format: "csv" });
+      const rows = await csvRows(res);
+      expect([what, shown.length, Number(res.headers.get("x-row-count")), rows.length]).toEqual([what, expected, expected, expected]);
+      expect(rows.map((r) => r.row)).toEqual(shown.map((r) => String(r.rowIndex + 2)));
+    }
+    // The table's own controls travel with the export too: Valid tab + "Only show rows scoring 80+".
+    const all = await shownFor(id, {});
+    const onScreen = all.filter((r) => r.status === "VALID" && r.score >= 80).map((r) => String(r.rowIndex + 2));
+    const viewRows = await csvRows(await exportFor(id, { view: { status: "VALID", minScore: 80 }, columns: ["dq:row"], format: "csv" }));
+    expect(viewRows.map((r) => r.row)).toEqual(onScreen);
+    expect(onScreen).toEqual(["2", "4", "6", "8"]);
+  });
+
+  it("Tamil text, leading zeros and formula-looking cells come out right (CSV with BOM, XLSX as text)", async () => {
+    const id = await uploadExportFixture();
+    const columns = ["col:client_id", "col:business_name", "col:city", "dq:phone", "dq:score", "dq:tier", "dq:check_status"];
+
+    const csv = await exportFor(id, { columns, format: "csv" });
+    expect(csv.headers.get("content-type")).toMatch(/^text\/csv/);
+    expect(csv.headers.get("content-disposition")).toMatch(/^attachment; filename="dataquality_client-research-1_all_\d{8}-\d{4}\.csv"$/);
+    const bytes = Buffer.from(await csv.arrayBuffer()); // res.text() would drop the BOM while decoding
+    expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]); // UTF-8 BOM: Excel then reads Tamil correctly
+    const rows = parseCsv(bytes.toString("utf8"), { bom: true, columns: true }) as Record<string, string>[];
+    const byId = (cid: string) => rows.find((r) => r.client_id === cid)!;
+    expect(byId("000123")).toEqual({
+      client_id: "000123",
+      business_name: "Sri Murugan Bakery",
+      city: "Chennai",
+      phone_normalised: "+919876500101", // a phone keeps its +: it can't run as a formula
+      score: "100",
+      tier: "HIGH PRIORITY",
+      check_status: "VALID",
+    });
+    expect(byId("000124").business_name).toBe("முருகன் ஸ்டோர்ஸ்");
+    expect(byId("000125").business_name).toBe(`'=HYPERLINK("http://x.example")`);
+    expect(rows).toHaveLength(7); // 8 rows, the do-not-call one left out
+
+    const xlsx = await exportFor(id, { columns, format: "xlsx" });
+    expect(xlsx.headers.get("content-type")).toBe("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    const sheet = await xlsxRows(xlsx);
+    expect(sheet[0]).toEqual(["client_id", "business_name", "city", "phone_normalised", "score", "tier", "check_status"]);
+    expect(sheet.find((r) => r[0] === "000123")).toEqual(["000123", "Sri Murugan Bakery", "Chennai", "+919876500101", 100, "HIGH PRIORITY", "VALID"]);
+    expect(sheet.find((r) => r[0] === "000124")![1]).toBe("முருகன் ஸ்டோர்ஸ்");
+    expect(sheet.find((r) => r[0] === "000125")![1]).toBe(`'=HYPERLINK("http://x.example")`);
+    expect(sheet).toHaveLength(1 + 7);
+  });
+
+  it("excluded rows are left out unless asked for, and are then labelled EXCLUDED", async () => {
+    const id = await uploadExportFixture();
+    const body = { filters: { city: "Chennai" }, columns: ["dq:row", "dq:check_status", "dq:excluded_reason"], format: "csv" };
+    const without = await csvRows(await exportFor(id, body));
+    expect(without.map((r) => r.row)).toEqual(["2", "3", "5", "6"]);
+    expect(without.map((r) => r.check_status)).not.toContain("EXCLUDED");
+    const withExcluded = await csvRows(await exportFor(id, { ...body, includeExcluded: true }));
+    expect(withExcluded.map((r) => r.row)).toEqual(["2", "3", "5", "6", "7"]);
+    expect(withExcluded.at(-1)).toEqual({ row: "7", check_status: "EXCLUDED", excluded_reason: "Do not call" });
+    expect(tables.dataQualityExportLog.map((l) => l.includeExcluded)).toEqual([false, true]);
+  });
+
+  it("only reads: no row, job or contact changes, one audit row with no contact data, nothing sent", async () => {
+    const id = await uploadExportFixture();
+    const before = JSON.stringify([tables.dataQualityJob, tables.dataQualityRecord]);
+    writes.length = 0;
+    outbound = [];
+    const columns = ["dq:name", "dq:phone", "dq:email"];
+    const res = await exportFor(id, { filters: { business: "bakery", phone: "98765", city: "Chennai" }, view: { status: "VALID" }, columns, format: "xlsx" });
+    expect(res.status).toBe(200);
+    expect(await xlsxRows(res)).toEqual([["name", "phone_normalised", "email"], ["Ravi Kumar", "+919876500101", "ravi@murugan.in"]]);
+
+    expect(JSON.stringify([tables.dataQualityJob, tables.dataQualityRecord])).toBe(before);
+    expect(writes).toEqual(["dataQualityExportLog.create"]); // other tables have no write methods at all
+    expect(outbound).toEqual([]);
+    const log = tables.dataQualityExportLog[0]!;
+    expect(log).toMatchObject({ jobId: id, filename: "client-research (1).csv", byEmail: "admin@test", format: "xlsx", columns, includeExcluded: false, rowCount: 1 });
+    expect(log.filters).toEqual({ business: "[search]", phone: "[search]", city: "Chennai", view: { status: "VALID" } });
+    expect(JSON.stringify(log)).not.toMatch(/bakery|98765|murugan|Ravi/i);
+  });
+
+  it("caps one export, and waits when memory is low while a file is being scored", async () => {
+    await uploadFile(dqCsv(), "leads.csv"); // Ollama up: this job is RUNNING (AI scoring)
+    const id = await uploadExportFixture();
+    const body = { columns: ["dq:row"], format: "csv" };
+
+    process.env.DATA_QUALITY_EXPORT_MAX_ROWS = "2";
+    try {
+      const res = await exportFor(id, body);
+      expect(res.status).toBe(413);
+      expect(((await res.json()) as Row).error).toBe("These filters match 7 rows; one export can hold at most 2. Narrow the filters and try again.");
+    } finally {
+      delete process.env.DATA_QUALITY_EXPORT_MAX_ROWS;
+    }
+
+    process.env.DATA_QUALITY_EXPORT_MIN_FREE_MB = "100000000"; // "less free memory than this" is always true
+    try {
+      const busy = await exportFor(id, body);
+      expect(busy.status).toBe(503);
+      expect(await busy.json()).toMatchObject({ code: "try_again", error: expect.stringMatching(/Try again shortly/) });
+      tables.dataQualityJob.find((j) => j.status === "RUNNING")!.status = "PAUSED"; // nothing scoring any more
+      expect((await exportFor(id, body)).status).toBe(200);
+    } finally {
+      delete process.env.DATA_QUALITY_EXPORT_MIN_FREE_MB;
+    }
+    expect(tables.dataQualityExportLog).toHaveLength(1); // refused exports are not logged as exports
+  });
+
+  it("keeps the whole original row for new files; the table never receives it; dropdown values come from the file", async () => {
+    const id = await uploadExportFixture();
+    expect(tables.dataQualityJob[0]!.headers).toEqual(["client_id", "business_name", "contact_name", "email", "phone", "city", "industry", "source", "first_seen"]);
+    expect(records()[0]!.raw).toMatchObject({ client_id: "000123", city: "Chennai", industry: "Restaurants & Food Service" });
+
+    const detail = (await (await call(`/api/data-quality/jobs/${id}`)).json()) as { records: Row[] };
+    expect(detail.records).toHaveLength(8);
+    expect(detail.records.every((r) => !("raw" in r))).toBe(true);
+    expect((await shownFor(id, { city: "Chennai" })).every((r) => !("raw" in r))).toBe(true);
+
+    const facets = (await (await call(`/api/data-quality/jobs/${id}/facets`)).json()) as Row;
+    expect(facets.columns).toEqual({ city: "city", state: null, district: null, pincode: null, category: "industry", source: "source", dateAdded: "first_seen" });
+    expect(facets.values.city).toEqual([
+      { value: "Chennai", count: 5 },
+      { value: "Bengaluru", count: 2 },
+      { value: "Coimbatore", count: 1 },
+    ]);
+  });
+
+  it("files uploaded before this update: the checked values export, file columns can't be asked for", async () => {
+    const id = await uploadExportFixture();
+    tables.dataQualityJob[0]!.headers = null;
+    for (const r of records()) r.raw = null;
+
+    expect(await (await call(`/api/data-quality/jobs/${id}/facets`)).json()).toMatchObject({ headers: null, values: {} });
+    expect(await shownFor(id, { city: "Chennai" })).toEqual([]); // nothing to match: never guessed
+    const rows = await csvRows(await exportFor(id, { columns: ["dq:row", "dq:name", "dq:phone_raw", "dq:phone_type", "dq:score_breakdown"], format: "csv" }));
+    expect(rows).toHaveLength(7);
+    expect(rows.find((r) => r.row === "6")).toEqual({
+      row: "6",
+      name: "Arun Kumar",
+      phone_as_written: "044 2345 6789",
+      phone_type: "Landline",
+      score_breakdown: "rules 80 (Not a mobile (landline: no WhatsApp) -20)",
+    });
+    expect((await exportFor(id, { columns: ["col:city"], format: "csv" })).status).toBe(400);
+  });
+
+  it("admins only, and bad input is refused", async () => {
+    const id = await uploadExportFixture();
+    expect((await call(`/api/data-quality/jobs/${id}/facets`, { role: "EDITOR" })).status).toBe(403);
+    expect((await call(`/api/data-quality/jobs/${id}/export-filtered`, { method: "POST", role: "EDITOR", json: { columns: ["dq:row"], format: "csv" } })).status).toBe(403);
+    expect((await exportFor(id, { columns: ["dq:password"], format: "csv" })).status).toBe(400);
+    expect((await exportFor(id, { columns: ["dq:row"], format: "pdf" })).status).toBe(400);
+    expect((await call(`/api/data-quality/jobs/${id}?filters=not-json`)).status).toBe(400);
+    expect(tables.dataQualityExportLog).toHaveLength(0);
+  });
+});
+
+// The real upload file, end to end (in-memory database): DQ_REAL_FILE=<path to .xlsx> npx vitest run test/dataQualityHttp.test.ts
+describe.runIf(!!process.env.DQ_REAL_FILE)("the real file (DQ_REAL_FILE)", () => {
+  it("every filter's export holds exactly the rows the table shows; nothing changes", async () => {
+    ollamaUp = false;
+    const file = process.env.DQ_REAL_FILE!;
+    const job = await uploadFile(readFileSync(file), basename(file));
+    const columns = [...(job.headers as string[]).map((h) => `col:${h}`), ...DQ_ALL_COMPUTED];
+    const before = JSON.stringify([tables.dataQualityJob, tables.dataQualityRecord]);
+    const cases: [string, Row][] = [
+      ["no filters", {}],
+      ["business name contains 'bakery'", { business: "bakery" }],
+      ["city Chennai", { city: "Chennai" }],
+      ["score 70+", { scoreMin: 70 }],
+      ["has email, no phone", { hasEmail: true, hasPhone: false }],
+      ["Chennai + Healthcare + score 70+", { city: "Chennai", category: "Healthcare", scoreMin: 70 }],
+      ["Bengaluru + Restaurants & Food Service + has email", { city: "Bengaluru", category: "Restaurants & Food Service", hasEmail: true }],
+      ["likely landline", { status: ["LANDLINE"] }],
+      ["tier HIGH PRIORITY + mobile", { tier: ["HIGH_PRIORITY"], phoneType: ["mobile"] }],
+    ];
+    const report: string[] = [`${job.filename}: ${job.total} rows (${job.valid} valid, ${job.invalid} invalid, ${job.duplicates} duplicate, ${job.excluded} excluded)`];
+    for (const [what, filters] of cases) {
+      const shown = (await shownFor(job.id, filters)).filter((r) => r.status !== "EXCLUDED").length;
+      const csv = await exportFor(job.id, { filters, columns, format: "csv" });
+      const header = Number(csv.headers.get("x-row-count"));
+      const csvText = await csv.text();
+      const csvCount = (parseCsv(csvText, { bom: true, columns: true }) as unknown[]).length;
+      const xlsxCount = (await xlsxRows(await exportFor(job.id, { filters, columns, format: "xlsx" }))).length - 1;
+      const tamil = /[஀-௿]/.test(csvText) ? ", Tamil kept" : "";
+      report.push(`${what}: table ${shown}, CSV ${csvCount}, XLSX ${xlsxCount}, X-Row-Count ${header}${tamil}`);
+      expect([what, csvCount, xlsxCount, header]).toEqual([what, shown, shown, shown]);
+    }
+    console.info(report.join("\n"));
+    expect(JSON.stringify([tables.dataQualityJob, tables.dataQualityRecord])).toBe(before);
+    expect(new Set(writes.map((w) => w.split(".")[0]))).toEqual(new Set(["dataQualityJob", "dataQualityRecord", "dataQualityExportLog"]));
+  }, 600_000);
 });

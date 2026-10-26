@@ -91,6 +91,32 @@ async function request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: strin
   return body as T;
 }
 
+/**
+ * Why calls can't connect right now, or null. The voice backend's /ready calls itself through
+ * its PUBLIC_BASE_URL (the address Plivo / Twilio use) and says "unreachable" when that fails,
+ * e.g. the ngrok tunnel is stopped. Any other answer (ready, an older voice backend without the
+ * check, no answer at all) is null: calls go out as before and fail on their own if they must.
+ */
+export async function voiceCallsBlockedReason(): Promise<string | null> {
+  if (!isAiCallsConfigured()) return null;
+  try {
+    // /ready answers 503 when not ready: read the body either way. Longer than its own 5 s self-check.
+    const res = await fetch(`${aiCallsConfig.voiceBackendUrl}/ready`, { signal: AbortSignal.timeout(8_000) });
+    const body = (await res.json().catch(() => null)) as {
+      providers?: { public_base_url?: string };
+      public_base_url_check?: { url?: string | null; reason?: string | null };
+      telephony_provider?: string;
+    } | null;
+    if (body?.providers?.public_base_url !== "unreachable") return null;
+    const provider = body.telephony_provider === "twilio" ? "Twilio" : "Plivo";
+    const url = body.public_base_url_check?.url ?? "its PUBLIC_BASE_URL";
+    const why = body.public_base_url_check?.reason ? ` (${body.public_base_url_check.reason})` : "";
+    return `Calls can't connect: ${provider} can't reach the voice backend at ${url}${why}. Start ngrok, or fix PUBLIC_BASE_URL in the voice backend's .env and restart it, then try again.`;
+  } catch {
+    return null;
+  }
+}
+
 export async function placeVoiceCall(input: PlaceCallInput): Promise<{ callId: string; providerCallId: string | null }> {
   const res = await request<{ success: boolean; call_id: string; provider_call_id: string | null }>(
     "POST",
