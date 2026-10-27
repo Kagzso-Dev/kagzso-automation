@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AI_CALL_STAGE_LABELS, formatPhoneDisplay } from "@dispatch/shared";
+import { AI_CALL_LANGUAGE_NAMES, AI_CALL_STAGE_LABELS, formatPhoneDisplay } from "@dispatch/shared";
 import { api } from "../lib/api";
 import { formatDateTime } from "../lib/schedule";
 import { useWhatsAppTemplateOptions, type AiCallFollowup, type FollowupStatus } from "../lib/aiCallCustomers";
@@ -133,7 +133,15 @@ export function AiCallFollowupsQueue({ view, setView }: QueueViewProps) {
               return (
                 <tr key={f.id} className="border-b border-line-subtle align-top last:border-0">
                   <td className="px-4 py-2.5">
-                    <div className="font-medium">{c?.customerName || "—"}</div>
+                    <div className="font-medium">
+                      {c?.customerName || "—"}
+                      {/* Another language's customer: its "call again" goes out in that language. */}
+                      {c?.language && c.language !== "en" && (
+                        <span className="ml-1.5">
+                          <Badge tone="accent">{AI_CALL_LANGUAGE_NAMES[c.language]}</Badge>
+                        </span>
+                      )}
+                    </div>
                     {c?.businessName && <div className="text-xs text-slate-550">{c.businessName}</div>}
                     {c && <div className="text-[11px] text-slate-400">Stage: {AI_CALL_STAGE_LABELS[c.stage]}</div>}
                   </td>

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import type { CallFlowBase, CallFlowDefinition } from "@dispatch/shared";
+import { DEFAULT_AI_CALL_LANGUAGE, type AiCallLanguage, type CallFlowBase, type CallFlowDefinition } from "@dispatch/shared";
 import { api } from "./api";
+import { isEnglish, withLanguage } from "./aiCallLanguage";
 
 export interface CallFlowVersionSummary {
   id: string;
@@ -47,6 +48,8 @@ export interface CallFlowCatalog {
   default_voice?: string;
   /** The voice backend records calls (CALL_RECORDING_ENABLED); absent on an older voice backend. */
   recording_enabled?: boolean;
+  /** The language that voice backend calls in; absent on a voice backend from before languages (English). */
+  language?: AiCallLanguage;
 }
 
 export interface VoiceOption {
@@ -75,39 +78,45 @@ export const BASE_LABELS: Record<CallFlowBase, string> = {
   followup: "Customer follow-up (discusses the follow-up detail)",
 };
 
-export function useCallFlows(enabled = true) {
+/** One language's call flows (each language has its own; English = the original list). */
+export function useCallFlows(enabled = true, language: AiCallLanguage = DEFAULT_AI_CALL_LANGUAGE) {
   return useQuery({
-    queryKey: ["call-flows"],
-    queryFn: () => api<{ items: CallFlowListItem[] }>("/api/call-flows"),
+    queryKey: ["call-flows", language],
+    queryFn: () => api<{ items: CallFlowListItem[] }>(withLanguage("/api/call-flows", language)),
     enabled,
   });
 }
 
-export function useCallFlowCatalog() {
+/** The built-in flows and voices of one language's voice backend (not asked while that backend isn't set up). */
+export function useCallFlowCatalog(language: AiCallLanguage = DEFAULT_AI_CALL_LANGUAGE, enabled = true) {
   return useQuery({
-    queryKey: ["call-flows-builtin"],
-    queryFn: () => api<CallFlowCatalog>("/api/call-flows/builtin"),
+    queryKey: ["call-flows-builtin", language],
+    queryFn: () => api<CallFlowCatalog>(withLanguage("/api/call-flows/builtin", language)),
     staleTime: 5 * 60_000,
+    enabled,
   });
 }
 
 /* ------------------------------------------------------------ flow for a new AI call run */
 
-/** Stored choice for "Default flow (server agent)" — no flow pinned. */
+/** Stored choice for "Default flow (server agent)" — no flow pinned (English only). */
 export const DEFAULT_FLOW_CHOICE = "default";
 const LAST_FLOW_KEY = "ai-call-last-flow";
+const lastFlowKey = (language: AiCallLanguage) => (isEnglish(language) ? LAST_FLOW_KEY : `${LAST_FLOW_KEY}:${language}`);
 
-export function rememberedFlowChoice(): string | null {
+/** The last flow picked in this browser for that language. Another language has no default agent, so no "default" choice. */
+export function rememberedFlowChoice(language: AiCallLanguage = DEFAULT_AI_CALL_LANGUAGE): string | null {
   try {
-    return localStorage.getItem(LAST_FLOW_KEY);
+    const v = localStorage.getItem(lastFlowKey(language));
+    return !isEnglish(language) && v === DEFAULT_FLOW_CHOICE ? null : v;
   } catch {
     return null;
   }
 }
 
-export function rememberFlowChoice(flowId: string) {
+export function rememberFlowChoice(flowId: string, language: AiCallLanguage = DEFAULT_AI_CALL_LANGUAGE) {
   try {
-    localStorage.setItem(LAST_FLOW_KEY, flowId || DEFAULT_FLOW_CHOICE);
+    localStorage.setItem(lastFlowKey(language), flowId || DEFAULT_FLOW_CHOICE);
   } catch {
     /* private window — the choice lasts for this visit */
   }

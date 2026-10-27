@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import type { AiCallColumnMapping } from "@dispatch/shared";
+import type { AiCallColumnMapping, AiCallLanguageInfo } from "@dispatch/shared";
 import { api } from "./api";
 
 export interface AiCallsConfig {
@@ -17,6 +17,8 @@ export interface AiCallsConfig {
   flowEditor: boolean;
   /** Masked AI_CALL_FLOW_TEST_NUMBERS (admins and editors), e.g. "+91******3210". */
   testCallNumbers: string[];
+  /** The AI call languages with pages: English always, others once set up and switched on (absent on an older API). */
+  languages?: AiCallLanguageInfo[];
 }
 
 /** Feature flag + limits — gates the "AI Call" button on the Contacts page. */

@@ -1,0 +1,10 @@
+{
+  "name": "Customer follow-up (Hindi)",
+  "greeting": {
+    "text": "Hello {{addressed_name}}, मैं Kagzso AI and Automation से तारा बोल रही हूँ। हम businesses का daily repetitive काम automate करने में help करते हैं। क्या आप मुझे बस एक minute दे सकते हैं?"
+  },
+  "silence": {
+    "reprompt": "Hello, क्या आपको मेरी आवाज़ आ रही है?",
+    "closing": "कोई बात नहीं। आपके समय के लिए धन्यवाद। Have a nice day."
+  }
+}

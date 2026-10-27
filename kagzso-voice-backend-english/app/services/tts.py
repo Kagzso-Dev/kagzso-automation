@@ -15,7 +15,7 @@ from app.core.config import Settings
 # Pronunciation fixes applied to text right before speech (transcripts keep the
 # real spelling). "Kagzso" must be spoken as "Kexo".
 # ---------------------------------------------------------------------------
-BRAND_SPOKEN = {"ta": "கெக்ஸோ", "default": "Kexo"}
+BRAND_SPOKEN = {"ta": "கெக்ஸோ", "hi": "केक्सो", "kn": "ಕೆಕ್ಸೋ", "default": "Kexo"}
 _BRAND_LATIN = re.compile(r"kagz?so|kexo", re.IGNORECASE)
 # Tamil spellings the LLM may produce: காக்ஸோ, கேக்சோ, காக்ஸ்ஸோ, காக்ஜ்ஸோ, கெக்ஸோ ...
 _BRAND_TAMIL = re.compile(r"க[ாேெ]?க்(?:ஸ்ஸ|ஸ|ச|ஜ்ஸ|ஜ்ச)[ோொ]")
@@ -26,7 +26,7 @@ def brand_spoken(language: Optional[str]) -> str:
     return BRAND_SPOKEN.get(code, BRAND_SPOKEN["default"])
 
 
-_BRAND_WEBSITE = re.compile(r"(?:https?://)?(?:www\.)?(?:kagz?so|kexo|கெக்ஸோ)\.com", re.IGNORECASE)
+_BRAND_WEBSITE = re.compile(r"(?:https?://)?(?:www\.)?(?:kagz?so|kexo|கெக்ஸோ|केक्सो|ಕೆಕ್ಸೋ)\.com", re.IGNORECASE)
 
 
 def apply_pronunciations(text: str, language: Optional[str]) -> str:

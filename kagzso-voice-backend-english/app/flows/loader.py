@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Mapping, Optional
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.db import repositories as repo
 from app.db.models import Agent
@@ -28,7 +29,17 @@ log = get_logger("flows")
 
 
 def load_builtin(base: str) -> CallFlow:
-    return CallFlow.model_validate_json((BUILTIN_DIR / f"{base}.json").read_text(encoding="utf-8"))
+    """A built-in flow in this backend's language (CALL_LANGUAGE): builtin/<base>.json, with
+    builtin/<lang>/<base>.json laid over it when it exists (its top-level keys - the lines spoken
+    word for word - replace the English ones). The script blocks stay the English instructions:
+    the AI is told to reply in the call's language (llm_service.language_instruction)."""
+    lang = settings.call_language
+    data = json.loads((BUILTIN_DIR / f"{base}.json").read_text(encoding="utf-8"))
+    own = BUILTIN_DIR / lang / f"{base}.json"
+    if lang != "en" and own.is_file():
+        data.update(json.loads(own.read_text(encoding="utf-8")))
+    data["language"] = lang
+    return CallFlow.model_validate(data)
 
 
 BUILTIN_FLOWS: Dict[str, CallFlow] = {base: load_builtin(base) for base in ("nila", "followup")}

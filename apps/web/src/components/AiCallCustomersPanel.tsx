@@ -15,6 +15,8 @@ import {
 } from "@dispatch/shared";
 import { api } from "../lib/api";
 import type { AiCallsConfig } from "../lib/aiCalls";
+import { isEnglish, titleFor, useAiCallLanguage, useLanguageReady, withLanguage } from "../lib/aiCallLanguage";
+import { AiCallLanguageNotice } from "./AiCallLanguageNotice";
 import {
   downloadSample,
   STAGE_TONE,
@@ -43,6 +45,8 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
   const qc = useQueryClient();
   const confirm = useConfirm();
   const toast = useToast();
+  // This page's list: English, or another language's own list (/ta/ai-call-customers, …).
+  const language = useAiCallLanguage();
   const [search, setSearch] = useState("");
   const [gender, setGender] = useState("");
   const [stage, setStage] = useState("");
@@ -54,9 +58,10 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
   const [callIds, setCallIds] = useState<string[] | null>(null);
 
   const query = useQuery({
-    queryKey: ["ai-call-customers", search, gender, stage, page],
+    queryKey: ["ai-call-customers", language, search, gender, stage, page],
     queryFn: () => {
       const p = new URLSearchParams({ page: String(page), pageSize: "25" });
+      if (!isEnglish(language)) p.set("language", language);
       if (search) p.set("search", search);
       if (gender) p.set("gender", gender);
       if (stage) p.set("stage", stage);
@@ -97,19 +102,31 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
     if (ok) del.mutate(ids);
   }
 
-  const canCall = config.configured && config.canStart;
+  // Calls need this language's voice backend (Tamil / Hindi / Kannada pages exist before it is set up).
+  const { ready } = useLanguageReady();
+  const canCall = ready && config.canStart;
 
   return (
     <div>
       <PageHeader
-        title="Voicecall Contact"
-        subtitle="Customers for AI voice calls, their call stage and follow-ups. Separate from email and WhatsApp contacts."
+        title={titleFor("Voicecall Contact", language)}
+        subtitle={
+          isEnglish(language)
+            ? "Customers for AI voice calls, their call stage and follow-ups. Separate from email and WhatsApp contacts."
+            : "This language's own customer list: they are called only with its call flows, in its language. A number can be in one list at a time; do-not-call applies to every list."
+        }
         action={
           <div className="flex flex-wrap gap-2">
             <button
               className="btn-ghost"
               disabled={!canCall}
-              title={canCall ? "Call the ticked customers with the AI voice agent" : "Set VOICE_BACKEND_URL and VOICE_BACKEND_API_KEY to enable AI calls"}
+              title={
+                canCall
+                  ? "Call the ticked customers with the AI voice agent"
+                  : isEnglish(language)
+                    ? "Set VOICE_BACKEND_URL and VOICE_BACKEND_API_KEY to enable AI calls"
+                    : `Set VOICE_BACKEND_URL_${language.toUpperCase()} (this language's voice backend) to enable calls`
+              }
               onClick={() => setCallIds([...selected])}
             >
               <Icon name="phone" size={16} />
@@ -134,6 +151,8 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
           </div>
         }
       />
+
+      <AiCallLanguageNotice>You can already add and import this language's customers; calling them starts working once it is.</AiCallLanguageNotice>
 
       <div className="mb-4 flex flex-col gap-2 sm:flex-row">
         <input
@@ -319,6 +338,7 @@ function Pager({ page, pageSize, total, onChange }: { page: number; pageSize: nu
 
 function CustomerFormModal({ customer, onClose }: { customer: AiCallCustomer | "new" | null; onClose: () => void }) {
   const qc = useQueryClient();
+  const language = useAiCallLanguage(); // a new customer goes into this page's language list
   const existing = customer && customer !== "new" ? customer : null;
   const [form, setForm] = useState({
     customerName: existing?.customerName ?? "",
@@ -334,7 +354,7 @@ function CustomerFormModal({ customer, onClose }: { customer: AiCallCustomer | "
     mutationFn: () =>
       existing
         ? api(`/api/ai-call-customers/${existing.id}`, { method: "PUT", json: form, notify: "Customer saved" })
-        : api("/api/ai-call-customers", { method: "POST", json: form, notify: "Customer added" }),
+        : api(withLanguage("/api/ai-call-customers", language), { method: "POST", json: form, notify: "Customer added" }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["ai-call-customers"] });
       void qc.invalidateQueries({ queryKey: ["ai-call-customer"] });
@@ -436,6 +456,7 @@ function ImportCustomersModal({ open, onClose }: { open: boolean; onClose: () =>
 function ImportFlow({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
+  const language = useAiCallLanguage(); // imported into this page's language list
   const fileRef = useRef<HTMLInputElement>(null);
   const [sheet, setSheet] = useState<CustomerSheet | null>(null);
   const [mapping, setMapping] = useState<AiCallCustomerColumnMapping | null>(null);
@@ -482,7 +503,7 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
 
   const doImport = useMutation({
     mutationFn: () =>
-      api<ImportSummary>("/api/ai-call-customers/import", { method: "POST", json: { rows: validRows }, notify: false }),
+      api<ImportSummary>(withLanguage("/api/ai-call-customers/import", language), { method: "POST", json: { rows: validRows }, notify: false }),
     onSuccess: (r) => {
       setResult(r);
       void qc.invalidateQueries({ queryKey: ["ai-call-customers"] });

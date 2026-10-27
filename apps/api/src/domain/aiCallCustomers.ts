@@ -2,20 +2,27 @@
 // Call Customers" tab). Isolated from the email Contact table and from
 // WhatsApp contacts: nothing here reads or writes them. Phones are stored as
 // E.164 via the shared normalizePhoneE164 (+91 default) and deduped on it.
+//
+// Each language has its own customer list (the `language` column, English by
+// default). A number is in one list at a time; the do-not-call list is shared.
 
 import { Prisma, type AiCallCustomer, type AiCallCustomerStage } from "@prisma/client";
 import {
+  AI_CALL_LANGUAGE_NAMES,
   checkAiCallCustomerRow,
+  DEFAULT_AI_CALL_LANGUAGE,
   FOLLOW_UP_STAGES,
   maskPhone,
   parseOptIn,
   type AiCallCustomerInput,
+  type AiCallLanguage,
   type AiCallStage,
 } from "@dispatch/shared";
 import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
 import { aiCallsConfig } from "../config/aiCalls.js";
 import { loadDoNotCallPhones } from "./aiCalls.js";
+import { asAiCallLanguage } from "./aiCallLanguages.js";
 import { addCustomerEvent, cancelPendingFollowups, createFollowupDrafts, deliveryFor, POSITIVE_CANCEL_REASON } from "./aiCallFollowups.js";
 
 export class CustomerError extends Error {
@@ -52,15 +59,30 @@ async function liveOrThrow(id: string): Promise<AiCallCustomer> {
   return c;
 }
 
+/** "A customer with this phone number already exists" — naming the other list when it is another language's. */
+async function duplicateMessage(phone: string, language: AiCallLanguage): Promise<string> {
+  const other = await prisma.aiCallCustomer.findFirst({ where: { activePhone: phone }, select: { language: true } });
+  const theirs = asAiCallLanguage(other?.language);
+  return other && theirs !== language
+    ? `A customer with this phone number already exists in the ${AI_CALL_LANGUAGE_NAMES[theirs]} list`
+    : "A customer with this phone number already exists";
+}
+
 /* ------------------------------------------------------------------ create / update / delete */
 
-export async function createCustomer(input: AiCallCustomerInput, actorEmail: string): Promise<AiCallCustomer> {
+export async function createCustomer(
+  input: AiCallCustomerInput,
+  actorEmail: string,
+  language: AiCallLanguage = DEFAULT_AI_CALL_LANGUAGE,
+): Promise<AiCallCustomer> {
   const data = cleanInput(input);
   const dnc = (await loadDoNotCallPhones(cc())).has(data.phone);
   try {
     const c = await prisma.aiCallCustomer.create({
       data: {
         ...data,
+        // Only another language's customers carry the column value: English rows are written exactly as before.
+        ...(language !== DEFAULT_AI_CALL_LANGUAGE ? { language } : {}),
         activePhone: data.phone,
         createdByEmail: actorEmail,
         ...(dnc ? { doNotCall: true, stage: "DO_NOT_CALL" as const } : {}),
@@ -73,10 +95,10 @@ export async function createCustomer(input: AiCallCustomerInput, actorEmail: str
       detail: dnc ? "Added — number is already on the do-not-call list" : "Added manually",
       actorEmail,
     });
-    logger.info({ customerId: c.id, phone: maskPhone(c.phone), by: actorEmail }, "ai call customer created");
+    logger.info({ customerId: c.id, phone: maskPhone(c.phone), language, by: actorEmail }, "ai call customer created");
     return c;
   } catch (err) {
-    if (isUniqueViolation(err)) throw new CustomerError(409, "A customer with this phone number already exists");
+    if (isUniqueViolation(err)) throw new CustomerError(409, await duplicateMessage(data.phone, language));
     throw err;
   }
 }
@@ -98,7 +120,7 @@ export async function updateCustomer(id: string, input: AiCallCustomerInput, act
     }
     return c;
   } catch (err) {
-    if (isUniqueViolation(err)) throw new CustomerError(409, "A customer with this phone number already exists");
+    if (isUniqueViolation(err)) throw new CustomerError(409, await duplicateMessage(data.phone, asAiCallLanguage(existing.language)));
     throw err;
   }
 }
@@ -171,13 +193,14 @@ export async function setCustomerStage(
 /* ------------------------------------------------------------------ list */
 
 export async function listCustomers(q: {
+  language?: AiCallLanguage;
   search?: string;
   gender?: string;
   stage?: AiCallCustomerStage;
   page: number;
   pageSize: number;
 }) {
-  const where: Prisma.AiCallCustomerWhereInput = { deletedAt: null };
+  const where: Prisma.AiCallCustomerWhereInput = { deletedAt: null, language: q.language ?? DEFAULT_AI_CALL_LANGUAGE };
   if (q.gender) where.gender = q.gender;
   if (q.stage) where.stage = q.stage;
   if (q.search) {
@@ -202,10 +225,10 @@ export async function listCustomers(q: {
   return { items, total, page: q.page, pageSize: q.pageSize };
 }
 
-/** Every live customer, for the AI Call modal's "Saved customers" source. */
-export async function callableCustomers() {
+/** Every live customer of one language's list, for the AI Call modal's "Saved customers" source. */
+export async function callableCustomers(language: AiCallLanguage = DEFAULT_AI_CALL_LANGUAGE) {
   return prisma.aiCallCustomer.findMany({
-    where: { deletedAt: null },
+    where: { deletedAt: null, language },
     orderBy: { createdAt: "desc" },
     take: 5000,
     select: { id: true, customerName: true, gender: true, followUpDetail: true, phone: true, stage: true, doNotCall: true },
@@ -239,6 +262,7 @@ export async function importCustomers(
     whatsappOptIn?: boolean | string | null;
   }[],
   actorEmail: string,
+  language: AiCallLanguage = DEFAULT_AI_CALL_LANGUAGE,
 ): Promise<ImportSummary> {
   const summary: ImportSummary = { imported: 0, skipped: 0, duplicates: 0, doNotCall: 0, problems: [] };
   const valid: { row: number; data: Prisma.AiCallCustomerCreateManyInput }[] = [];
@@ -269,23 +293,31 @@ export async function importCustomers(
         email: check.email,
         whatsappOptIn: typeof r.whatsappOptIn === "boolean" ? r.whatsappOptIn : parseOptIn(r.whatsappOptIn),
         createdByEmail: actorEmail,
+        ...(language !== DEFAULT_AI_CALL_LANGUAGE ? { language } : {}),
       },
     });
   });
 
-  const existing = new Set(
+  // A number is in one list at a time: one saved in another language's list is a duplicate too.
+  const existing = new Map(
     (
       await prisma.aiCallCustomer.findMany({
         where: { activePhone: { in: valid.map((v) => v.data.phone) } },
-        select: { phone: true },
+        select: { phone: true, language: true },
       })
-    ).map((c) => c.phone),
+    ).map((c) => [c.phone, asAiCallLanguage(c.language)]),
   );
   const dnc = await loadDoNotCallPhones(cc());
   for (const v of valid) {
     if (existing.has(v.data.phone)) {
+      const theirs = existing.get(v.data.phone)!;
       summary.duplicates++;
-      if (summary.problems.length < 200) summary.problems.push({ row: v.row, errors: ["Number already saved"] });
+      if (summary.problems.length < 200) {
+        summary.problems.push({
+          row: v.row,
+          errors: [theirs === language ? "Number already saved" : `Number already saved in the ${AI_CALL_LANGUAGE_NAMES[theirs]} list`],
+        });
+      }
       continue;
     }
     const blocked = dnc.has(v.data.phone);
@@ -308,7 +340,7 @@ export async function importCustomers(
       summary.duplicates++; // saved concurrently
     }
   }
-  logger.info({ ...summary, problems: summary.problems.length, by: actorEmail }, "ai call customers imported");
+  logger.info({ ...summary, problems: summary.problems.length, language, by: actorEmail }, "ai call customers imported");
   return summary;
 }
 

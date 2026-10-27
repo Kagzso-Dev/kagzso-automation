@@ -82,8 +82,10 @@ describe("callFlowDefinition validation", () => {
     expect(issues({ ...nila(), transfer: { enabled: false, number: "98765" } })).not.toEqual([]);
   });
 
-  it("supports English only for now", () => {
-    expect(issues({ ...nila(), language: "ta" })).not.toEqual([]);
+  it("accepts the voice backends' languages, nothing else", () => {
+    for (const language of ["en", "ta", "hi", "kn"]) expect(issues({ ...nila(), language })).toEqual([]);
+    expect(issues({ ...nila(), language: "xx" })).not.toEqual([]);
+    expect(issues({ ...nila(), language: "en-IN" })).not.toEqual([]);
   });
 });
 

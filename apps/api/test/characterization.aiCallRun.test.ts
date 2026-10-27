@@ -7,7 +7,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const db = vi.hoisted(() => ({
   aiCallRun: { findUnique: vi.fn(), update: vi.fn() },
-  aiCallLog: { findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn(), groupBy: vi.fn() },
+  aiCallLog: { findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn(), groupBy: vi.fn(), findMany: vi.fn(), updateMany: vi.fn() },
+  // Settings → AI call languages (read only for runs of another language than English).
+  setting: { findUnique: vi.fn() },
+  $transaction: vi.fn(async (ops: unknown[]) => Promise.all(ops)),
 }));
 const voice = vi.hoisted(() => ({ getVoiceCall: vi.fn(), placeVoiceCall: vi.fn() }));
 const helpers = vi.hoisted(() => ({
@@ -189,6 +192,28 @@ describe("processAiCallRun (characterization)", () => {
     const wait = await deferredMs(processAiCallRun({ runId: "r1" }));
     expect(wait).toBeGreaterThanOrEqual(5000);
     expect(helpers.applyVoiceUpdate).toHaveBeenCalledWith("l1", expect.objectContaining({ status: "in_progress", providerCallId: "p0" }));
+    expect(voice.placeVoiceCall).not.toHaveBeenCalled();
+  });
+
+  it("a Tamil run (its pinned flow is Tamil) dials through the Tamil voice backend", async () => {
+    helpers.pinnedFlowForRun.mockResolvedValue({ flowId: "f1", version: 3, language: "ta" });
+    db.setting.findUnique.mockResolvedValue(null); // nothing switched off
+    await deferredMs(processAiCallRun({ runId: "r1" }));
+    expect(voice.placeVoiceCall).toHaveBeenCalledWith(expect.objectContaining({ logId: "l2", language: "ta" }));
+  });
+
+  it("a language switched off in Settings: the queued calls are cancelled, nothing is dialled", async () => {
+    helpers.pinnedFlowForRun.mockResolvedValue({ flowId: "f1", version: 3, language: "ta" });
+    db.setting.findUnique.mockResolvedValue({ key: "aiCallLanguagesDisabled", value: ["ta"] });
+    db.aiCallLog.findMany.mockResolvedValue([{ id: "l2" }, { id: "l3" }]);
+    db.aiCallLog.updateMany.mockResolvedValue({ count: 2 });
+    await expect(processAiCallRun({ runId: "r1" })).resolves.toEqual({ stopped: "language_disabled", cancelled: 2 });
+    expect(db.aiCallRun.update).toHaveBeenCalledWith({ where: { id: "r1" }, data: { status: "CANCELLED", nextCallAt: null } });
+    expect(db.aiCallLog.updateMany).toHaveBeenCalledWith({
+      where: { runId: "r1", status: "QUEUED" },
+      data: { status: "CANCELLED", error: "Not called — Tamil AI calls were switched off in Settings" },
+    });
+    expect(helpers.syncCustomerFromLog).toHaveBeenCalledWith("l3");
     expect(voice.placeVoiceCall).not.toHaveBeenCalled();
   });
 

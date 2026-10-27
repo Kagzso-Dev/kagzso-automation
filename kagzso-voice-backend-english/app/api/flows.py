@@ -35,6 +35,8 @@ def _catalog_flow(flow: Any) -> Dict[str, Any]:
 @router.get("/builtin")
 async def builtin_flows() -> Dict[str, Any]:
     return {
+        # The only language this backend calls in (CALL_LANGUAGE); every flow it accepts has it.
+        "language": settings.call_language,
         "flows": {base: _catalog_flow(flow) for base, flow in BUILTIN_FLOWS.items()},
         "locked_blocks": LOCKED_BLOCKS,
         # The editor warns when calls are recorded and a flow has no recording notice.

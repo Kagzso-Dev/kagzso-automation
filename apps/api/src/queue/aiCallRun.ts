@@ -5,8 +5,12 @@
 // previous call reached a final status AND `gapSeconds` passed since it ended.
 // While a call is in flight the job polls the voice backend every few seconds,
 // so the run still advances if a status callback never arrives.
+//
+// Every call of a run goes through the voice backend of the run's language (its
+// pinned flow's; no flow = English). If an admin switches that language off, the
+// call in flight finishes and the calls still queued are cancelled.
 
-import { maskPhone } from "@dispatch/shared";
+import { DEFAULT_AI_CALL_LANGUAGE, maskPhone, type AiCallLanguage } from "@dispatch/shared";
 import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
 import { aiCallsConfig } from "../config/aiCalls.js";
@@ -16,6 +20,7 @@ import {
   loadDoNotCallPhones,
   parseUtc,
 } from "../domain/aiCalls.js";
+import { disabledAiCallLanguages, languageName } from "../domain/aiCallLanguages.js";
 import { pinnedFlowForRun } from "../domain/callFlows.js";
 import { markCustomerCalling, syncCustomerFromLog } from "../domain/aiCallCustomerSync.js";
 import { getVoiceCall, placeVoiceCall, VoiceBackendError } from "../services/voiceBackend.js";
@@ -41,8 +46,21 @@ async function finish(runId: string): Promise<Record<string, number>> {
   return counts;
 }
 
+/** The language was switched off in Settings: cancel the calls not dialled yet (like Cancel run). */
+async function stopForDisabledLanguage(runId: string, language: AiCallLanguage): Promise<Record<string, unknown>> {
+  const queued = await prisma.aiCallLog.findMany({ where: { runId, status: "QUEUED" }, select: { id: true } });
+  const why = `Not called — ${languageName(language)} AI calls were switched off in Settings`;
+  await prisma.$transaction([
+    prisma.aiCallRun.update({ where: { id: runId }, data: { status: "CANCELLED", nextCallAt: null } }),
+    prisma.aiCallLog.updateMany({ where: { runId, status: "QUEUED" }, data: { status: "CANCELLED", error: why } }),
+  ]);
+  for (const l of queued) await syncCustomerFromLog(l.id);
+  logger.info({ runId, language, cancelled: queued.length }, "ai call run stopped — language switched off");
+  return { stopped: "language_disabled", cancelled: queued.length };
+}
+
 /** Refresh an in-flight call from the voice backend; time it out if it never ends. Returns true if still in flight. */
-async function pollInFlight(runId: string): Promise<boolean> {
+async function pollInFlight(runId: string, language: AiCallLanguage): Promise<boolean> {
   const log = await prisma.aiCallLog.findFirst({
     where: { runId, status: { in: [...IN_FLIGHT_AI_CALL_STATUSES] } },
     orderBy: { position: "asc" },
@@ -51,7 +69,7 @@ async function pollInFlight(runId: string): Promise<boolean> {
 
   if (log.voiceCallId) {
     try {
-      const d = await getVoiceCall(log.voiceCallId);
+      const d = await getVoiceCall(log.voiceCallId, language);
       await applyVoiceUpdate(log.id, {
         status: d.status,
         providerCallId: d.provider_call_id,
@@ -98,9 +116,15 @@ export async function processAiCallRun(payload: Record<string, unknown>): Promis
   const { runId } = payload as unknown as AiCallRunJob;
   const run = await prisma.aiCallRun.findUnique({ where: { id: runId } });
   if (!run) return { skipped: "run gone" };
+  // The run's language is its pinned flow's (no flow = the default agent = English).
+  const flow = await pinnedFlowForRun(runId);
+  const language = flow?.language ?? DEFAULT_AI_CALL_LANGUAGE;
 
-  if (await pollInFlight(runId)) throw deferFor(POLL_MS);
+  if (await pollInFlight(runId, language)) throw deferFor(POLL_MS);
   if (run.status !== "RUNNING") return { stopped: run.status };
+  if (language !== DEFAULT_AI_CALL_LANGUAGE && (await disabledAiCallLanguages()).has(language)) {
+    return stopForDisabledLanguage(runId, language);
+  }
 
   const next = await prisma.aiCallLog.findFirst({
     where: { runId, status: "QUEUED" },
@@ -135,7 +159,6 @@ export async function processAiCallRun(payload: Record<string, unknown>): Promis
   await prisma.aiCallRun.update({ where: { id: runId }, data: { nextCallAt: null } });
   await markCustomerCalling(next.id);
   try {
-    const flow = await pinnedFlowForRun(runId);
     const greetingDelaySec = greetingDelayOf(run.skipped);
     const { callId, providerCallId } = await placeVoiceCall({
       // Runs without the setting (older runs, test calls) call exactly as before.
@@ -147,13 +170,15 @@ export async function processAiCallRun(payload: Record<string, unknown>): Promis
       runId,
       logId: next.id,
       flow,
+      // English runs call exactly as before (the default backend).
+      ...(language !== DEFAULT_AI_CALL_LANGUAGE ? { language } : {}),
     });
     await prisma.aiCallLog.update({
       where: { id: next.id },
       data: { voiceCallId: callId, ...(providerCallId ? { providerCallId } : {}) },
     });
     logger.info(
-      { runId, logId: next.id, phone: maskPhone(next.phone), voiceCallId: callId, flowId: flow?.flowId, flowVersion: flow?.version },
+      { runId, logId: next.id, phone: maskPhone(next.phone), voiceCallId: callId, flowId: flow?.flowId, flowVersion: flow?.version, language },
       "ai call placed",
     );
   } catch (err) {

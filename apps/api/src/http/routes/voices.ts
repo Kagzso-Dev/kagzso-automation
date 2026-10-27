@@ -1,17 +1,18 @@
 // Voice "Listen" previews for the Voice Call Flows editor. ADMIN and EDITOR, and 404 unless
 // both ENABLE_AI_CALLS and ENABLE_CALL_FLOW_EDITOR are on (same gate as /api/call-flows).
 //
-//   POST /api/voices/preview   { voice_id, text, pauses? } -> audio/wav of that voice saying the line
+//   POST /api/voices/preview   { voice_id, text, pauses?, language? } -> audio/wav of that voice saying the line
 //                              ({{short_delay}} etc. in the line become real silence of the flow's lengths)
 //
 // Text-to-speech only: nothing is dialled and nothing is saved. The voice backend holds
 // the provider key and the list of offered voices (an unknown voice is a 400 from it).
-// Audio is cached per voice + text + pause lengths, so repeated clicks don't cost another provider call.
+// `language` picks that language's voice backend (absent = English): each speaks its own language.
+// Audio is cached per language + voice + text + pause lengths, so repeated clicks don't cost another provider call.
 
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
-import { callFlowDefinition } from "@dispatch/shared";
+import { aiCallLanguage, callFlowDefinition, DEFAULT_AI_CALL_LANGUAGE } from "@dispatch/shared";
 import { isCallFlowEditorEnabled } from "../../config/aiCalls.js";
 import { previewVoice, VoiceBackendError } from "../../services/voiceBackend.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
@@ -42,6 +43,7 @@ const previewInput = z.object({
     .pipe(z.string().min(1, "Enter a sample line").max(200, "The sample line can be at most 200 characters")),
   /** The flow's pause lengths (same rules as the flow); absent = the defaults. */
   pauses: callFlowDefinition.innerType().shape.pauses,
+  language: aiCallLanguage.default(DEFAULT_AI_CALL_LANGUAGE),
 });
 
 /** Small in-memory LRU: voice + text → WAV. */
@@ -64,12 +66,12 @@ voicesRouter.post(
   "/preview",
   previewLimiter,
   wrap(async (req, res) => {
-    const { voice_id, text, pauses } = previewInput.parse(req.body ?? {});
-    const key = `${voice_id}\u0000${text}\u0000${pauses ? `${pauses.short_ms}/${pauses.medium_ms}/${pauses.long_ms}` : ""}`;
+    const { voice_id, text, pauses, language } = previewInput.parse(req.body ?? {});
+    const key = `${language}\u0000${voice_id}\u0000${text}\u0000${pauses ? `${pauses.short_ms}/${pauses.medium_ms}/${pauses.long_ms}` : ""}`;
     let wav = cached(key);
     if (!wav) {
       try {
-        wav = await previewVoice(voice_id, text, pauses);
+        wav = await previewVoice(voice_id, text, pauses, language);
       } catch (err) {
         if (err instanceof VoiceBackendError) {
           const status = err.status !== null && err.status < 500 && err.status !== 429 ? 400 : 503;

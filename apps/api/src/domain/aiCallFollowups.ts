@@ -9,7 +9,8 @@ import type { AiCallCustomer, AiCallFollowup, AiCallCustomerStage } from "@prism
 import { followupsForStage, maskPhone, type AiCallStage } from "@dispatch/shared";
 import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
-import { aiCallsConfig, isAiCallsConfigured } from "../config/aiCalls.js";
+import { aiCallsConfig } from "../config/aiCalls.js";
+import { aiCallLanguageBlockedReason, asAiCallLanguage } from "./aiCallLanguages.js";
 import { createWhatsAppSendBatch } from "./whatsappSend.js";
 import { getWhatsAppCredentialsView } from "./whatsappCredentials.js";
 import { normalizeWhatsAppPhone } from "./whatsappPhone.js";
@@ -235,8 +236,10 @@ export async function approveFollowup(id: string, actorEmail: string): Promise<A
     if (!t) throw new FollowupError(400, "WhatsApp template not found");
     if (!t.providerTemplateName) throw new FollowupError(400, "That WhatsApp template has no Meta template name yet");
     if (!(await getWhatsAppCredentialsView()).configured) throw new FollowupError(503, "WhatsApp is not configured");
-  } else if (!isAiCallsConfigured()) {
-    throw new FollowupError(503, "Voice backend is not configured — set VOICE_BACKEND_URL and VOICE_BACKEND_API_KEY");
+  } else {
+    // The call is in the customer's list language: its voice backend must be set up and switched on.
+    const unavailable = await aiCallLanguageBlockedReason(asAiCallLanguage(c.language));
+    if (unavailable) throw new FollowupError(503, unavailable);
   }
 
   const { count } = await prisma.aiCallFollowup.updateMany({
@@ -323,7 +326,7 @@ export async function listFollowups(q: { status?: AiCallFollowup["status"]; page
       take: q.pageSize,
       include: {
         customer: {
-          select: { id: true, customerName: true, phone: true, businessName: true, stage: true, whatsappOptIn: true, deletedAt: true, doNotCall: true },
+          select: { id: true, customerName: true, phone: true, businessName: true, stage: true, whatsappOptIn: true, deletedAt: true, doNotCall: true, language: true },
         },
       },
     }),

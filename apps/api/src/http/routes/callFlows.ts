@@ -2,9 +2,13 @@
 // flow picker). Changes (create, save, publish, archive, remove, trial numbers): ADMIN only.
 // 404 unless both ENABLE_AI_CALLS and ENABLE_CALL_FLOW_EDITOR are on.
 //
+// Every flow belongs to one language (set when it is created, never changed) and is validated,
+// previewed and test-called by that language's voice backend. ?language= on the two list
+// endpoints picks the language page (absent = English, exactly as before).
+//
 //   GET    /api/call-flows/builtin                   built-in flows to copy + locked block text (from the voice backend)
 //   GET    /api/call-flows                           flows with their latest published / draft version
-//   POST   /api/call-flows                           new flow, draft v1 copied from a built-in
+//   POST   /api/call-flows                           new flow, draft v1 copied from a built-in (body language, default en)
 //   GET    /api/call-flows/:id                       one flow with every version
 //   PUT    /api/call-flows/:id/draft                 save the draft (a published flow gets a new draft version)
 //   DELETE /api/call-flows/:id/draft                 discard the draft
@@ -27,6 +31,11 @@ import { z } from "zod";
 import {
   addTestCallNumberInput,
   AI_CALL_DEFAULT_GREETING_DELAY_SEC,
+  AI_CALL_LANGUAGE_NAMES,
+  aiCallLanguageQuery,
+  DEFAULT_AI_CALL_LANGUAGE,
+  isAiCallLanguage,
+  type AiCallLanguage,
   CALL_FLOW_BASES,
   CALL_FLOW_IMPORT_WARN_CHARS,
   callFlowDefinition,
@@ -48,8 +57,9 @@ import {
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../../prisma.js";
 import { logger } from "../../logger.js";
-import { aiCallsConfig, isAiCallsConfigured, isCallFlowEditorEnabled } from "../../config/aiCalls.js";
+import { aiCallsConfig, configuredAiCallLanguages, isAiCallsConfigured, isCallFlowEditorEnabled } from "../../config/aiCalls.js";
 import { callsCountedTowardDailyCap, loadDoNotCallPhones } from "../../domain/aiCalls.js";
+import { aiCallLanguageBlockedReason, asAiCallLanguage, runningRunOf } from "../../domain/aiCallLanguages.js";
 import { CallFlowError, definitionHash, deleteVersion, latestPublished, publishDraft, removeFlow, saveDraft } from "../../domain/callFlows.js";
 import { analyzeImport, changedBlockIds } from "../../domain/callFlowImport.js";
 import { addTestNumber, listTestNumbers, removeTestNumber, resolveTestNumber, TestNumberError } from "../../domain/callFlowTestNumbers.js";
@@ -108,13 +118,31 @@ function flowError(err: unknown): never {
   throw err;
 }
 
-let builtinCache: { at: number; data: VoiceFlowCatalog } | null = null;
-async function builtins(): Promise<VoiceFlowCatalog> {
-  if (builtinCache && Date.now() - builtinCache.at < 60_000) return builtinCache.data;
-  const data = await getBuiltinFlows().catch(voiceError);
-  builtinCache = { at: Date.now(), data };
+const builtinCache = new Map<AiCallLanguage, { at: number; data: VoiceFlowCatalog }>();
+/** The language's built-in flows, from its own voice backend (cached a minute per language). */
+async function builtins(language: AiCallLanguage = DEFAULT_AI_CALL_LANGUAGE): Promise<VoiceFlowCatalog> {
+  const hit = builtinCache.get(language);
+  if (hit && Date.now() - hit.at < 60_000) return hit.data;
+  const data = await getBuiltinFlows(language).catch(voiceError);
+  // A backend from before languages has no "language" field: it is the English one.
+  const speaks = data.language ?? DEFAULT_AI_CALL_LANGUAGE;
+  if (speaks !== language) {
+    throw new AppError(
+      502,
+      `The ${AI_CALL_LANGUAGE_NAMES[language]} voice backend calls in '${speaks}' (its CALL_LANGUAGE). ` +
+        `Fix VOICE_BACKEND_URL${language === DEFAULT_AI_CALL_LANGUAGE ? "" : `_${language.toUpperCase()}`} or that backend's CALL_LANGUAGE.`,
+      "unavailable",
+    );
+  }
+  builtinCache.set(language, { at: Date.now(), data });
   return data;
 }
+
+/** The language a definition is for (a definition that isn't valid yet is English). */
+const definitionLanguage = (d: unknown): AiCallLanguage => {
+  const l = (d as { language?: unknown } | null)?.language;
+  return isAiCallLanguage(l) ? l : DEFAULT_AI_CALL_LANGUAGE;
+};
 
 function testNumberError(err: unknown): never {
   if (err instanceof TestNumberError) {
@@ -137,16 +165,18 @@ async function liveFlow(id: string) {
 
 callFlowsRouter.get(
   "/builtin",
-  wrap(async (_req, res) => {
-    res.json(await builtins());
+  wrap(async (req, res) => {
+    const { language } = aiCallLanguageQuery.parse(req.query);
+    res.json(await builtins(language));
   }),
 );
 
 callFlowsRouter.get(
   "/",
-  wrap(async (_req, res) => {
+  wrap(async (req, res) => {
+    const { language } = aiCallLanguageQuery.parse(req.query);
     const flows = await prisma.callFlow.findMany({
-      where: { archivedAt: null },
+      where: { archivedAt: null, language },
       orderBy: { updatedAt: "desc" },
       include: {
         versions: {
@@ -172,8 +202,8 @@ callFlowsRouter.post(
   writeLimiter,
   wrap(async (req, res) => {
     const body = createCallFlowInput.parse(req.body);
-    const catalog = await builtins();
-    const parsed = callFlowDefinition.safeParse({ ...catalog.flows[body.base], name: body.name });
+    const catalog = await builtins(body.language);
+    const parsed = callFlowDefinition.safeParse({ ...catalog.flows[body.base], name: body.name, language: body.language });
     if (!parsed.success) throw new AppError(502, "The voice backend's built-in flow failed validation", "unavailable");
     const definition = parsed.data;
     const flow = await prisma.callFlow.create({
@@ -181,6 +211,7 @@ callFlowsRouter.post(
         name: body.name,
         description: body.description ?? null,
         base: body.base,
+        language: body.language,
         createdById: req.user!.id,
         createdByEmail: req.user!.email,
         versions: {
@@ -194,7 +225,7 @@ callFlowsRouter.post(
         },
       },
     });
-    logger.info({ flowId: flow.id, base: body.base, by: req.user!.email }, "call flow created");
+    logger.info({ flowId: flow.id, base: body.base, language: body.language, by: req.user!.email }, "call flow created");
     res.status(201).json(flow);
   }),
 );
@@ -204,7 +235,8 @@ callFlowsRouter.post(
   previewLimiter,
   wrap(async (req, res) => {
     const body = previewCallFlowInput.parse(req.body);
-    res.json(await previewFlow(body.definition, body.sample).catch(voiceError));
+    // Rendered by the voice backend of the flow's own language.
+    res.json(await previewFlow(body.definition, body.sample, definitionLanguage(body.definition)).catch(voiceError));
   }),
 );
 
@@ -260,6 +292,9 @@ callFlowsRouter.put(
     const body = saveCallFlowDraftInput.parse(req.body);
     const flow = await liveFlow(id);
     if (body.definition.base !== flow.base) throw badRequest(`This flow is based on '${flow.base}'; base can't change`);
+    if (body.definition.language !== asAiCallLanguage(flow.language)) {
+      throw badRequest(`This is a ${AI_CALL_LANGUAGE_NAMES[asAiCallLanguage(flow.language)]} flow; its language can't change`);
+    }
     if (body.description !== undefined) {
       await prisma.callFlow.update({ where: { id }, data: { description: body.description } });
     }
@@ -294,12 +329,12 @@ callFlowsRouter.post(
   writeLimiter,
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
-    await liveFlow(id);
+    const flow = await liveFlow(id);
     const draft = await prisma.callFlowVersion.findFirst({ where: { flowId: id, status: "DRAFT" } });
     if (!draft) throw conflict("Nothing to publish — save a draft first");
     const local = callFlowDefinition.safeParse(draft.definition);
     if (!local.success) throw badRequest("The draft is not valid", local.error.flatten());
-    const check = await previewFlow(local.data).catch(voiceError);
+    const check = await previewFlow(local.data, {}, asAiCallLanguage(flow.language)).catch(voiceError);
     if (!check.valid) throw badRequest("The voice backend rejected this flow", { errors: check.errors });
     const published = await publishDraft(draft.id).catch(flowError);
     logger.info({ flowId: id, version: published.version, by: req.user!.email }, "call flow published");
@@ -339,7 +374,8 @@ const importWarnChars = () => Number(process.env.CALL_FLOW_IMPORT_WARN_CHARS) ||
 
 /** What an import works on: the newest version (draft, else live), with the unlocked safety blocks as text. */
 async function importBase(id: string) {
-  await liveFlow(id);
+  const flow = await liveFlow(id);
+  const language = asAiCallLanguage(flow.language);
   const versions = await prisma.callFlowVersion.findMany({ where: { flowId: id }, orderBy: { version: "desc" } });
   const draft = versions.find((v) => v.status === "DRAFT") ?? null;
   const published = versions.find((v) => v.status === "PUBLISHED") ?? null;
@@ -347,8 +383,9 @@ async function importBase(id: string) {
   if (!working) throw notFound("Version");
   const parsed = callFlowDefinition.safeParse(working.definition);
   if (!parsed.success) throw badRequest("The current version is not valid — fix and save it first");
-  const catalog = await builtins();
+  const catalog = await builtins(language);
   return {
+    language,
     draft,
     published,
     working: parsed.data,
@@ -392,7 +429,7 @@ callFlowsRouter.post(
       res.json({ changed: false, version: null, summary: preview.summary, changedBlocks: [], undo: null } satisfies CallFlowImportResult);
       return;
     }
-    const check = await previewFlow(next).catch(voiceError);
+    const check = await previewFlow(next, {}, base.language).catch(voiceError);
     if (!check.valid) throw badRequest("The voice backend rejected this flow", { errors: check.errors });
     const saved = await saveDraft(id, next, req.user!.email).catch(flowError);
     // Never the prompt text: who, which flow and the counts only.
@@ -443,27 +480,32 @@ callFlowsRouter.post(
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     const body = testCallFlowInput.parse(req.body);
-    if (!isAiCallsConfigured()) {
+    if (configuredAiCallLanguages().every((l) => !isAiCallsConfigured(l))) {
       throw new AppError(503, "Voice backend is not configured — set VOICE_BACKEND_URL and VOICE_BACKEND_API_KEY", "unavailable");
     }
     const phone = await resolveTestNumber(body.numberId);
     if (!phone) throw badRequest("Test calls can only go to a saved trial number — pick one from the list");
-    await liveFlow(id);
+    // The flow's language decides which voice backend dials (and it must be set up and switched on).
+    const language = asAiCallLanguage((await liveFlow(id)).language);
+    const unavailable = await aiCallLanguageBlockedReason(language);
+    if (unavailable) throw new AppError(503, unavailable, "unavailable");
     const version = await prisma.callFlowVersion.findUnique({ where: { flowId_version: { flowId: id, version: body.version } } });
     if (!version) throw notFound("Version");
     const definition: CallFlowDefinition | null = callFlowDefinition.safeParse(version.definition).data ?? null;
     if (!definition) throw badRequest("This version is not valid — fix and save it first");
-    const check = await previewFlow(definition).catch(voiceError);
+    const check = await previewFlow(definition, {}, language).catch(voiceError);
     if (!check.valid) throw badRequest("The voice backend rejected this flow", { errors: check.errors });
 
     if ((await loadDoNotCallPhones(aiCallsConfig.defaultCountryCode)).has(phone)) {
       throw conflict("That number is on the do-not-call list");
     }
-    if (await prisma.aiCallRun.findFirst({ where: { status: "RUNNING" }, select: { id: true } })) {
-      throw conflict("Another AI call run is still in progress — wait for it to finish or cancel it first");
+    // One run at a time per language (the test call is a one-call run of the flow's language).
+    if (await runningRunOf(language)) {
+      const which = language === DEFAULT_AI_CALL_LANGUAGE ? "" : `${AI_CALL_LANGUAGE_NAMES[language]} `;
+      throw conflict(`Another ${which}AI call run is still in progress — wait for it to finish or cancel it first`);
     }
     // Plivo / Twilio can't reach the voice backend (e.g. ngrok stopped): the test call would ring, then go silent.
-    const blocked = await voiceCallsBlockedReason();
+    const blocked = await voiceCallsBlockedReason(language);
     if (blocked) throw new AppError(503, blocked, "voice_unreachable");
     if ((await callsCountedTowardDailyCap()) + 1 > aiCallsConfig.dailyCap) {
       throw new AppError(429, `Daily AI call limit reached (${aiCallsConfig.dailyCap} in 24 hours)`, "rate_limited");
@@ -493,7 +535,7 @@ callFlowsRouter.post(
     });
     await enqueueAiCallRun({ runId: run.id });
     logger.info(
-      { runId: run.id, flowId: id, version: version.version, draft: version.status === "DRAFT", phone: maskPhone(phone), by: req.user!.email },
+      { runId: run.id, flowId: id, version: version.version, draft: version.status === "DRAFT", language, phone: maskPhone(phone), by: req.user!.email },
       "call flow test call started",
     );
     res.status(201).json({ runId: run.id });

@@ -8,9 +8,10 @@
 
 import { createHash } from "node:crypto";
 import { Prisma, type CallFlowVersion } from "@prisma/client";
-import type { CallFlowDefinition } from "@dispatch/shared";
+import { AI_CALL_LANGUAGE_NAMES, aiCallLanguagePath, type AiCallLanguage, type CallFlowDefinition } from "@dispatch/shared";
 import { prisma } from "../prisma.js";
 import type { PinnedFlow } from "../services/voiceBackend.js";
+import { asAiCallLanguage } from "./aiCallLanguages.js";
 
 export function definitionHash(definition: unknown): string {
   return createHash("sha256").update(JSON.stringify(definition)).digest("hex");
@@ -65,21 +66,70 @@ export function latestPublished(flowId: string) {
   });
 }
 
-/** The version a new run should pin: the latest published one of a live (not archived) flow. */
-export async function versionForNewRun(flowId: string): Promise<CallFlowVersion> {
-  const flow = await prisma.callFlow.findUnique({ where: { id: flowId }, select: { archivedAt: true } });
+/**
+ * The version a new run should pin: the latest published one of a live (not archived) flow.
+ * With `language`, the flow must be in it (a run calls with one language's voice backend).
+ */
+export async function versionForNewRun(flowId: string, language?: AiCallLanguage): Promise<CallFlowVersion> {
+  const flow = await prisma.callFlow.findUnique({ where: { id: flowId }, select: { archivedAt: true, language: true } });
   if (!flow || flow.archivedAt) throw new CallFlowError("Call flow not found", 404);
+  const own = asAiCallLanguage(flow.language);
+  if (language && own !== language) {
+    throw new CallFlowError(
+      `This is a ${AI_CALL_LANGUAGE_NAMES[own]} call flow — start it from ${aiCallLanguagePath(own, "/ai-call-customers")}, ` +
+        `or pick a ${AI_CALL_LANGUAGE_NAMES[language]} flow`,
+      400,
+    );
+  }
   const version = await latestPublished(flowId);
   if (!version) throw new CallFlowError("This call flow has no published version yet — publish it first", 400);
   return version;
 }
 
-/** The flow pinned to a run, in the shape the voice backend expects (null = default agent). */
-export async function pinnedFlowForRun(runId: string): Promise<PinnedFlow | null> {
-  const link = await prisma.aiCallRunFlow.findUnique({ where: { runId }, include: { flowVersion: true } });
+/** The flow pinned to a run, in the shape the voice backend expects, with its language (null = default agent, English). */
+export async function pinnedFlowForRun(runId: string): Promise<(PinnedFlow & { language: AiCallLanguage }) | null> {
+  const link = await prisma.aiCallRunFlow.findUnique({
+    where: { runId },
+    include: { flowVersion: { include: { flow: { select: { language: true } } } } },
+  });
   if (!link) return null;
   const v = link.flowVersion;
-  return { flowId: v.flowId, version: v.version, draft: v.status === "DRAFT", definition: v.definition };
+  return {
+    flowId: v.flowId,
+    version: v.version,
+    draft: v.status === "DRAFT",
+    definition: v.definition,
+    language: asAiCallLanguage(v.flow?.language),
+  };
+}
+
+/**
+ * The flow a "call again" follow-up uses for a customer of another language than English (English
+ * keeps the default agent, as before): the flow of the customer's last call in that language while
+ * it is still published, else that language's most recently published flow. Null = none published.
+ */
+export async function flowVersionForCallAgain(customerId: string, language: AiCallLanguage): Promise<CallFlowVersion | null> {
+  const links = await prisma.aiCallCustomerCall.findMany({ where: { customerId }, select: { logId: true } });
+  const logs = links.length
+    ? await prisma.aiCallLog.findMany({
+        where: { id: { in: links.map((l) => l.logId) } },
+        orderBy: { createdAt: "desc" },
+        select: { run: { select: { flow: { select: { flowVersion: { select: { flowId: true } } } } } } },
+      })
+    : [];
+  for (const l of logs) {
+    const flowId = l.run.flow?.flowVersion.flowId;
+    if (!flowId) continue;
+    try {
+      return await versionForNewRun(flowId, language);
+    } catch (err) {
+      if (!(err instanceof CallFlowError)) throw err;
+    }
+  }
+  return prisma.callFlowVersion.findFirst({
+    where: { status: "PUBLISHED", flow: { language, archivedAt: null } },
+    orderBy: { publishedAt: "desc" },
+  });
 }
 
 /** What an admin types to remove a live (published) flow. */

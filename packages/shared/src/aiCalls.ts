@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { aiCallLanguage, DEFAULT_AI_CALL_LANGUAGE } from "./aiCallLanguages.js";
 
 /* ------------------------------------------------------------------ AI calls (isolated) */
 // Parsing / validation helpers for the "AI Call" flow on the Contacts page.
@@ -182,8 +183,10 @@ export const startAiCallsInput = z
     maxCalls: z.coerce.number().int().min(1).max(500).default(10),
     /** true: validate and report what would happen, create nothing. */
     dryRun: z.boolean().default(false),
-    /** Call flow to use (its latest published version is pinned to the run). Absent = the default agent. */
+    /** Call flow to use (its latest published version is pinned to the run). Absent = the default agent (English only). */
     flowId: z.string().min(1).max(64).optional().nullable(),
+    /** The run's language: its flow must be in it, and it is called by that language's voice backend. */
+    language: aiCallLanguage.default(DEFAULT_AI_CALL_LANGUAGE),
   })
   .refine((v) => v.mode !== "selected" || v.selectedIndexes.length > 0, {
     message: "Select at least one row to call",

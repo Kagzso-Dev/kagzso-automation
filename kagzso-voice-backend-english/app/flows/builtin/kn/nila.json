@@ -1,0 +1,11 @@
+{
+  "name": "Nila screening (Kannada)",
+  "identity": {
+    "question": "ನಾನು {{customer_name}} {{title_to_use}} ಅವರ ಜೊತೆ ಮಾತಾಡ್ತಿದೀನಾ?",
+    "reask": "Sorry, ನಾನು {{customer_name}} ಅವರ ಜೊತೆನೇ ಮಾತಾಡ್ತಿದೀನಾ?"
+  },
+  "silence": {
+    "reprompt": "Hello, ನನ್ನ ಮಾತು ಕೇಳಿಸ್ತಿದೆಯಾ?",
+    "closing": "ಪರವಾಗಿಲ್ಲ. ನಿಮ್ಮ ಸಮಯಕ್ಕೆ ಧನ್ಯವಾದಗಳು. Have a nice day."
+  }
+}

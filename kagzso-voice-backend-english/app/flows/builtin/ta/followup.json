@@ -1,0 +1,10 @@
+{
+  "name": "Customer follow-up (Tamil)",
+  "greeting": {
+    "text": "Hello {{addressed_name}}, நான் Kagzso AI and Automation-ல இருந்து தாரா பேசறேன். நாங்க businesses-ஓட daily repetitive work-ஐ automate பண்ண help பண்றோம். ஒரு நிமிஷம் பேசலாமா?"
+  },
+  "silence": {
+    "reprompt": "Hello, கேக்குதா? Hear பண்றீங்களா?",
+    "closing": "பரவாயில்ல. உங்க நேரத்துக்கு நன்றி. Have a nice day."
+  }
+}

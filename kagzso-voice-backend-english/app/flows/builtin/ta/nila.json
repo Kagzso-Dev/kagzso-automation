@@ -1,0 +1,11 @@
+{
+  "name": "Nila screening (Tamil)",
+  "identity": {
+    "question": "{{customer_name}} {{title_to_use}}-கிட்ட தான் பேசறேனா?",
+    "reask": "Sorry, {{customer_name}}-கிட்ட தான் பேசறேனா?"
+  },
+  "silence": {
+    "reprompt": "Hello, கேக்குதா? Hear பண்றீங்களா?",
+    "closing": "பரவாயில்ல. உங்க நேரத்துக்கு நன்றி. Have a nice day."
+  }
+}

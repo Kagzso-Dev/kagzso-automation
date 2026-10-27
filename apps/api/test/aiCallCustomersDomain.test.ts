@@ -33,7 +33,8 @@ function matches(row: Row, where: Row = {}): boolean {
 }
 
 const DEFAULTS: Record<string, Row> = {
-  aiCallCustomer: { stage: "NOT_CALLED", gender: "male", whatsappOptIn: false, needsReview: false, doNotCall: false, deletedAt: null, lastCallLogId: null },
+  // language: the column default (migration 0029): customers saved without one are in the English list.
+  aiCallCustomer: { stage: "NOT_CALLED", gender: "male", whatsappOptIn: false, needsReview: false, doNotCall: false, deletedAt: null, lastCallLogId: null, language: "en" },
   aiCallFollowup: { status: "PENDING_APPROVAL", attempt: 1, whatsappTemplateId: null, whatsappBatchId: null, aiCallRunId: null, sourceCallLogId: null, decidedAt: null },
 };
 

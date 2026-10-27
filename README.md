@@ -221,7 +221,8 @@ daily caps. The `ai-call-run` worker then calls **one customer at a time**: it d
 call to end, waits the gap, and dials the next. Status arrives two ways: signed callbacks from
 the voice backend (`POST /api/webhooks/ai-calls`) and a poll of the voice backend every 5 s while a
 call is in flight, so a lost callback never stalls a run. Only `ADMIN` users can start calls; only
-one run can be active at a time; phone numbers are masked in logs.
+one run can be active at a time per language (see *AI calls in more languages*); phone numbers are
+masked in logs.
 
 Calls run the voice backend's standard **Nila** flow (`VOICE_AGENT_NAME=Nila`, the default; the names
 `Radhi` and `Kayal` also still work): *"Hi sir, Good afternoon."* → after a 1-second pause, or as soon as the customer
@@ -377,6 +378,95 @@ Setup: `npm run prisma:deploy` applies `0019_ai_call_customers`. It creates four
 **Rollback:** set `ENABLE_AI_CALLS=false` to hide the page and the follow-up queue. To remove the
 tables, run `prisma/migrations/0019_ai_call_customers/down.sql`, then
 `npx prisma migrate resolve --rolled-back 0019_ai_call_customers`.
+
+### AI calls in more languages (Tamil, Hindi, Kannada, …)
+
+**One voice backend per language, one public address.** Every language runs the same
+`kagzso-voice-backend-english` code with its own `.env.<code>`: its own `CALL_LANGUAGE`, port and MySQL
+database. All languages share the Sarvam key, the phone number, the LLM, everything else in the English
+`.env`, and the public address: a language's `PUBLIC_BASE_URL` is the English one plus its key
+(`https://voice.orchestrator.kagzso.com/ta`), and the proxy in front sends `/ta/…` to the Tamil port
+without the `/ta`. English stays exactly as it is (`.env`, port 8002, `voice.orchestrator.kagzso.com`,
+`/call-flows`, `/ai-call-customers`).
+
+| | English | Tamil | Hindi | Kannada |
+|---|---|---|---|---|
+| Voice backend `.env` | `.env` | `.env.ta` | `.env.hi` | `.env.kn` |
+| Port / Dispatch `.env` | 8002 `VOICE_BACKEND_URL` | 8003 `VOICE_BACKEND_URL_TA` | 8004 `VOICE_BACKEND_URL_HI` | 8005 `VOICE_BACKEND_URL_KN` |
+| Voice database | `kagzso_voice` | `kagzso_voice_ta` | `kagzso_voice_hi` | `kagzso_voice_kn` |
+| Public address (`PUBLIC_BASE_URL`) | `https://voice.…` | `https://voice.…/ta` | `…/hi` | `…/kn` |
+| PM2 process | `kagzso_orchestrator_voice` | `…_voice_ta` | `…_voice_hi` | `…_voice_kn` |
+| Pages | `/call-flows`, `/ai-call-customers` | `/ta/call-flows`, `/ta/ai-call-customers` | `/hi/…` | `/kn/…` |
+
+- **Separate per language:** call flows (each flow has one language, fixed when it is created),
+  the saved customer list (a number is in one list at a time), voices, recordings, and one running
+  run at a time. **Shared:** the Dispatch database, dashboard, costs, daily cap and the do-not-call
+  list (a "don't call me" in Tamil also stops English calls).
+- **One call, one language:** the backend hears (Sarvam STT), thinks (the AI is told to keep every
+  reply in that language, everyday English words allowed) and speaks (Sarvam TTS) only in its
+  `CALL_LANGUAGE`, and refuses flows in any other language. Another language has no "default
+  agent": its calls always use one of its own published flows.
+- **Voices** come from that language's `.env`: `SARVAM_TTS_VOICES` (e.g. `kavitha:female,mani:male`)
+  and `SARVAM_TTS_SPEAKER`; empty = Roopa, Ritu, Simran, Ishita. They show in that language's Voice
+  Call Flows page with *Listen* (the sample line starts in that language). The model is `LLM_MODEL` /
+  `SARVAM_STT_MODEL` / `SARVAM_TTS_MODEL` in the same file.
+- **Built-in scripts:** the English blocks (instructions to the AI) plus that language's spoken lines
+  from `app/flows/builtin/<code>/` (identity question, silence lines, follow-up greeting).
+- **Separate pages for every language:** Tamil, Hindi and Kannada always have their own menu section
+  ("Calls · Tamil" …) with their own Voicecall Contact and Voice Call Flows pages, even before their
+  voice backend is set up: until then the pages say "not set up yet", customers can already be added,
+  and calls, voices and new flows wait for the backend. Other languages (Telugu, Malayalam, …) get
+  their pages once their `VOICE_BACKEND_URL_<CODE>` is set.
+- **Settings → AI call languages** (admins): each language's backend status and an **on/off switch**.
+  Switching on shows its pages and **starts its voice backend** (migrations first); **▶ Run** starts a
+  backend that stopped later. On the server that is PM2 (`kagzso_orchestrator_voice_<code>`, then
+  `pm2 save`), on a PC a background process (log: `kagzso-voice-backend-english/voice-<code>.log`).
+  Off: its menu and pages are hidden for everyone, new runs are refused, and calls still waiting in a
+  running run are cancelled (a call in progress finishes; the backend keeps running). Past calls stay.
+  English is always on. `AI_CALL_BACKEND_CONTROL=false` in Dispatch's `.env` stops Settings from
+  starting processes.
+
+**Add a language on the server (Tamil shown; Hindi = `hi`, Kannada = `kn`):**
+
+```bash
+cd /opt/kagzso-automation && git pull
+npm run voice:lang:plan -- ta                 # shows what .env.ta gets; writes nothing
+npm run voice:lang:init -- ta
+#   writes kagzso-voice-backend-english/.env.ta (copy of the English .env; CALL_LANGUAGE=ta, APP_PORT=8003,
+#   MYSQL_DATABASE=kagzso_voice_ta, PUBLIC_BASE_URL=<the English address>/ta, SARVAM_STT_MODE=codemix) and adds
+#   VOICE_BACKEND_URL_TA=http://127.0.0.1:8003 to Dispatch's .env. Edit voices / model / STT_KEYTERMS in .env.ta.
+
+# Its database (once; same MySQL user as the English voice backend):
+sudo mysql -e "CREATE DATABASE IF NOT EXISTS kagzso_voice_ta CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+               GRANT ALL PRIVILEGES ON kagzso_voice_ta.* TO 'kagzso_voice'@'localhost'; FLUSH PRIVILEGES;"
+
+# The shared public address, once for all languages (no new domain, DNS or certificate): add
+#   include /opt/kagzso-automation/deploy/nginx-voice-languages.conf;
+# inside the server { } block of the existing voice.orchestrator.kagzso.com site (the 443 one), then:
+sudo nginx -t && sudo systemctl reload nginx
+
+npm run prod                                  # migrates kagzso_voice_ta, starts kagzso_orchestrator_voice_ta
+curl -s http://127.0.0.1:8003/ready           # "language":"ta", "status":"ready"
+curl -s https://voice.orchestrator.kagzso.com/ta/health    # {"status":"ok"} through the shared address
+npm run callflow:seed:plan -- ta              # its starter flows, dry run
+npm run callflow:seed -- ta                   # adds them as unpublished drafts (never publishes, never changes a flow)
+#   `-- all` = Tamil, Hindi and Kannada at once. Works before a backend runs too (from the built-in files).
+```
+
+Then **Settings → AI call languages**: Tamil's switch on (it starts the backend if it isn't running).
+**Calls · Tamil → Voice Call Flows**: edit the draft, *Listen* to the voices, *Test call to my number*,
+**Publish**; then **Calls · Tamil → Voicecall Contact**: import customers and start calls. Check free
+memory first (`free -m`): each voice process may use up to 1 GB.
+
+**Local dev:** `npm run voice:lang:init -- ta` (its `PUBLIC_BASE_URL` = your ngrok address + `/ta`), then
+`npm run dev` starts every language with a `.env.<code>` next to English, plus the voice gateway on
+port 8010 (`VOICE_GATEWAY_PORT`; `scripts/voice-gateway.mjs`): `/ta/…` → Tamil, `/hi/…` → Hindi,
+`/kn/…` → Kannada, everything else → English. Point your one ngrok tunnel at the gateway
+(`ngrok http --url=<your address> 8010` instead of 8002); English works through it unchanged.
+
+**Rollback:** Settings → AI call languages → Disable (instant), or remove `VOICE_BACKEND_URL_TA` from
+`.env` and redeploy; `pm2 delete kagzso_orchestrator_voice_ta` stops just that backend. The migration
+`0029_ai_call_languages` only adds two `language` columns (default `en`); its `down.sql` removes them.
 
 ### WhatsApp media (header media, received files, Inbox)
 

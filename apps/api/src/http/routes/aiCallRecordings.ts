@@ -13,13 +13,19 @@
 //
 // Every access is logged with the admin id, log id, voice call id, action and result - never a
 // phone number or audio.
+//
+// Each language has its own voice backend and keeps its own recordings: a call's recording is
+// read from the backend of its run's language, and the two settings endpoints take ?language=
+// (absent = English).
 
 import { Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
-import { aiCallsConfig } from "../../config/aiCalls.js";
+import { aiCallLanguageQuery, type AiCallLanguage } from "@dispatch/shared";
+import { aiCallsConfig, isAiCallsConfigured } from "../../config/aiCalls.js";
+import { languageOfRun, languagesOfRuns } from "../../domain/aiCallLanguages.js";
 import { logger } from "../../logger.js";
 import { prisma } from "../../prisma.js";
 import {
@@ -57,11 +63,32 @@ const statusQuery = z.object({ logIds: z.string().max(8000).default("") });
 const recentQuery = z.object({ limit: z.coerce.number().int().min(1).max(100).default(20) });
 const retentionInput = z.object({ retentionDays: z.number().int().min(0).max(3650) }).strict();
 
-/** The voice call behind a log row we own; 404 for an unknown log or a call that never reached the voice backend. */
-async function voiceCallOf(logId: string): Promise<string> {
-  const log = await prisma.aiCallLog.findUnique({ where: { id: logId }, select: { voiceCallId: true } });
+/** The voice call behind a log row we own, and its language; 404 for an unknown log or a call that never reached the voice backend. */
+async function voiceCallOf(logId: string): Promise<{ voiceCallId: string; language: AiCallLanguage }> {
+  const log = await prisma.aiCallLog.findUnique({ where: { id: logId }, select: { voiceCallId: true, runId: true } });
   if (!log?.voiceCallId) throw notFound("Call");
-  return log.voiceCallId;
+  return { voiceCallId: log.voiceCallId, language: await languageOfRun(log.runId) };
+}
+
+/**
+ * Recordings of many calls, asked of each language's own backend. A language whose backend is
+ * not configured (any more) is left out; `enabled` is the English backend's when it answered.
+ */
+async function recordingsOf(logs: { voiceCallId: string | null; runId: string }[]) {
+  const langs = await languagesOfRuns([...new Set(logs.map((l) => l.runId))]);
+  const byLanguage = new Map<AiCallLanguage, string[]>();
+  for (const l of logs) {
+    const lang = langs.get(l.runId) ?? "en";
+    if (l.voiceCallId && (lang === "en" || isAiCallsConfigured(lang))) byLanguage.set(lang, [...(byLanguage.get(lang) ?? []), l.voiceCallId]);
+  }
+  let enabled: boolean | null = null;
+  const items: Awaited<ReturnType<typeof listRecordings>>["items"] = [];
+  for (const [lang, ids] of byLanguage) {
+    const r = await listRecordings(ids, lang).catch(voiceError);
+    if (enabled === null || lang === "en") enabled = r.enabled;
+    items.push(...r.items);
+  }
+  return { enabled, items };
 }
 
 function audit(req: Request, logId: string, voiceCallId: string | null, action: string, result: string) {
@@ -82,13 +109,13 @@ aiCallRecordingsRouter.get(
     const { logIds } = statusQuery.parse(req.query);
     const ids = [...new Set(logIds.split(",").map((s) => s.trim()).filter((s) => /^[A-Za-z0-9_-]{1,64}$/.test(s)))].slice(0, 200);
     const logs = ids.length
-      ? await prisma.aiCallLog.findMany({ where: { id: { in: ids }, voiceCallId: { not: null } }, select: { id: true, voiceCallId: true } })
+      ? await prisma.aiCallLog.findMany({ where: { id: { in: ids }, voiceCallId: { not: null } }, select: { id: true, voiceCallId: true, runId: true } })
       : [];
     if (!logs.length) {
       res.json({ enabled: null, items: {} });
       return;
     }
-    const { enabled, items } = await listRecordings(logs.map((l) => l.voiceCallId!)).catch(voiceError);
+    const { enabled, items } = await recordingsOf(logs);
     const byCall = new Map(items.map((r) => [r.call_id, r.status]));
     res.json({ enabled, items: Object.fromEntries(logs.filter((l) => byCall.has(l.voiceCallId!)).map((l) => [l.id, byCall.get(l.voiceCallId!)])) });
   }),
@@ -96,18 +123,20 @@ aiCallRecordingsRouter.get(
 
 aiCallRecordingsRouter.get(
   "/recordings/settings",
-  wrap(async (_req, res) => {
-    res.json(await getRecordingSettings().catch(voiceError));
+  wrap(async (req, res) => {
+    const { language } = aiCallLanguageQuery.parse(req.query);
+    res.json(await getRecordingSettings(language).catch(voiceError));
   }),
 );
 
 aiCallRecordingsRouter.put(
   "/recordings/settings",
   wrap(async (req, res) => {
+    const { language } = aiCallLanguageQuery.parse(req.query);
     const { retentionDays } = retentionInput.parse(req.body ?? {});
     try {
-      const body = await setRecordingRetention(retentionDays);
-      logger.info({ adminId: req.user!.id, retentionDays }, "call recording retention changed");
+      const body = await setRecordingRetention(retentionDays, language);
+      logger.info({ adminId: req.user!.id, retentionDays, language }, "call recording retention changed");
       res.json(body);
     } catch (err) {
       if (err instanceof VoiceBackendError && err.status === 409) {
@@ -135,6 +164,7 @@ aiCallRecordingsRouter.get(
         startedAt: true,
         createdAt: true,
         voiceCallId: true,
+        runId: true,
         run: { select: { skipped: true } },
       },
     });
@@ -142,7 +172,7 @@ aiCallRecordingsRouter.get(
       res.json({ items: [] });
       return;
     }
-    const { items } = await listRecordings(logs.map((l) => l.voiceCallId!)).catch(voiceError);
+    const { items } = await recordingsOf(logs);
     const byCall = new Map(items.map((r) => [r.call_id, r]));
     res.json({
       items: logs
@@ -169,8 +199,8 @@ aiCallRecordingsRouter.get(
   "/logs/:logId/recording",
   wrap(async (req, res) => {
     const { logId } = logIdParam.parse(req.params);
-    const voiceCallId = await voiceCallOf(logId);
-    const body = await getRecording(voiceCallId).catch(voiceError);
+    const { voiceCallId, language } = await voiceCallOf(logId);
+    const body = await getRecording(voiceCallId, language).catch(voiceError);
     audit(req, logId, voiceCallId, "view", body.recording?.status ?? "none");
     res.json(body);
   }),
@@ -181,9 +211,9 @@ aiCallRecordingsRouter.get(
   wrap(async (req, res) => {
     const { logId } = logIdParam.parse(req.params);
     const download = req.query.download === "1";
-    const voiceCallId = await voiceCallOf(logId);
+    const { voiceCallId, language } = await voiceCallOf(logId);
     const range = typeof req.headers.range === "string" && /^bytes=\d*-\d*$/.test(req.headers.range) ? req.headers.range : undefined;
-    const upstream = await fetchRecordingAudio(voiceCallId, range).catch(voiceError);
+    const upstream = await fetchRecordingAudio(voiceCallId, range, language).catch(voiceError);
     if (!upstream.ok || !upstream.body) {
       audit(req, logId, voiceCallId, download ? "download" : "play", `refused_${upstream.status}`);
       if (upstream.status === 416) {
@@ -211,9 +241,9 @@ aiCallRecordingsRouter.delete(
   "/logs/:logId/recording",
   wrap(async (req, res) => {
     const { logId } = logIdParam.parse(req.params);
-    const voiceCallId = await voiceCallOf(logId);
+    const { voiceCallId, language } = await voiceCallOf(logId);
     try {
-      const body = await deleteRecording(voiceCallId);
+      const body = await deleteRecording(voiceCallId, language);
       audit(req, logId, voiceCallId, "delete", "deleted");
       res.json(body);
     } catch (err) {

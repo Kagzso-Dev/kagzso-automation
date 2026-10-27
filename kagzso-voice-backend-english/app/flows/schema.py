@@ -20,6 +20,8 @@ from typing import Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.config import settings
+
 BUILTIN_DIR = Path(__file__).resolve().parent / "builtin"
 LOCKED_BLOCKS: Dict[str, str] = json.loads((BUILTIN_DIR / "locked_blocks.json").read_text(encoding="utf-8"))
 
@@ -164,7 +166,8 @@ class CallFlow(_Strict):
     schema_version: Literal[1]
     base: Literal[FLOW_BASES]  # type: ignore[valid-type]
     name: str = Field(..., min_length=1, max_length=100)
-    language: Literal["en"]
+    # One backend per language: only flows in this backend's CALL_LANGUAGE (settings.call_language).
+    language: str = Field(..., max_length=8)
     voice_id: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_-]{1,100}$")
     greeting: FlowGreeting
     blocks: List[Union[LockedBlock, TextBlock]] = Field(..., min_length=1, max_length=80)
@@ -176,6 +179,15 @@ class CallFlow(_Strict):
     recording_notice: Optional[str] = Field(None, max_length=300)
     # Identity question / re-ask spoken by the system; None = the built-in lines.
     identity: Optional[FlowIdentity] = None
+
+    @field_validator("language")
+    @classmethod
+    def _language(cls, v: str) -> str:
+        own = settings.call_language
+        if v != own:
+            raise ValueError(f"this voice backend calls in '{own}' (CALL_LANGUAGE); "
+                             f"a '{v}' flow belongs to that language's voice backend")
+        return v
 
     @field_validator("recording_notice")
     @classmethod

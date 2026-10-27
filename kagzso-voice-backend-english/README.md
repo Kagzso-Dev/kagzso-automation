@@ -5,6 +5,14 @@
 > Sarvam Bulbul v3 voices (default `priya`, rotated per call), own MySQL DB `kagzso_voice_en`, port **8002**
 > (the Tamil backend uses 8001). Point a separate ngrok tunnel at 8002 and set `PUBLIC_BASE_URL` to it.
 
+> **More languages, same code.** Run this folder once per language, each with its own `.env.<code>`
+> (`KAGZSO_ENV_FILE=.env.ta`): its own `CALL_LANGUAGE`, port and `MYSQL_DATABASE`; its `PUBLIC_BASE_URL`
+> is the English address plus its key (`https://…/ta`; nginx or the dev gateway strips the `/ta`);
+> everything else (Sarvam key, phone number, LLM) as in `.env`. A backend only accepts call flows in its
+> `CALL_LANGUAGE` and keeps every call in it; its built-in scripts add the spoken lines in
+> `app/flows/builtin/<code>/`; its voices come from `SARVAM_TTS_VOICES`. `/ready` and
+> `GET /api/flows/builtin` report its `language`. Setup: the main README → *AI calls in more languages*.
+
 The real-time AI voice-calling backend for **Kagzso**. You send one API request, and Kagzso:
 
 1. Calls the customer through **Plivo**.

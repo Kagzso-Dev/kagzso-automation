@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { aiCallLanguage, DEFAULT_AI_CALL_LANGUAGE } from "./aiCallLanguages.js";
 
 /* ------------------------------------------------------------------ Call Flows (AI voice calls) */
 // The UI-editable form of a voice agent's script. Mirrors the voice backend's
@@ -164,7 +165,8 @@ export const callFlowDefinition = z
     schema_version: z.literal(1),
     base: z.enum(CALL_FLOW_BASES),
     name: z.string().trim().min(1).max(100),
-    language: z.literal("en"),
+    /** The flow's voice backend language; its backend refuses any other (one backend per language). */
+    language: aiCallLanguage,
     voice_id: z
       .string()
       .regex(/^[A-Za-z0-9_-]{1,100}$/, "Invalid voice id")
@@ -237,6 +239,8 @@ export const createCallFlowInput = z
     name: z.string().trim().min(1).max(100),
     description: z.string().trim().max(1000).optional().nullable(),
     base: z.enum(CALL_FLOW_BASES),
+    /** Copied from that language's built-in flow and fixed for the flow's life. Absent = English. */
+    language: aiCallLanguage.default(DEFAULT_AI_CALL_LANGUAGE),
   })
   .strict();
 

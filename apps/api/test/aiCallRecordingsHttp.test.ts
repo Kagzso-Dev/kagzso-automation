@@ -35,6 +35,8 @@ vi.mock("../src/prisma.js", () => ({
               run: { skipped: id === "log_ok" ? { testCall: true } : {} },
             })),
     },
+    // No pinned flows: every call is English, so it goes to VOICE_BACKEND_URL as before.
+    aiCallRunFlow: { findUnique: async () => null, findMany: async () => [] },
   },
 }));
 

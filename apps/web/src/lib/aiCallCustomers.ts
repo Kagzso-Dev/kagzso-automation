@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import type { AiCallCustomerColumnMapping, AiCallStage } from "@dispatch/shared";
+import type { AiCallCustomerColumnMapping, AiCallLanguage, AiCallStage } from "@dispatch/shared";
 import { api, getAccessToken } from "./api";
 import type { BadgeTone } from "../components/ui";
 
@@ -54,6 +54,8 @@ export interface AiCallFollowup {
     whatsappOptIn: boolean;
     deletedAt: string | null;
     doNotCall: boolean;
+    /** The customer's language list (absent on an older API = English). */
+    language?: AiCallLanguage;
   };
 }
 

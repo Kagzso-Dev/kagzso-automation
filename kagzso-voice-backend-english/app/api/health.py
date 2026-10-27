@@ -60,6 +60,8 @@ async def ready() -> JSONResponse:
         # reachable: true / false, or null when not checked (PUBLIC_URL_CHECK=false).
         "public_base_url_check": {"url": settings.PUBLIC_BASE_URL or None, "reachable": public.reachable, "reason": public.reason},
         "telephony_provider": settings.telephony_provider,
+        # One backend per language: Dispatch checks this matches the language it sends here.
+        "language": settings.call_language,
         "tts_provider": "sarvam",
         "llm_provider": settings.LLM_PROVIDER,
     }

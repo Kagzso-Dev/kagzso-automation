@@ -40,6 +40,12 @@ SARVAM_LANGUAGE_CODES = {
     "auto": "unknown",
 }
 
+# Language names for the reply-language rule and the voice labels.
+LANGUAGE_NAMES = {
+    "en": "English", "ta": "Tamil", "hi": "Hindi", "te": "Telugu", "kn": "Kannada", "ml": "Malayalam",
+    "mr": "Marathi", "gu": "Gujarati", "bn": "Bengali", "pa": "Punjabi", "od": "Odia",
+}
+
 
 class Settings(BaseSettings):
     # KAGZSO_ENV_FILE lets tests run without reading the real .env.
@@ -107,7 +113,11 @@ class Settings(BaseSettings):
 
     # --- Sarvam TTS (Bulbul; uses SARVAM_API_KEY and CALL_LANGUAGE) ---
     SARVAM_TTS_MODEL: str = "bulbul:v3"
-    SARVAM_TTS_SPEAKER: str = "roopa"  # lowercase Bulbul v3 speaker id; must be in app/core/voices.py (else roopa)
+    SARVAM_TTS_SPEAKER: str = "roopa"  # lowercase Bulbul v3 speaker id; must be an offered voice (app/core/voices.py)
+    # The voices this backend offers (Call Flows voice picker, rotation, previews): comma-separated
+    # Bulbul speaker ids, each optionally id:gender, e.g. "kavitha:female,mani:male". Empty = Roopa,
+    # Ritu, Simran and Ishita (today's English list; Bulbul speakers speak every language).
+    SARVAM_TTS_VOICES: str = ""
     SARVAM_TTS_PACE: float = 1.0  # 0.5-2.0
     SARVAM_TTS_TEMPERATURE: float = 0.6  # 0.01-1.0
     # Streamed calls: characters Sarvam collects before it starts speaking (its min_buffer_size).
@@ -351,6 +361,13 @@ class Settings(BaseSettings):
         return SARVAM_LANGUAGE_CODES.get(lang.lower(), "unknown")
 
     @property
+    def call_language(self) -> str:
+        """CALL_LANGUAGE as a flow language code ("ta-IN" -> "ta"). Auto-detect or unknown = "en".
+        Every call flow this backend accepts must have this language (one backend per language)."""
+        code = (self.CALL_LANGUAGE or "").strip().split("-")[0].lower()
+        return code if code in LANGUAGE_NAMES else "en"
+
+    @property
     def public_ws_base_url(self) -> str:
         if self.PUBLIC_BASE_URL.startswith("https://"):
             return "wss://" + self.PUBLIC_BASE_URL[len("https://"):]
@@ -383,7 +400,7 @@ class Settings(BaseSettings):
 
     @property
     def tts_speaker(self) -> str:
-        """The main voice: SARVAM_TTS_SPEAKER when Kagzso offers it, else the default (roopa)."""
+        """The main voice: SARVAM_TTS_SPEAKER when this backend offers it, else DEFAULT_VOICE (app/core/voices.py)."""
         from app.core.voices import voice_or_default
 
         return voice_or_default(self.SARVAM_TTS_SPEAKER)

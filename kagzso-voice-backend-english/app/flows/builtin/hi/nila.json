@@ -1,0 +1,11 @@
+{
+  "name": "Nila screening (Hindi)",
+  "identity": {
+    "question": "क्या मेरी बात {{customer_name}} {{title_to_use}} से हो रही है?",
+    "reask": "Sorry, क्या मेरी बात {{customer_name}} से हो रही है?"
+  },
+  "silence": {
+    "reprompt": "Hello, क्या आपको मेरी आवाज़ आ रही है?",
+    "closing": "कोई बात नहीं। आपके समय के लिए धन्यवाद। Have a nice day."
+  }
+}

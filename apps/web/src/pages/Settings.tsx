@@ -13,6 +13,8 @@ import { CostRatesSection } from "../components/CostRatesSection";
 import { ChangePasswordSection, UsersSection } from "../components/UserAdminSections";
 import { BrandingSection } from "../components/BrandingSection";
 import { CallRecordingsSection } from "../components/CallRecordingsSection";
+import { AiCallLanguagesSection } from "../components/AiCallLanguagesSection";
+import { Switch } from "../components/Switch";
 
 interface ApiKey {
   id: string;
@@ -182,6 +184,8 @@ export function SettingsPage() {
 
       <CostRatesSection isAdmin={isAdmin} />
 
+      {isAdmin && <AiCallLanguagesSection />}
+
       {isAdmin && <CallRecordingsSection />}
 
       <UsersSection isAdmin={isAdmin} />
@@ -257,23 +261,12 @@ function SidebarMenuSection({ isAdmin }: { isAdmin: boolean }) {
                 <span className="font-medium text-ink">{SIDEBAR_ITEM_LABELS[item]}</span>
                 <label className="flex items-center gap-2 text-xs text-slate-550">
                   {shown ? "Shown" : "Hidden"}
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={shown}
-                    aria-label={`Show ${SIDEBAR_ITEM_LABELS[item]} in the sidebar`}
+                  <Switch
+                    on={shown}
+                    label={`Show ${SIDEBAR_ITEM_LABELS[item]} in the sidebar`}
                     disabled={!isAdmin || save.isPending}
-                    onClick={() => toggle(item, !shown)}
-                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-[background-color,box-shadow] duration-200 ease-in-out-soft disabled:opacity-50 ${
-                      shown ? "bg-gradient-accent shadow-[0_2px_8px_rgba(0,194,255,0.3)]" : "bg-line-strong"
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-4 w-4 rounded-full bg-white shadow-[0_1px_3px_rgba(17,24,39,0.25)] transition-transform duration-[var(--motion-base)] ease-spring ${
-                        shown ? "translate-x-[18px]" : "translate-x-0.5"
-                      }`}
-                    />
-                  </button>
+                    onChange={(on) => toggle(item, on)}
+                  />
                 </label>
               </li>
             );

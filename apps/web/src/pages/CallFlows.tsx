@@ -22,6 +22,9 @@ import {
 } from "@dispatch/shared";
 import { api } from "../lib/api";
 import { useAiCallsConfig, type AiCallRun } from "../lib/aiCalls";
+import { isEnglish, titleFor, useAiCallLanguage, useLanguageReady, withLanguage } from "../lib/aiCallLanguage";
+import { AiCallLanguageNotice } from "../components/AiCallLanguageNotice";
+import { AI_CALL_LANGUAGE_NAMES } from "@dispatch/shared";
 import {
   BASE_LABELS,
   testCallDefaultVersion,
@@ -80,9 +83,12 @@ const SAFETY_IDS = new Set<string>(CALL_FLOW_SAFETY_BLOCK_IDS);
 
 export function CallFlowsPage() {
   const config = useAiCallsConfig();
+  // English (/call-flows) or another language's own flows (/ta/call-flows, …), each from its own voice backend.
+  const language = useAiCallLanguage();
+  const { ready: languageReady } = useLanguageReady();
   const enabled = !!config.data?.flowEditor && !!config.data.canStart; // admins and editors
-  const flows = useCallFlows(enabled);
-  const catalog = useCallFlowCatalog();
+  const flows = useCallFlows(enabled, language);
+  const catalog = useCallFlowCatalog(language, isEnglish(language) || languageReady); // English: as before
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [removing, setRemoving] = useState<CallFlowListItem | null>(null);
@@ -91,7 +97,7 @@ export function CallFlowsPage() {
   if (!enabled) {
     return (
       <div>
-        <PageHeader title="Call Flows" />
+        <PageHeader title={titleFor("Call Flows", language)} />
         <EmptyState>
           Call flows are turned off. An admin can enable them with ENABLE_AI_CALLS and ENABLE_CALL_FLOW_EDITOR.
         </EmptyState>
@@ -102,7 +108,7 @@ export function CallFlowsPage() {
   return (
     <div>
       <PageHeader
-        title="Call Flows"
+        title={titleFor("Call Flows", language)}
         action={
           <button className="btn-primary" onClick={() => setCreating(true)} disabled={!catalog.data}>
             New call flow
@@ -110,10 +116,22 @@ export function CallFlowsPage() {
         }
       />
       <p className="-mt-2 mb-4 max-w-3xl text-sm text-slate-550">
-        What the AI voice agent says on calls. Calls use the server's default flow unless you pick a published flow
-        in the AI Call window. Safety rules (AI disclosure, do-not-call, no false claims) always apply and can't be edited.
+        {isEnglish(language) ? (
+          <>
+            What the AI voice agent says on calls. Calls use the server's default flow unless you pick a published flow
+            in the AI Call window. Safety rules (AI disclosure, do-not-call, no false claims) always apply and can't be edited.
+          </>
+        ) : (
+          <>
+            What the AI voice agent says on {AI_CALL_LANGUAGE_NAMES[language]} calls. These flows run on the{" "}
+            {AI_CALL_LANGUAGE_NAMES[language]} voice backend and every {AI_CALL_LANGUAGE_NAMES[language]} call uses one
+            published flow from here, in {AI_CALL_LANGUAGE_NAMES[language]} from start to end. Safety rules (AI disclosure,
+            do-not-call, no false claims) always apply and can't be edited.
+          </>
+        )}
       </p>
-      {catalog.error && <ErrorNote error={catalog.error} />}
+      {/* Tamil / Hindi / Kannada before their voice backend is set up: say so instead of a raw error. */}
+      {languageReady ? catalog.error && <ErrorNote error={catalog.error} /> : <AiCallLanguageNotice />}
       {catalog.data && <BuiltinScripts catalog={catalog.data} onCustomized={setSelectedId} />}
       <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.06em] text-slate-550">Your call flows</h2>
       <div className={selectedId ? "grid gap-6 min-[1600px]:grid-cols-[280px_minmax(0,1fr)]" : "flex flex-col gap-4"}>
@@ -295,12 +313,17 @@ const groupLabel = (g: string) => TABS.find((t) => t.key === g)?.label ?? g;
 /** The read-only built-in scripts, always listed so they can be read before copying. */
 function BuiltinScripts({ catalog, onCustomized }: { catalog: CallFlowCatalog; onCustomized: (id: string) => void }) {
   const qc = useQueryClient();
+  const language = useAiCallLanguage();
   const [viewing, setViewing] = useState<CallFlowBase | null>(null);
   const customize = useMutation({
     mutationFn: (base: CallFlowBase) => {
       const builtin = catalog.flows[base];
       const name = `${builtin.name.replace(/\s*\(default\)\s*$/i, "")} — my copy`.slice(0, 100);
-      return api<{ id: string }>("/api/call-flows", { method: "POST", json: { name, base }, notify: "Editable copy created" });
+      return api<{ id: string }>("/api/call-flows", {
+        method: "POST",
+        json: { name, base, ...(isEnglish(language) ? {} : { language }) },
+        notify: "Editable copy created",
+      });
     },
     onSuccess: (f) => {
       void qc.invalidateQueries({ queryKey: ["call-flows"] });
@@ -322,7 +345,7 @@ function BuiltinScripts({ catalog, onCustomized }: { catalog: CallFlowCatalog; o
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-semibold">{def.name}</span>
                 <Badge tone="accent">built-in</Badge>
-                {base === "nila" && <Badge tone="ok">used by AI calls by default</Badge>}
+                {base === "nila" && isEnglish(language) && <Badge tone="ok">used by AI calls by default</Badge>}
               </div>
               <p className="text-xs text-slate-550">{BASE_LABELS[base]}</p>
               <p className="text-sm">
@@ -441,11 +464,16 @@ function BuiltinView({
 
 function NewFlowModal({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (id: string) => void }) {
   const qc = useQueryClient();
+  const language = useAiCallLanguage(); // created in this page's language, fixed for the flow's life
   const [name, setName] = useState("");
   const [base, setBase] = useState<CallFlowBase>("nila");
   const create = useMutation({
     mutationFn: () =>
-      api<{ id: string }>("/api/call-flows", { method: "POST", json: { name: name.trim(), base }, notify: "Call flow created" }),
+      api<{ id: string }>("/api/call-flows", {
+        method: "POST",
+        json: { name: name.trim(), base, ...(isEnglish(language) ? {} : { language }) },
+        notify: "Call flow created",
+      }),
     onSuccess: (f) => {
       void qc.invalidateQueries({ queryKey: ["call-flows"] });
       setName("");
@@ -676,8 +704,13 @@ function CallFlowEditor({
           </div>
           <div className="min-w-0">
             <label className="label">Language</label>
-            <select className="input truncate" value={form.language} disabled title="English (the only language this voice backend supports)">
-              <option value="en">English (the only language this voice backend supports)</option>
+            <select
+              className="input truncate"
+              value={form.language}
+              disabled
+              title={`${AI_CALL_LANGUAGE_NAMES[form.language]} — fixed for this flow (its own voice backend calls in it)`}
+            >
+              <option value={form.language}>{AI_CALL_LANGUAGE_NAMES[form.language]} — fixed for this flow</option>
             </select>
           </div>
           <div className="min-w-0 sm:col-span-2">
@@ -689,6 +722,7 @@ function CallFlowEditor({
                 value={form.voice_id}
                 onChange={(id) => update((f) => void (f.voice_id = id))}
                 pauses={form.pauses}
+                language={form.language}
               />
             ) : (
               <input
@@ -1306,9 +1340,10 @@ function TestCallModal({
   });
   // "Another AI call run is still in progress": offer to stop that run (same cancel as the AI Call modal).
   const blockedByRun = start.error instanceof Error && /still in progress/i.test(start.error.message);
+  const language = useAiCallLanguage(); // only this language's run blocks its test calls
   const stopRunning = useMutation({
     mutationFn: async () => {
-      const { items } = await api<{ items: Pick<AiCallRun, "id" | "status">[] }>("/api/ai-calls/runs");
+      const { items } = await api<{ items: Pick<AiCallRun, "id" | "status">[] }>(withLanguage("/api/ai-calls/runs", language));
       const running = items.filter((r) => r.status === "RUNNING");
       for (const r of running) await api(`/api/ai-calls/runs/${r.id}/cancel`, { method: "POST", notify: false });
       return running.length;

@@ -9,6 +9,8 @@
 // voice backend's /api/flows/preview (what a call renders). Re-running it works like "Save" in
 // the editor: it refreshes the flow's newest draft, or adds a new draft version next to a live
 // one. A published version is never changed. To undo a new draft: the flow → Discard draft.
+// The file's "language" decides the voice backend that checks it (VOICE_BACKEND_URL_<CODE> for
+// anything but English) and the language page the flow appears on.
 
 import "dotenv/config";
 import { readFileSync } from "node:fs";
@@ -34,10 +36,11 @@ async function main() {
     process.exit(1);
   }
   const def = parsed.data;
-  console.log(`✓ Orchestrator schema: "${def.name}" (base ${def.base}, ${def.blocks.length} blocks)`);
+  console.log(`✓ Orchestrator schema: "${def.name}" (base ${def.base}, language ${def.language}, ${def.blocks.length} blocks)`);
 
-  const url = (process.env.VOICE_BACKEND_URL ?? "").replace(/\/+$/, "");
-  const key = process.env.VOICE_BACKEND_API_KEY ?? "";
+  const suffix = def.language === "en" ? "" : `_${def.language.toUpperCase()}`;
+  const url = (process.env[`VOICE_BACKEND_URL${suffix}`] ?? "").replace(/\/+$/, "");
+  const key = process.env[`VOICE_BACKEND_API_KEY${suffix}`] ?? process.env.VOICE_BACKEND_API_KEY ?? "";
   if (url && key) {
     const res = await fetch(`${url}/api/flows/preview`, {
       method: "POST",
@@ -51,11 +54,11 @@ async function main() {
     }
     console.log(`✓ Voice backend preview: greeting "${body.greeting}", prompt ${body.system_prompt?.length.toLocaleString()} chars (~${Math.round((body.system_prompt?.length ?? 0) / 4).toLocaleString()} tokens)`);
   } else {
-    console.log("! VOICE_BACKEND_URL / VOICE_BACKEND_API_KEY not set — voice backend check skipped");
+    console.log(`! VOICE_BACKEND_URL${suffix} / VOICE_BACKEND_API_KEY not set — voice backend check skipped`);
   }
 
   const existing = await prisma.callFlow.findFirst({
-    where: { name: def.name, archivedAt: null },
+    where: { name: def.name, language: def.language, archivedAt: null },
     select: { id: true, versions: { select: { id: true, version: true, status: true }, orderBy: { version: "desc" } } },
   });
   if (existing) {
@@ -96,6 +99,7 @@ async function main() {
       name: def.name,
       description: `Imported from ${file} as a draft — test it, then Publish in the editor.`,
       base: def.base,
+      language: def.language,
       createdByEmail: "import-script",
       versions: {
         create: {

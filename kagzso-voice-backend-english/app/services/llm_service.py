@@ -25,7 +25,7 @@ from typing import Any, AsyncIterator, Dict, Iterable, List, Mapping, Optional, 
 import httpx
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.core.config import Settings, settings as default_settings
+from app.core.config import LANGUAGE_NAMES, Settings, settings as default_settings
 from app.core.logging import get_logger
 from app.flows.loader import BUILTIN_FLOWS
 from app.flows.schema import render_blocks
@@ -296,12 +296,6 @@ def render_first_message(template: str, variables: Mapping[str, Optional[str]]) 
     return re.sub(r"\s{2,}", " ", text).strip()
 
 
-LANGUAGE_NAMES = {
-    "en": "English", "ta": "Tamil", "hi": "Hindi", "te": "Telugu", "kn": "Kannada", "ml": "Malayalam",
-    "mr": "Marathi", "gu": "Gujarati", "bn": "Bengali", "pa": "Punjabi", "od": "Odia",
-}
-
-
 def language_instruction(language: Optional[str]) -> str:
     """Reply-language rule derived from CALL_LANGUAGE (en adds nothing)."""
     code = (language or "en").split("-")[0].strip().lower()
@@ -317,7 +311,8 @@ def language_instruction(language: Optional[str]) -> str:
         f"- Example phrases in the instructions may be written in romanized {name} (e.g. Tanglish); convert only "
         f"the {name} words to {name} script.\n"
         f"- Avoid formal, bookish or literary {name}. Write numbers, times and dates as spoken {name} words.\n"
-        f"- If the customer clearly prefers English, you may switch to English."
+        f"- One call, one language: keep every reply in {name} (with everyday English words as above) even if "
+        f"the customer answers in English or another language. Never switch whole replies to another language."
     )
 
 

@@ -574,6 +574,8 @@ model CallFlow {
   name           String            @db.VarChar(100)
   description    String?           @db.Text
   base           String            @db.VarChar(16) // built-in it was copied from: nila | followup
+  // Its voice backend's language (en, ta, hi, kn, …). Set at creation, never changed.
+  language       String            @default("en") @db.VarChar(8)
   archivedAt     DateTime?
   createdById    String?
   createdByEmail String?
@@ -581,6 +583,7 @@ model CallFlow {
   updatedAt      DateTime          @updatedAt
   versions       CallFlowVersion[]
 
+  @@index([language])
   @@map("call_flows")
 }
 
@@ -663,6 +666,8 @@ model AiCallCustomer {
   email          String?             @db.VarChar(191) // stored for reference; no email is sent from here
   whatsappOptIn  Boolean             @default(false)
   stage          AiCallCustomerStage @default(NOT_CALLED)
+  // The language list it is in (en, ta, hi, kn, …): called only with that language's flows.
+  language       String              @default("en") @db.VarChar(8)
   // Set when the stage came from a call result and an admin has not reviewed it yet.
   needsReview    Boolean             @default(false)
   // Permanent: once true, never cleared by the app (the number is never called again).
@@ -679,6 +684,7 @@ model AiCallCustomer {
 
   @@index([deletedAt, stage])
   @@index([phone])
+  @@index([language, deletedAt])
   @@map("ai_call_customers")
 }
 

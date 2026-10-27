@@ -16,20 +16,11 @@ const root = path.resolve(__dirname, "..");
 const tsx = path.join(root, "node_modules", ".bin", "tsx");
 const voiceDir = path.join(root, "kagzso-voice-backend-english");
 const uvicorn = path.join(voiceDir, ".venv", "bin", "uvicorn");
+const { voiceLanguagesSetUp, voicePortFor } = require("../scripts/voice-languages.cjs");
 
 /** Port from VOICE_BACKEND_URL in .env (default 8002), same as scripts/dev-voice.mjs. */
 function voicePort() {
-  try {
-    const line = fs
-      .readFileSync(path.join(root, ".env"), "utf8")
-      .split(/\r?\n/)
-      .find((l) => l.trim().startsWith("VOICE_BACKEND_URL="));
-    const url = new URL(line.split("=").slice(1).join("=").trim().replace(/^["']|["']$/g, ""));
-    if (url.port) return url.port;
-  } catch {
-    /* no .env / no URL - use the default */
-  }
-  return "8002";
+  return String(voicePortFor(root, "en"));
 }
 
 const common = {
@@ -64,6 +55,23 @@ if (fs.existsSync(uvicorn) && process.env.KAGZSO_SKIP_VOICE !== "1") {
     env: {},
     max_memory_restart: "1G",
   });
+
+  // One more voice backend per language (Tamil, Hindi, Kannada, ...): the same code and .venv,
+  // started with its own kagzso-voice-backend-english/.env.<code> (CALL_LANGUAGE, port, database)
+  // on the port in Dispatch's VOICE_BACKEND_URL_<CODE>. Only languages whose .env.<code> exists;
+  // KAGZSO_SKIP_VOICE_LANGS (set by scripts/prod-deploy.mjs) leaves out ones whose setup failed.
+  const skip = new Set((process.env.KAGZSO_SKIP_VOICE_LANGS || "").split(",").filter(Boolean));
+  for (const lang of voiceLanguagesSetUp(voiceDir).filter((l) => !skip.has(l))) {
+    apps.push({
+      ...common,
+      name: `kagzso_orchestrator_voice_${lang}`,
+      cwd: voiceDir,
+      script: uvicorn,
+      args: `app.main:app --host 127.0.0.1 --port ${voicePortFor(root, lang)} --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1`,
+      env: { KAGZSO_ENV_FILE: `.env.${lang}` },
+      max_memory_restart: "1G",
+    });
+  }
 }
 
 module.exports = { apps };

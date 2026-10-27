@@ -41,6 +41,19 @@ describe("editor access to the template and call-flow editors", () => {
   });
 });
 
+describe("AI call language pages (/ta/call-flows, …)", () => {
+  it("follow the English page's rule", () => {
+    for (const p of ["/ta/call-flows", "/hi/call-flows", "/kn/call-flows"]) {
+      expect(canSeePath(p, "EDITOR")).toBe(false);
+      expect(canSeePath(p, "ADMIN")).toBe(true);
+    }
+    for (const p of ["/ta/ai-call-customers", "/kn/ai-call-customers", "/lists/abc"]) expect(canSeePath(p, "EDITOR")).toBe(true);
+    // Not a language prefix: unchanged.
+    expect(canSeePath("/en/call-flows", "EDITOR")).toBe(true);
+    expect(canSeePath("/xx/call-flows", "EDITOR")).toBe(true);
+  });
+});
+
 describe("admin-only pages (Data Quality)", () => {
   it("only an admin sees /data-quality, in the menu and by URL", () => {
     expect(canSeePath("/data-quality", "ADMIN")).toBe(true);

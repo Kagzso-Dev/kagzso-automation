@@ -4,23 +4,49 @@
 //   GET  /api/ai-calls/config           feature flag + limits (any signed-in user)
 //   POST /api/ai-calls/parse            upload .xlsx/.csv → headers, rows, detected columns
 //   POST /api/ai-calls/start            validate + plan (dryRun) or create a run
-//   GET  /api/ai-calls/runs             recent runs
+//   GET  /api/ai-calls/runs             recent runs (?language=ta, absent = English)
 //   GET  /api/ai-calls/runs/:id         one run with per-call status (polled by the UI)
 //   POST /api/ai-calls/runs/:id/cancel  stop dialling (an in-flight call finishes)
+//   GET  /api/ai-calls/languages        ADMIN: each language's voice backend status + on/off
+//   PUT  /api/ai-calls/languages/:code  ADMIN: { enabled } switch a language (not English) on or off;
+//                                       switching on also starts its voice backend when it is down
+//   POST /api/ai-calls/languages/:code/run  ADMIN: start that language's voice backend (services/voiceProcess)
 
 import { Router, type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
 import { rateLimit } from "express-rate-limit";
-import { idParam, maskPhone, startAiCallsInput, type StartAiCallsInput } from "@dispatch/shared";
+import { z } from "zod";
+import {
+  AI_CALL_LANGUAGE_NAMES,
+  aiCallLanguage,
+  aiCallLanguageQuery,
+  DEFAULT_AI_CALL_LANGUAGE,
+  idParam,
+  maskPhone,
+  setAiCallLanguageInput,
+  startAiCallsInput,
+  type AiCallLanguage,
+  type AiCallLanguageInfo,
+  type StartAiCallsInput,
+} from "@dispatch/shared";
 import { prisma } from "../../prisma.js";
 import { logger } from "../../logger.js";
-import { aiCallsConfig, isAiCallsConfigured, isCallFlowEditorEnabled } from "../../config/aiCalls.js";
+import { aiCallsConfig, isCallFlowEditorEnabled, voiceBackendFor } from "../../config/aiCalls.js";
 import { CallFlowError, versionForNewRun } from "../../domain/callFlows.js";
+import {
+  AiCallLanguageError,
+  aiCallLanguageBlockedReason,
+  listAiCallLanguages,
+  runLanguageWhere,
+  runningRunOf,
+  setAiCallLanguageEnabled,
+} from "../../domain/aiCallLanguages.js";
 import { aiCallFormatFromFilename, readAiCallSheet } from "../../domain/aiCallImport.js";
 import { callsCountedTowardDailyCap, loadDoNotCallPhones, planAiCallRun } from "../../domain/aiCalls.js";
 import { enqueueAiCallRun } from "../../queue/queues.js";
 import { linkCustomersToRun, syncCustomerFromLog } from "../../domain/aiCallCustomerSync.js";
-import { voiceCallsBlockedReason } from "../../services/voiceBackend.js";
+import { getVoiceReady, languageMismatch, voiceCallsBlockedReason } from "../../services/voiceBackend.js";
+import { startVoiceBackend } from "../../services/voiceProcess.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
 import { AppError, badRequest, conflict, notFound, wrap } from "../errors.js";
 
@@ -42,19 +68,31 @@ const readLimiter = limiter(120, 60_000);
 
 const DEFAULT_GAP_SEC = 30;
 
-aiCallsRouter.get("/config", (req, res) => {
-  res.json({
-    enabled: aiCallsConfig.enabled,
-    configured: aiCallsConfig.enabled && isAiCallsConfigured(),
-    canStart: req.user?.role === "ADMIN" || req.user?.role === "EDITOR",
-    maxPerRun: aiCallsConfig.maxPerRun,
-    minGapSec: aiCallsConfig.minGapSec,
-    defaultGapSec: Math.max(DEFAULT_GAP_SEC, aiCallsConfig.minGapSec),
-    defaultCountryCode: aiCallsConfig.defaultCountryCode,
-    flowEditor: isCallFlowEditorEnabled(),
-    testCallNumbers: isCallFlowEditorEnabled() && (req.user?.role === "ADMIN" || req.user?.role === "EDITOR") ? aiCallsConfig.flowTestNumbers.map(maskPhone) : [],
-  });
-});
+aiCallsRouter.get(
+  "/config",
+  wrap(async (req, res) => {
+    // The language pages to show: configured and switched on (English always). A failed settings
+    // read must not take the AI call pages down: English alone is shown then.
+    const languages = await listAiCallLanguages()
+      .then((all) => all.filter((l) => l.enabled))
+      .catch((err): AiCallLanguageInfo[] => {
+        logger.warn({ err: err instanceof Error ? err.message : String(err) }, "ai call languages unreadable — English only");
+        return [{ code: "en", name: "English", configured: voiceBackendFor("en") !== null, enabled: true }];
+      });
+    res.json({
+      enabled: aiCallsConfig.enabled,
+      configured: aiCallsConfig.enabled && voiceBackendFor(DEFAULT_AI_CALL_LANGUAGE) !== null,
+      canStart: req.user?.role === "ADMIN" || req.user?.role === "EDITOR",
+      maxPerRun: aiCallsConfig.maxPerRun,
+      minGapSec: aiCallsConfig.minGapSec,
+      defaultGapSec: Math.max(DEFAULT_GAP_SEC, aiCallsConfig.minGapSec),
+      defaultCountryCode: aiCallsConfig.defaultCountryCode,
+      flowEditor: isCallFlowEditorEnabled(),
+      testCallNumbers: isCallFlowEditorEnabled() && (req.user?.role === "ADMIN" || req.user?.role === "EDITOR") ? aiCallsConfig.flowTestNumbers.map(maskPhone) : [],
+      languages,
+    });
+  }),
+);
 
 function featureGate(_req: Request, _res: Response, next: NextFunction) {
   if (!aiCallsConfig.enabled) return next(new AppError(404, "AI calls are disabled (set ENABLE_AI_CALLS=true)", "not_found"));
@@ -92,22 +130,27 @@ export async function planAndStartAiCallRun(
   user: { id: string; email: string },
   customerIdByRow?: (string | null)[],
 ): Promise<{ status: number; json: Record<string, unknown> }> {
-  if (!isAiCallsConfigured()) {
-    throw new AppError(503, "Voice backend is not configured — set VOICE_BACKEND_URL and VOICE_BACKEND_API_KEY", "unavailable");
-  }
+  // The run's language: its voice backend must be set up (and, for any language but English, switched on).
+  const language = body.language;
+  const unavailable = await aiCallLanguageBlockedReason(language);
+  if (unavailable) throw new AppError(503, unavailable, "unavailable");
   if (body.gapSeconds < aiCallsConfig.minGapSec) {
     throw badRequest(`Gap between calls must be at least ${aiCallsConfig.minGapSec} seconds`);
   }
-  // A chosen call flow pins its latest published version to the run; none = the default agent.
+  // A chosen call flow pins its latest published version to the run; none = the default agent,
+  // which is English: any other language always calls with one of its own published flows.
   let flowVersion: { id: string; version: number } | null = null;
   if (body.flowId) {
     if (!isCallFlowEditorEnabled()) throw badRequest("Call flows are disabled (ENABLE_CALL_FLOW_EDITOR)");
     try {
-      flowVersion = await versionForNewRun(body.flowId);
+      flowVersion = await versionForNewRun(body.flowId, language);
     } catch (err) {
       if (err instanceof CallFlowError) throw new AppError(err.status, err.message, err.status === 404 ? "not_found" : "bad_request");
       throw err;
     }
+  } else if (language !== DEFAULT_AI_CALL_LANGUAGE) {
+    const name = AI_CALL_LANGUAGE_NAMES[language];
+    throw badRequest(`Pick a ${name} call flow — ${name} calls always use one (publish one in ${name} → Voice Call Flows)`);
   }
 
   const plan = planAiCallRun(body, {
@@ -125,12 +168,14 @@ export async function planAndStartAiCallRun(
     throw badRequest("No callable customers — every row was invalid, a duplicate, or on the do-not-call list");
   }
   // Checked on the dry run too, so the confirm step never promises a run that can't start.
-  const running = await prisma.aiCallRun.findFirst({ where: { status: "RUNNING" }, select: { id: true } });
+  // One run at a time per language: each language has its own voice backend.
+  const running = await runningRunOf(language);
   if (running) {
-    throw conflict("Another AI call run is still in progress — wait for it to finish or cancel it first");
+    const which = language === DEFAULT_AI_CALL_LANGUAGE ? "" : `${AI_CALL_LANGUAGE_NAMES[language]} `;
+    throw conflict(`Another ${which}AI call run is still in progress — wait for it to finish or cancel it first`);
   }
   // Plivo / Twilio can't reach the voice backend (e.g. ngrok stopped): every call would ring, then go silent.
-  const blocked = await voiceCallsBlockedReason();
+  const blocked = await voiceCallsBlockedReason(language);
   if (blocked) throw new AppError(503, blocked, "voice_unreachable");
   const used = await callsCountedTowardDailyCap();
   if (used + plan.targets.length > aiCallsConfig.dailyCap) {
@@ -184,6 +229,7 @@ export async function planAndStartAiCallRun(
       skipped: plan.skipped,
       flowId: body.flowId ?? null,
       flowVersion: flowVersion?.version ?? null,
+      language,
       greetingDelaySec: body.greetingDelaySec,
       savedCustomers: !!customerIdByRow,
     },
@@ -205,8 +251,9 @@ aiCallsRouter.post(
 aiCallsRouter.get(
   "/runs",
   readLimiter,
-  wrap(async (_req, res) => {
-    const items = await prisma.aiCallRun.findMany({ orderBy: { createdAt: "desc" }, take: 10 });
+  wrap(async (req, res) => {
+    const { language } = aiCallLanguageQuery.parse(req.query);
+    const items = await prisma.aiCallRun.findMany({ where: runLanguageWhere(language), orderBy: { createdAt: "desc" }, take: 10 });
     res.json({ items });
   }),
 );
@@ -244,5 +291,88 @@ aiCallsRouter.post(
     for (const l of queued) await syncCustomerFromLog(l.id);
     logger.info({ runId: id, by: req.user!.email }, "ai call run cancelled");
     res.json({ ok: true });
+  }),
+);
+
+/* ------------------------------------------------------------------ languages (Settings, admins) */
+
+const languageParam = z.object({ code: aiCallLanguage });
+
+/** Is the language's voice backend up, and does it call in that language? Never throws. */
+async function backendStatus(language: AiCallLanguage) {
+  try {
+    const ready = await getVoiceReady(language);
+    const missing = Object.entries({ mysql: ready.mysql, ...ready.providers }).filter(([, v]) => v && v !== "ok" && v !== "configured");
+    const problem =
+      languageMismatch(language, ready) ??
+      (ready.status === "ready" ? null : `Not ready (${missing.map(([k, v]) => `${k}: ${v}`).join(", ") || "see its /ready"})`);
+    return { reachable: true, ready: ready.status === "ready", reportedLanguage: ready.language ?? null, problem };
+  } catch (err) {
+    return { reachable: false, ready: false, reportedLanguage: null, problem: `Not reachable: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+function languageError(err: unknown): never {
+  if (err instanceof AiCallLanguageError) {
+    throw new AppError(err.status, err.message, err.status === 404 ? "not_found" : err.status === 503 ? "unavailable" : "bad_request");
+  }
+  throw err;
+}
+
+aiCallsRouter.get(
+  "/languages",
+  requireRole("ADMIN"),
+  readLimiter,
+  wrap(async (_req, res) => {
+    const languages = await listAiCallLanguages();
+    const items = await Promise.all(
+      languages.map(async (l) => ({
+        ...l,
+        // Admins only: where Dispatch sends this language's calls (from the API's .env).
+        url: voiceBackendFor(l.code)?.url ?? null,
+        status: l.configured ? await backendStatus(l.code) : null,
+      })),
+    );
+    res.json({ items });
+  }),
+);
+
+/** Start the language's voice backend; the outcome (or why it couldn't) for the admin. Never throws. */
+async function runBackend(language: AiCallLanguage, by: string): Promise<{ started: boolean; running: boolean; error: string | null }> {
+  try {
+    const r = await startVoiceBackend(language);
+    logger.info({ language, how: r.how, started: r.started, by }, "ai call voice backend run");
+    return { started: r.started, running: true, error: null };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    logger.warn({ language, by, err: error }, "ai call voice backend could not be started");
+    return { started: false, running: false, error };
+  }
+}
+
+aiCallsRouter.put(
+  "/languages/:code",
+  requireRole("ADMIN"),
+  wrap(async (req, res) => {
+    const { code } = languageParam.parse(req.params);
+    const { enabled } = setAiCallLanguageInput.parse(req.body ?? {});
+    let items = await setAiCallLanguageEnabled(code, enabled).catch(languageError);
+    logger.info({ language: code, enabled, by: req.user!.email }, "ai call language switched");
+    // Switched on: its voice backend runs too, so the language can be used at once (when it is set up).
+    const backend = enabled && items.find((l) => l.code === code)?.configured ? await runBackend(code, req.user!.email) : null;
+    if (backend?.started) items = await listAiCallLanguages();
+    res.json({ items, backend });
+  }),
+);
+
+aiCallsRouter.post(
+  "/languages/:code/run",
+  requireRole("ADMIN"),
+  rateLimit({ windowMs: 60_000, limit: 10, standardHeaders: true, keyGenerator: (req) => req.user?.id ?? req.ip ?? "anon" }),
+  wrap(async (req, res) => {
+    const { code } = languageParam.parse(req.params);
+    const backend = await runBackend(code, req.user!.email);
+    if (backend.error) throw new AppError(409, backend.error, "conflict");
+    res.json(backend);
   }),
 );

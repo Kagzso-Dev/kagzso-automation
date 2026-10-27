@@ -13,12 +13,16 @@
 //   POST   /api/ai-call-customers/:id/stage     review: approve / reject / change stage
 //   POST   /api/ai-call-customers/:id/followups add a follow-up (pending approval)
 //   POST   /api/ai-call-customers/call          start AI calls for saved customers
+//
+// Each language has its own list: ?language=ta on list / callable / import / add (absent =
+// English, exactly as before), and `language` in the /call body (only that list is called).
 
 import { Router, type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
 import { rateLimit } from "express-rate-limit";
 import {
   aiCallCustomerInput,
+  aiCallLanguageQuery,
   bulkIdsInput,
   callAiCallCustomersInput,
   createFollowupInput,
@@ -91,8 +95,9 @@ aiCallCustomersRouter.get(
 aiCallCustomersRouter.get(
   "/callable",
   readLimiter,
-  wrap(async (_req, res) => {
-    res.json({ items: await callableCustomers() });
+  wrap(async (req, res) => {
+    const { language } = aiCallLanguageQuery.parse(req.query);
+    res.json({ items: await callableCustomers(language) });
   }),
 );
 
@@ -132,7 +137,8 @@ aiCallCustomersRouter.post(
   writeLimiter,
   wrap(async (req, res) => {
     const { rows } = importAiCallCustomersInput.parse(req.body);
-    res.json(await guarded(importCustomers(rows, req.user!.email)));
+    const { language } = aiCallLanguageQuery.parse(req.query);
+    res.json(await guarded(importCustomers(rows, req.user!.email, language)));
   }),
 );
 
@@ -151,9 +157,10 @@ aiCallCustomersRouter.post(
   wrap(async (req, res) => {
     const body = callAiCallCustomersInput.parse(req.body);
     // Rows in exactly the order the browser sent, so selectedIndexes line up.
-    // A missing / deleted id becomes an empty row (reported as invalid, never dialled).
+    // A missing / deleted id, or a customer of another language's list, becomes an empty row
+    // (reported as invalid, never dialled).
     const found = await prisma.aiCallCustomer.findMany({
-      where: { id: { in: body.customerIds }, deletedAt: null },
+      where: { id: { in: body.customerIds }, deletedAt: null, language: body.language },
       select: { id: true, customerName: true, gender: true, followUpDetail: true, phone: true },
     });
     const byId = new Map(found.map((c) => [c.id, c]));
@@ -172,7 +179,8 @@ aiCallCustomersRouter.post(
   writeLimiter,
   wrap(async (req, res) => {
     const input = aiCallCustomerInput.parse(req.body);
-    res.status(201).json(await guarded(createCustomer(input, req.user!.email)));
+    const { language } = aiCallLanguageQuery.parse(req.query);
+    res.status(201).json(await guarded(createCustomer(input, req.user!.email, language)));
   }),
 );
 

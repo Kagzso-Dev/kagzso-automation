@@ -1,5 +1,9 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useParams } from "react-router-dom";
+import { isAiCallLanguage } from "@dispatch/shared";
 import { useAuth } from "./lib/auth";
+import { useAiCallsConfig } from "./lib/aiCalls";
+import { AiCallLanguageProvider } from "./lib/aiCallLanguage";
+import { Spinner } from "./components/ui";
 import { Layout } from "./components/Layout";
 import { LoginPage } from "./pages/Login";
 import { DashboardPage } from "./pages/Dashboard";
@@ -26,6 +30,25 @@ import type { ReactNode } from "react";
 function RoleRoute({ path, children }: { path: string; children: ReactNode }) {
   const { user } = useAuth();
   return canSeePath(path, user?.role) ? <>{children}</> : <Navigate to="/" replace />;
+}
+
+/**
+ * Another language's AI call page (/ta/call-flows, /hi/ai-call-customers, …): only while that
+ * language's voice backend is set up and an admin hasn't switched it off (Settings → AI call
+ * languages); anything else goes to the Dashboard. English keeps its own addresses.
+ */
+function LanguageRoute({ children }: { children: ReactNode }) {
+  const { lang } = useParams();
+  const config = useAiCallsConfig();
+  if (config.isLoading) return <Spinner />;
+  const on = isAiCallLanguage(lang) && lang !== "en" && (config.data?.languages ?? []).some((l) => l.code === lang && l.enabled);
+  if (!on) return <Navigate to="/" replace />;
+  // Keyed: switching from one language's page to another's starts the page fresh.
+  return (
+    <AiCallLanguageProvider key={lang} language={lang}>
+      {children}
+    </AiCallLanguageProvider>
+  );
 }
 
 export function App() {
@@ -59,6 +82,8 @@ export function App() {
         <Route path="/templates" element={<RoleRoute path="/templates"><TemplatesPage /></RoleRoute>} />
         <Route path="/ai-call-customers" element={<AiCallCustomersPage />} />
         <Route path="/call-flows" element={<RoleRoute path="/call-flows"><CallFlowsPage /></RoleRoute>} />
+        <Route path="/:lang/ai-call-customers" element={<LanguageRoute><AiCallCustomersPage /></LanguageRoute>} />
+        <Route path="/:lang/call-flows" element={<LanguageRoute><RoleRoute path="/call-flows"><CallFlowsPage /></RoleRoute></LanguageRoute>} />
         <Route path="/campaigns" element={<CampaignsPage />} />
         <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
         <Route path="/send-queue" element={<SendQueuePage />} />

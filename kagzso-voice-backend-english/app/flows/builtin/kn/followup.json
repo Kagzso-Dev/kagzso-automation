@@ -1,0 +1,10 @@
+{
+  "name": "Customer follow-up (Kannada)",
+  "greeting": {
+    "text": "Hello {{addressed_name}}, ನಾನು Kagzso AI and Automation ಇಂದ ತಾರಾ ಮಾತಾಡ್ತಿದೀನಿ. ನಾವು businesses ಅವರ daily repetitive ಕೆಲಸವನ್ನ automate ಮಾಡೋಕೆ help ಮಾಡ್ತೀವಿ. ನನಗೆ ಒಂದು ನಿಮಿಷ ಕೊಡ್ತೀರಾ?"
+  },
+  "silence": {
+    "reprompt": "Hello, ನನ್ನ ಮಾತು ಕೇಳಿಸ್ತಿದೆಯಾ?",
+    "closing": "ಪರವಾಗಿಲ್ಲ. ನಿಮ್ಮ ಸಮಯಕ್ಕೆ ಧನ್ಯವಾದಗಳು. Have a nice day."
+  }
+}

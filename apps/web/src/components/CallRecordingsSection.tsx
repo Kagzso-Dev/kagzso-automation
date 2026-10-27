@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { DEFAULT_AI_CALL_LANGUAGE, type AiCallLanguage } from "@dispatch/shared";
 import { api, ApiError } from "../lib/api";
+import { useAiCallsConfig } from "../lib/aiCalls";
+import { withLanguage } from "../lib/aiCallLanguage";
 import { Badge, ErrorNote, Spinner } from "./ui";
 import { CallRecording, RecordingBadge, type RecordingStatusName } from "./CallRecording";
 import { useConfirm } from "./confirm";
@@ -41,9 +44,12 @@ export function CallRecordingsSection() {
   const qc = useQueryClient();
   const confirm = useConfirm();
   const toast = useToast();
+  // Each language's voice backend keeps its own recordings, counts and retention: pick which one.
+  const languages = (useAiCallsConfig().data?.languages ?? []).filter((l) => l.code === "en" || l.configured);
+  const [language, setLanguage] = useState<AiCallLanguage>(DEFAULT_AI_CALL_LANGUAGE);
   const settings = useQuery({
-    queryKey: ["recording-settings"],
-    queryFn: () => api<RecordingSettings>("/api/ai-calls/recordings/settings", { notify: false }),
+    queryKey: ["recording-settings", language],
+    queryFn: () => api<RecordingSettings>(withLanguage("/api/ai-calls/recordings/settings", language), { notify: false }),
     retry: false,
   });
   const recent = useQuery({
@@ -65,13 +71,13 @@ export function CallRecordingsSection() {
 
   const save = useMutation({
     mutationFn: () =>
-      api<RecordingSettings>("/api/ai-calls/recordings/settings", {
+      api<RecordingSettings>(withLanguage("/api/ai-calls/recordings/settings", language), {
         method: "PUT",
         json: { retentionDays: Number(days) },
         notify: "Retention saved",
       }),
     onSuccess: (v) => {
-      qc.setQueryData(["recording-settings"], v);
+      qc.setQueryData(["recording-settings", language], v);
       setDirty(false);
     },
   });
@@ -104,6 +110,26 @@ export function CallRecordingsSection() {
     <section className="settings-section">
       <h2 className="settings-heading">Call recordings</h2>
       <div className="settings-card space-y-4">
+        {languages.length > 1 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="label mb-0" htmlFor="recording-language">
+              Voice backend
+            </label>
+            <select
+              id="recording-language"
+              className="input w-auto"
+              value={language}
+              onChange={(e) => setLanguage(e.target.value as AiCallLanguage)}
+            >
+              {languages.map((l) => (
+                <option key={l.code} value={l.code}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
+            <span className="text-xs text-slate-550">Each language's voice backend keeps its own recordings and retention.</span>
+          </div>
+        )}
         {settings.isLoading ? (
           <Spinner />
         ) : settings.error ? (

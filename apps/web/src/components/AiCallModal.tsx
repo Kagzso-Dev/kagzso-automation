@@ -21,6 +21,8 @@ import type {
   AiCallsConfig,
 } from "../lib/aiCalls";
 import { initialFlowChoice, rememberedFlowChoice, rememberFlowChoice, unpublishedDraft, useCallFlows } from "../lib/callFlows";
+import { isEnglish, titleFor, useAiCallLanguage, withLanguage } from "../lib/aiCallLanguage";
+import { AI_CALL_LANGUAGE_NAMES } from "@dispatch/shared";
 import { useToast } from "./toast";
 import { Badge, ErrorNote, Modal, Spinner, type BadgeTone } from "./ui";
 
@@ -42,8 +44,9 @@ export function AiCallModal({
   /** From "Call selected" on AI Call Customers: start on "Saved customers" with these ticked. */
   preselectedCustomerIds?: string[];
 }) {
+  const language = useAiCallLanguage(); // the page's language: its runs, flows and customer list
   return (
-    <Modal open={open} onClose={onClose} title="Start AI Calls" wide>
+    <Modal open={open} onClose={onClose} title={titleFor("Start AI Calls", language)} wide>
       {open ? <AiCallFlow config={config} onClose={onClose} preselectedCustomerIds={preselectedCustomerIds} /> : null}
     </Modal>
   );
@@ -60,9 +63,11 @@ function AiCallFlow({
 }) {
   const [runId, setRunId] = useState<string | null>(null);
   const resumed = useRef(false);
+  const language = useAiCallLanguage();
+  // This language's runs only: each language dials through its own voice backend, one run at a time.
   const runs = useQuery({
-    queryKey: ["ai-call-runs"],
-    queryFn: () => api<{ items: { id: string; status: AiCallRun["status"] }[] }>("/api/ai-calls/runs"),
+    queryKey: ["ai-call-runs", language],
+    queryFn: () => api<{ items: { id: string; status: AiCallRun["status"] }[] }>(withLanguage("/api/ai-calls/runs", language)),
   });
 
   // A run started earlier is still going — show it instead of a new upload.
@@ -128,10 +133,13 @@ function SetupFlow({
   const [greetingDelay, setGreetingDelay] = useState(String(AI_CALL_DEFAULT_GREETING_DELAY_SEC));
   const [maxCalls, setMaxCalls] = useState(Math.min(10, config.maxPerRun));
   const [plan, setPlan] = useState<AiCallPlanSummary | null>(null);
-  // "" = the default flow (whatever agent the server is configured with). A new window starts
-  // on the last flow picked here, else the most recently published one (initialFlowChoice).
+  // "" = the default flow (whatever agent the server is configured with; English only). A new
+  // window starts on the last flow picked here, else the most recently published one (initialFlowChoice).
+  // Another language has no default agent: its calls always use one of its own published flows.
+  const language = useAiCallLanguage();
+  const english = isEnglish(language);
   const [flowId, setFlowIdState] = useState("");
-  const flows = useCallFlows(config.flowEditor);
+  const flows = useCallFlows(config.flowEditor, language);
   const publishedFlows = (flows.data?.items ?? []).filter((f) => f.published);
   const chosenFlow = publishedFlows.find((f) => f.id === flowId) ?? null;
   const pendingDraft = unpublishedDraft(chosenFlow);
@@ -139,19 +147,19 @@ function SetupFlow({
   useEffect(() => {
     if (flowPicked.current || !flows.data) return;
     flowPicked.current = true;
-    setFlowIdState(initialFlowChoice(publishedFlows, rememberedFlowChoice()));
+    setFlowIdState(initialFlowChoice(publishedFlows, rememberedFlowChoice(language)));
   }, [flows.data]); // eslint-disable-line react-hooks/exhaustive-deps
   const setFlowId = (id: string) => {
     flowPicked.current = true;
     setFlowIdState(id);
-    rememberFlowChoice(id);
+    rememberFlowChoice(id, language);
   };
   // Where the customers come from: an uploaded file (as before) or the saved AI Call Customers.
   const [source, setSource] = useState<"upload" | "saved">(preselectedCustomerIds?.length ? "saved" : "upload");
   const [savedIds, setSavedIds] = useState<string[] | null>(null);
   const saved = useQuery({
-    queryKey: ["ai-call-customers-callable"],
-    queryFn: () => api<{ items: SavedCustomer[] }>("/api/ai-call-customers/callable"),
+    queryKey: ["ai-call-customers-callable", language],
+    queryFn: () => api<{ items: SavedCustomer[] }>(withLanguage("/api/ai-call-customers/callable", language)),
     enabled: source === "saved",
   });
   useEffect(() => {
@@ -240,6 +248,8 @@ function SetupFlow({
     greetingDelaySec: Number(greetingDelay),
     maxCalls,
     ...(flowId ? { flowId } : {}),
+    // English requests stay exactly as before; another language's run is called by its own voice backend.
+    ...(english ? {} : { language }),
   };
   // Saved customers: the server reloads them by id (in this order) and links each call to its customer.
   const usingSaved = source === "saved" && !!savedIds;
@@ -265,7 +275,12 @@ function SetupFlow({
     },
   });
 
-  const formProblem = !mapping?.phone
+  const languageName = AI_CALL_LANGUAGE_NAMES[language];
+  const formProblem = !english && !flowId
+    ? publishedFlows.length
+      ? `Pick a ${languageName} call flow below.`
+      : `Publish a ${languageName} call flow first (${languageName} → Voice Call Flows): ${languageName} calls always use one.`
+    : !mapping?.phone
     ? "Map the Phone column to continue."
     : callable === 0
       ? "No callable rows — every row is invalid or a duplicate."
@@ -594,7 +609,13 @@ function SetupFlow({
         <div className="mb-4 max-w-md">
           <label className="label">Call flow</label>
           <select className="input" value={flowId} onChange={(e) => setFlowId(e.target.value)}>
-            <option value="">Default flow (server agent, not a Voice Call Flow)</option>
+            {english ? (
+              <option value="">Default flow (server agent, not a Voice Call Flow)</option>
+            ) : (
+              <option value="" disabled>
+                Pick a {languageName} call flow
+              </option>
+            )}
             {publishedFlows.map((f) => (
               <option key={f.id} value={f.id}>
                 {f.name} — v{f.published!.version}
@@ -604,7 +625,7 @@ function SetupFlow({
           <span className="text-xs text-slate-550">
             Only published flows are listed. The version is fixed when the run starts.
           </span>
-          {flowId === "" && publishedFlows.length > 0 && (
+          {english && flowId === "" && publishedFlows.length > 0 && (
             <p className="mt-1 text-xs text-warn">
               These calls won't use any flow from Voice Call Flows — pick one above to call with your edited script.
             </p>

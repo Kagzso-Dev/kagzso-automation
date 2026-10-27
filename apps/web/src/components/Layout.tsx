@@ -6,7 +6,7 @@ import { useInboxUnread } from "../lib/whatsappInbox";
 import { useSidebarHiddenItems } from "../lib/sidebar";
 import { useBranding, useDocumentTitle } from "../lib/branding";
 import { navForRole } from "../lib/navAccess";
-import type { HideableNavItem } from "@dispatch/shared";
+import { aiCallLanguagePath, splitAiCallLanguagePath, type AiCallLanguageInfo, type HideableNavItem } from "@dispatch/shared";
 import { Icon, type IconName } from "./icons";
 import { Logo } from "./Logo";
 
@@ -64,6 +64,27 @@ export const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
+/**
+ * The "Calls" section once more AI call languages are switched on: English keeps its items
+ * (labelled "Calls · English"), and each other language gets the same two pages under its own
+ * address (/ta/ai-call-customers, /ta/call-flows) in a section of its own, right after it.
+ */
+export function withLanguageGroups(groups: NavGroup[], languages: AiCallLanguageInfo[]): NavGroup[] {
+  const others = languages.filter((l) => l.code !== "en" && l.enabled);
+  if (others.length === 0) return groups;
+  return groups.flatMap((g) =>
+    g.label !== "Calls"
+      ? [g]
+      : [
+          { ...g, label: "Calls · English" },
+          ...others.map((l) => ({
+            label: `Calls · ${l.name}`,
+            items: g.items.map((n) => ({ ...n, to: aiCallLanguagePath(l.code, n.to) })),
+          })),
+        ],
+  );
+}
+
 const COLLAPSE_KEY = "dispatch:sidebar-collapsed";
 
 function cx(...parts: Array<string | false | null | undefined>) {
@@ -87,19 +108,23 @@ export function Layout({ children }: { children: ReactNode }) {
   const { appName } = useBranding();
   useDocumentTitle(appName);
   const groups = navForRole(
-    NAV_GROUPS.map((g) => ({
+    withLanguageGroups(NAV_GROUPS, aiCalls.data?.languages ?? []).map((g) => ({
       ...g,
-      items: g.items.filter(
-        (n) =>
-          (n.to !== "/call-flows" || showCallFlows) &&
-          (n.to !== "/ai-call-customers" || showAiCustomers) &&
+      items: g.items.filter((n) => {
+        const page = splitAiCallLanguagePath(n.to).path; // "/ta/call-flows" follows "/call-flows"
+        return (
+          (page !== "/call-flows" || showCallFlows) &&
+          (page !== "/ai-call-customers" || showAiCustomers) &&
           (n.to !== "/whatsapp-inbox" || user?.role === "ADMIN") && // customer messages: admins only
           // Settings hidden "for editors" never hides from admins (they must be able to turn it back on).
-          !(n.hideKey && hidden.has(n.hideKey) && !(n.hideKey === "settings-editors" && user?.role === "ADMIN")),
-      ),
+          !(n.hideKey && hidden.has(n.hideKey) && !(n.hideKey === "settings-editors" && user?.role === "ADMIN"))
+        );
+      }),
     })),
     user?.role, // editors don't see the template and call-flow editors (lib/navAccess)
   ); // a group with nothing left loses its label too
+  // The page's language and its page without the language part ("/ta/call-flows" → "ta", "/call-flows").
+  const current = splitAiCallLanguagePath(location.pathname);
 
   // Desktop icon-rail state — persisted across reloads.
   const [collapsed, setCollapsed] = useState<boolean>(() => {
@@ -328,11 +353,11 @@ export function Layout({ children }: { children: ReactNode }) {
         {/* Keyed on the top-level section only: replays the entrance animation when switching pages
             without remounting anything a route change wouldn't already remount. */}
         <div
-          key={location.pathname.split("/")[1]}
+          key={(current.language === "en" ? "" : `${current.language}:`) + current.path.split("/")[1]}
           className={cx(
             "page-enter mx-auto px-4 py-6 sm:px-6 lg:px-8 lg:py-8",
             // Voice Call Flows needs room for list + editor + live preview; every other page keeps 1120px.
-            location.pathname.startsWith("/call-flows") ? "max-w-[1400px]" : "max-w-[1120px]",
+            current.path.startsWith("/call-flows") ? "max-w-[1400px]" : "max-w-[1120px]",
           )}
         >
           {children}

@@ -6,6 +6,7 @@
 
 import { fileURLToPath } from "node:url";
 import { config as loadEnv } from "dotenv";
+import { AI_CALL_LANGUAGES, AI_CALL_STANDARD_LANGUAGES, DEFAULT_AI_CALL_LANGUAGE, type AiCallLanguage } from "@dispatch/shared";
 
 loadEnv();
 // src/config/aiCalls.ts → repo root is four levels up.
@@ -57,7 +58,41 @@ export function isCallFlowEditorEnabled(): boolean {
   return aiCallsConfig.enabled && aiCallsConfig.flowEditorEnabled;
 }
 
-/** True when calls can actually be placed (flag on + voice backend reachable config). */
-export function isAiCallsConfigured(): boolean {
-  return Boolean(aiCallsConfig.voiceBackendUrl && aiCallsConfig.voiceBackendApiKey);
+export interface VoiceBackendTarget {
+  url: string;
+  apiKey: string;
+}
+
+/**
+ * One voice backend per language. English: VOICE_BACKEND_URL + VOICE_BACKEND_API_KEY (as before).
+ * Any other language: VOICE_BACKEND_URL_<CODE> (e.g. VOICE_BACKEND_URL_TA) + VOICE_BACKEND_API_KEY_<CODE>,
+ * whose key defaults to the English one (the same ADMIN_API_KEY in every backend's .env).
+ */
+const voiceBackends: Partial<Record<AiCallLanguage, VoiceBackendTarget>> = Object.fromEntries(
+  AI_CALL_LANGUAGES.flatMap((lang) => {
+    const suffix = lang === DEFAULT_AI_CALL_LANGUAGE ? "" : `_${lang.toUpperCase()}`;
+    const url = str(process.env[`VOICE_BACKEND_URL${suffix}`])?.replace(/\/+$/, "");
+    const apiKey = str(process.env[`VOICE_BACKEND_API_KEY${suffix}`]) ?? aiCallsConfig.voiceBackendApiKey;
+    return url && apiKey ? [[lang, { url, apiKey }]] : [];
+  }),
+);
+
+/** The language's voice backend, or null when its URL / key are not set. */
+export function voiceBackendFor(language: AiCallLanguage = DEFAULT_AI_CALL_LANGUAGE): VoiceBackendTarget | null {
+  return voiceBackends[language] ?? null;
+}
+
+/** English (always, configured or not) and every other language whose voice backend is set. */
+export function configuredAiCallLanguages(): AiCallLanguage[] {
+  return AI_CALL_LANGUAGES.filter((l) => l === DEFAULT_AI_CALL_LANGUAGE || voiceBackends[l]);
+}
+
+/** The languages with pages: English, Tamil, Hindi, Kannada (set up or not) and any other one whose voice backend is set. */
+export function offeredAiCallLanguages(): AiCallLanguage[] {
+  return AI_CALL_LANGUAGES.filter((l) => AI_CALL_STANDARD_LANGUAGES.includes(l) || voiceBackends[l]);
+}
+
+/** True when calls can actually be placed in this language (its voice backend URL + key are set). */
+export function isAiCallsConfigured(language: AiCallLanguage = DEFAULT_AI_CALL_LANGUAGE): boolean {
+  return voiceBackendFor(language) !== null;
 }

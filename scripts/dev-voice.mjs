@@ -1,30 +1,25 @@
 // `npm run dev:voice` (part of `npm run dev`): starts kagzso-voice-backend-english
-// with auto-reload, on the port in VOICE_BACKEND_URL (default 8002).
+// with auto-reload, on the port in VOICE_BACKEND_URL (default 8002). Every other
+// language with its own kagzso-voice-backend-english/.env.<code> (Tamil .env.ta, ...)
+// starts too, from the same code, on the port in VOICE_BACKEND_URL_<CODE>
+// (scripts/voice-languages.cjs), plus the gateway that gives them all one public
+// address (scripts/voice-gateway.mjs: /ta → Tamil, ..., the rest → English).
 //
 // Never breaks the rest of the dev stack: if the voice backend folder or its
-// .venv is missing, or the port is already taken, it prints why and exits 0.
+// .venv is missing, or a port is already taken, it prints why and leaves that
+// backend out (exit 0 when nothing is left to run).
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { gatewayPort, startVoiceGateway } from "./voice-gateway.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const voiceDir = path.join(root, "kagzso-voice-backend-english");
-
-function voicePort() {
-  try {
-    const line = readFileSync(path.join(root, ".env"), "utf8")
-      .split(/\r?\n/)
-      .find((l) => l.trim().startsWith("VOICE_BACKEND_URL="));
-    const url = new URL(line.split("=").slice(1).join("=").trim().replace(/^["']|["']$/g, ""));
-    if (url.port) return Number(url.port);
-  } catch {
-    /* no .env / no URL — use the default */
-  }
-  return 8002;
-}
+const { voiceLanguagesSetUp, voicePortFor } = createRequire(import.meta.url)("./voice-languages.cjs");
 
 function isBusy(port) {
   return new Promise((resolve) => {
@@ -51,19 +46,39 @@ const python = [path.join(voiceDir, ".venv", "Scripts", "python.exe"), path.join
 if (!existsSync(voiceDir)) skip("kagzso-voice-backend-english/ not found — skipping the voice backend.");
 if (!python) skip("No .venv in kagzso-voice-backend-english — create it (see its README) to start it with `npm run dev`.");
 
-const port = voicePort();
-if (await isBusy(port)) {
-  skip(
-    `Port ${port} is already in use — leaving the running voice backend alone. ` +
-      "Stop it (npm run dev:kill) and rerun `npm run dev` if it's an old process without --reload.",
+const children = [];
+for (const lang of ["en", ...voiceLanguagesSetUp(voiceDir)]) {
+  const port = voicePortFor(root, lang);
+  const tag = lang === "en" ? "[voice]" : `[voice:${lang}]`;
+  if (await isBusy(port)) {
+    console.log(
+      `${tag} Port ${port} is already in use — leaving the running voice backend alone. ` +
+        "Stop it (npm run dev:kill) and rerun `npm run dev` if it's an old process without --reload.",
+    );
+    continue;
+  }
+  console.log(`${tag} starting on :${port}${lang === "en" ? "" : ` with .env.${lang}`} (auto-reload on app/ changes)`);
+  const child = spawn(
+    python,
+    ["-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", String(port), "--reload", "--reload-dir", "app"],
+    { cwd: voiceDir, stdio: "inherit", env: lang === "en" ? process.env : { ...process.env, KAGZSO_ENV_FILE: `.env.${lang}` } },
   );
+  children.push(child);
+  // English decides when dev:voice ends, as before; a language backend that stops only logs it.
+  child.on("exit", (code) => {
+    if (lang === "en") process.exit(code ?? 0);
+    console.log(`${tag} stopped (exit ${code ?? 0})`);
+  });
 }
-
-console.log(`[voice] starting on :${port} (auto-reload on app/ changes)`);
-const child = spawn(
-  python,
-  ["-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", String(port), "--reload", "--reload-dir", "app"],
-  { cwd: voiceDir, stdio: "inherit" },
-);
-for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => child.kill(sig));
-child.on("exit", (code) => process.exit(code ?? 0));
+// One public address for all of them (only needed once another language is set up).
+if (voiceLanguagesSetUp(voiceDir).length > 0) {
+  const port = gatewayPort(root);
+  if (await isBusy(port)) {
+    console.log(`[voice] gateway port ${port} is already in use — leaving it alone.`);
+  } else {
+    const gateway = startVoiceGateway({ root, voiceDir, port });
+    children.push({ kill: () => gateway.close() });
+  }
+}
+if (children.length === 0) process.exit(0);
+for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => children.forEach((c) => c.kill(sig)));

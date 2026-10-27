@@ -77,12 +77,22 @@ GREETING_INSTRUCTION = (
 FALLBACK_REPLIES = {
     "en": "Sorry, I couldn't hear you clearly. Could you please repeat that?",
     "ta": "Sorry, clear-ஆ கேக்கல. கொஞ்சம் repeat பண்ணுங்க please.",
+    "hi": "Sorry, आपकी आवाज़ clear नहीं आई। Please एक बार फिर से बोलिए।",
+    "kn": "Sorry, ನಿಮ್ಮ ಮಾತು clear ಆಗಿ ಕೇಳಿಸ್ಲಿಲ್ಲ. ದಯವಿಟ್ಟು ಇನ್ನೊಮ್ಮೆ ಹೇಳ್ತೀರಾ?",
 }
-# Silence handling (script "SILENCE"): one re-prompt, then a polite close.
-SILENCE_REPROMPTS = {"en": "Hello, can you hear me?", "ta": "Hello, கேக்குதா? Hear பண்றீங்களா?"}
+# Silence handling (script "SILENCE"): one re-prompt, then a polite close. A call flow's own
+# silence lines replace these; they are only used by calls without a flow.
+SILENCE_REPROMPTS = {
+    "en": "Hello, can you hear me?",
+    "ta": "Hello, கேக்குதா? Hear பண்றீங்களா?",
+    "hi": "Hello, क्या आपको मेरी आवाज़ आ रही है?",
+    "kn": "Hello, ನನ್ನ ಮಾತು ಕೇಳಿಸ್ತಿದೆಯಾ?",
+}
 SILENCE_CLOSINGS = {
     "en": "No problem. Thank you for your time. Have a nice day.",
     "ta": "No problem. Thank you for your time. Have a nice day.",
+    "hi": "कोई बात नहीं। आपके समय के लिए धन्यवाद। Have a nice day.",
+    "kn": "ಪರವಾಗಿಲ್ಲ. ನಿಮ್ಮ ಸಮಯಕ್ಕೆ ಧನ್ಯವಾದಗಳು. Have a nice day.",
 }
 
 

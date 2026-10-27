@@ -173,6 +173,6 @@ describe("DELETE /api/call-flows/:id", () => {
     await del("draft_only");
     await del("tested");
     expect(await list()).toEqual(["live"]);
-    expect(listWhere).toEqual({ archivedAt: null });
+    expect(listWhere).toEqual({ archivedAt: null, language: "en" }); // the English page (no ?language=)
   });
 });

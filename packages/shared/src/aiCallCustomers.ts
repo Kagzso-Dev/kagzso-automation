@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { aiCallGreetingDelay, isAiCallGender, normalizeAiCallGender, normalizePhoneE164, type AiCallGender } from "./aiCalls.js";
+import { aiCallLanguage, DEFAULT_AI_CALL_LANGUAGE } from "./aiCallLanguages.js";
 
 /* ------------------------------------------------------------------ AI Call Customers (isolated) */
 // Saved customers for AI voice calls, their call stage and follow-up rules.
@@ -273,6 +274,8 @@ export const aiCallCustomerInput = z.object({
 export type AiCallCustomerInput = z.infer<typeof aiCallCustomerInput>;
 
 export const listAiCallCustomersQuery = z.object({
+  /** The language list (absent = English). */
+  language: aiCallLanguage.default(DEFAULT_AI_CALL_LANGUAGE),
   search: z.string().trim().max(100).optional(),
   gender: z.enum(["male", "female"]).optional(),
   stage: z.enum(AI_CALL_STAGES).optional(),
@@ -316,6 +319,8 @@ export const callAiCallCustomersInput = z
     maxCalls: z.coerce.number().int().min(1).max(500).default(10),
     dryRun: z.boolean().default(false),
     flowId: z.string().min(1).max(64).optional().nullable(),
+    /** The language list being called: only its customers, with one of its flows. */
+    language: aiCallLanguage.default(DEFAULT_AI_CALL_LANGUAGE),
   })
   .refine((v) => v.mode !== "selected" || v.selectedIndexes.length > 0, {
     message: "Select at least one customer to call",

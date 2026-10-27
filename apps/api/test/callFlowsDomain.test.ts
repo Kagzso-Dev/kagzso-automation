@@ -111,7 +111,8 @@ describe("version pinning", () => {
     links.run1 = (await versionForNewRun("f1")).id;
     const v2 = await saveDraft("f1", def("B"), null);
     await publishDraft(v2.id);
-    expect(await pinnedFlowForRun("run1")).toEqual({ flowId: "f1", version: 1, draft: false, definition: def("A") });
+    // Flows from before languages (and English flows) are English: their runs call the English backend.
+    expect(await pinnedFlowForRun("run1")).toEqual({ flowId: "f1", version: 1, draft: false, definition: def("A"), language: "en" });
   });
 
   it("refuses unpublished or archived flows; a run without a flow uses the default agent", async () => {
