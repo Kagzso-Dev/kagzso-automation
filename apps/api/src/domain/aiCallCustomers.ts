@@ -4,7 +4,9 @@
 // E.164 via the shared normalizePhoneE164 (+91 default) and deduped on it.
 //
 // Each language has its own customer list (the `language` column, English by
-// default). A number is in one list at a time; the do-not-call list is shared.
+// default). The same number may be in each language's list (once per list); its
+// calls, follow-ups and recordings stay with that list's row. The do-not-call list
+// is shared: a number marked in one list is never called from any list.
 
 import { Prisma, type AiCallCustomer, type AiCallCustomerStage } from "@prisma/client";
 import {
@@ -22,7 +24,7 @@ import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
 import { aiCallsConfig } from "../config/aiCalls.js";
 import { loadDoNotCallPhones } from "./aiCalls.js";
-import { asAiCallLanguage } from "./aiCallLanguages.js";
+import { asAiCallLanguage, listAiCallLanguages } from "./aiCallLanguages.js";
 import { addCustomerEvent, cancelPendingFollowups, createFollowupDrafts, deliveryFor, POSITIVE_CANCEL_REASON } from "./aiCallFollowups.js";
 
 export class CustomerError extends Error {
@@ -59,12 +61,15 @@ async function liveOrThrow(id: string): Promise<AiCallCustomer> {
   return c;
 }
 
-/** "A customer with this phone number already exists" — naming the other list when it is another language's. */
+/** "A customer with this phone number already exists in the Tamil list": the list that has the number. */
 async function duplicateMessage(phone: string, language: AiCallLanguage): Promise<string> {
+  const same = await prisma.aiCallCustomer.findFirst({ where: { activePhone: phone, language }, select: { id: true } });
+  if (same) return `A customer with this phone number already exists in the ${AI_CALL_LANGUAGE_NAMES[language]} list`;
+  // Only until migration 0030 is applied: the database still allows a number in one list only.
   const other = await prisma.aiCallCustomer.findFirst({ where: { activePhone: phone }, select: { language: true } });
-  const theirs = asAiCallLanguage(other?.language);
-  return other && theirs !== language
-    ? `A customer with this phone number already exists in the ${AI_CALL_LANGUAGE_NAMES[theirs]} list`
+  return other
+    ? `A customer with this phone number already exists in the ${AI_CALL_LANGUAGE_NAMES[asAiCallLanguage(other.language)]} list ` +
+        "(one number in several lists needs the database update: npm run prisma:deploy)"
     : "A customer with this phone number already exists";
 }
 
@@ -200,7 +205,8 @@ export async function listCustomers(q: {
   page: number;
   pageSize: number;
 }) {
-  const where: Prisma.AiCallCustomerWhereInput = { deletedAt: null, language: q.language ?? DEFAULT_AI_CALL_LANGUAGE };
+  const language = q.language ?? DEFAULT_AI_CALL_LANGUAGE;
+  const where: Prisma.AiCallCustomerWhereInput = { deletedAt: null, language };
   if (q.gender) where.gender = q.gender;
   if (q.stage) where.stage = q.stage;
   if (q.search) {
@@ -222,7 +228,23 @@ export async function listCustomers(q: {
     }),
     prisma.aiCallCustomer.count({ where }),
   ]);
-  return { items, total, page: q.page, pageSize: q.pageSize };
+  // Do not call set in another language's list (deleted rows included: it is permanent): shown on this
+  // list's row too, since that number is never called from any list.
+  const elsewhere = items.length
+    ? await prisma.aiCallCustomer.findMany({
+        where: { phone: { in: items.map((c) => c.phone) }, doNotCall: true, language: { not: language } },
+        orderBy: { createdAt: "asc" },
+        select: { phone: true, language: true },
+      })
+    : [];
+  const setIn = new Map<string, AiCallLanguage>();
+  for (const r of elsewhere) if (!setIn.has(r.phone)) setIn.set(r.phone, asAiCallLanguage(r.language));
+  return {
+    items: items.map((c) => ({ ...c, doNotCallSetIn: c.doNotCall ? null : (setIn.get(c.phone) ?? null) })),
+    total,
+    page: q.page,
+    pageSize: q.pageSize,
+  };
 }
 
 /** Every live customer of one language's list, for the AI Call modal's "Saved customers" source. */
@@ -298,26 +320,20 @@ export async function importCustomers(
     });
   });
 
-  // A number is in one list at a time: one saved in another language's list is a duplicate too.
-  const existing = new Map(
+  // Already saved in this list (the same number may also be in another language's list).
+  const existing = new Set(
     (
       await prisma.aiCallCustomer.findMany({
-        where: { activePhone: { in: valid.map((v) => v.data.phone) } },
-        select: { phone: true, language: true },
+        where: { activePhone: { in: valid.map((v) => v.data.phone) }, language },
+        select: { phone: true },
       })
-    ).map((c) => [c.phone, asAiCallLanguage(c.language)]),
+    ).map((c) => c.phone),
   );
   const dnc = await loadDoNotCallPhones(cc());
   for (const v of valid) {
     if (existing.has(v.data.phone)) {
-      const theirs = existing.get(v.data.phone)!;
       summary.duplicates++;
-      if (summary.problems.length < 200) {
-        summary.problems.push({
-          row: v.row,
-          errors: [theirs === language ? "Number already saved" : `Number already saved in the ${AI_CALL_LANGUAGE_NAMES[theirs]} list`],
-        });
-      }
+      if (summary.problems.length < 200) summary.problems.push({ row: v.row, errors: ["Number already saved"] });
       continue;
     }
     const blocked = dnc.has(v.data.phone);
@@ -342,6 +358,164 @@ export async function importCustomers(
   }
   logger.info({ ...summary, problems: summary.problems.length, language, by: actorEmail }, "ai call customers imported");
   return summary;
+}
+
+/* ------------------------------------------------------------------ several language lists (admin) */
+
+/** Only languages switched on in Settings (English always is) can receive customers. */
+async function assertLanguagesOpen(languages: AiCallLanguage[]): Promise<void> {
+  const enabled = new Map((await listAiCallLanguages()).map((l) => [l.code, l.enabled]));
+  for (const l of languages) {
+    if (!enabled.has(l)) throw new CustomerError(400, `${AI_CALL_LANGUAGE_NAMES[l]} has no customer list here`);
+    if (!enabled.get(l)) throw new CustomerError(400, `${AI_CALL_LANGUAGE_NAMES[l]} is switched off (Settings → AI call languages)`);
+  }
+}
+
+export interface AddToLanguageResult {
+  language: AiCallLanguage;
+  status: "added" | "exists" | "failed";
+  message: string | null;
+  customerId: string | null;
+}
+
+/**
+ * Add one customer to several language lists, one row per list with the same details. Each list is
+ * saved on its own: a number already in a list is "exists", a failure in one list doesn't undo the others.
+ */
+export async function addCustomerToLanguages(
+  input: AiCallCustomerInput,
+  actorEmail: string,
+  languages: AiCallLanguage[],
+): Promise<AddToLanguageResult[]> {
+  cleanInput(input); // a bad row is refused once, before any list is touched
+  await assertLanguagesOpen(languages);
+  const results: AddToLanguageResult[] = [];
+  for (const language of languages) {
+    try {
+      const c = await createCustomer(input, actorEmail, language);
+      results.push({ language, status: "added", message: c.doNotCall ? "Saved as Do not call (the number is on the do-not-call list)" : null, customerId: c.id });
+    } catch (err) {
+      if (err instanceof CustomerError && err.status === 409) {
+        results.push({ language, status: "exists", message: err.message, customerId: null });
+      } else {
+        logger.warn({ language, err: err instanceof Error ? err.message : String(err) }, "ai call customer: adding to a language list failed");
+        results.push({ language, status: "failed", message: "Could not be saved — try again", customerId: null });
+      }
+    }
+  }
+  const count = (s: AddToLanguageResult["status"]) => results.filter((r) => r.status === s).length;
+  logger.info({ languages, added: count("added"), exists: count("exists"), failed: count("failed"), by: actorEmail }, "ai call customer added to several language lists");
+  return results;
+}
+
+export interface CopyToLanguageResult {
+  language: AiCallLanguage;
+  /** Copies this language gets (the preview) / got (after the copy). */
+  added: number;
+  /** Already in that language's list: skipped. */
+  exists: number;
+  /** On the do-not-call list (set in any list): skipped. */
+  doNotCall: number;
+  failed: number;
+}
+
+/**
+ * Copy ticked customers into other language lists: name, gender, phone, business, follow-up detail, email
+ * and WhatsApp opt-in only (no stage, calls, follow-ups or recordings). The source rows are never changed.
+ * Numbers already in a target list and do-not-call numbers are skipped. dryRun = the preview: counts only.
+ */
+export async function copyCustomersToLanguages(
+  ids: string[],
+  targets: AiCallLanguage[],
+  actorEmail: string,
+  dryRun: boolean,
+): Promise<{ customers: number; results: CopyToLanguageResult[] }> {
+  const sources = await prisma.aiCallCustomer.findMany({ where: { id: { in: ids }, deletedAt: null }, orderBy: { createdAt: "asc" } });
+  if (sources.length === 0) throw new CustomerError(404, "No customers to copy");
+  await assertLanguagesOpen(targets);
+  const phones = [...new Set(sources.map((s) => s.phone))];
+  const [present, dnc] = await Promise.all([
+    prisma.aiCallCustomer.findMany({ where: { activePhone: { in: phones }, language: { in: targets } }, select: { phone: true, language: true } }),
+    loadDoNotCallPhones(cc()),
+  ]);
+  const inList = new Set(present.map((p) => `${p.language}\u0000${p.phone}`));
+
+  const results: CopyToLanguageResult[] = [];
+  for (const language of targets) {
+    const r: CopyToLanguageResult = { language, added: 0, exists: 0, doNotCall: 0, failed: 0 };
+    for (const s of sources) {
+      const key = `${language}\u0000${s.phone}`;
+      if (asAiCallLanguage(s.language) === language || inList.has(key)) {
+        r.exists++;
+        continue;
+      }
+      if (s.doNotCall || dnc.has(s.phone)) {
+        r.doNotCall++;
+        continue;
+      }
+      inList.add(key); // the same number ticked twice is copied once
+      if (dryRun) {
+        r.added++;
+        continue;
+      }
+      try {
+        const c = await prisma.aiCallCustomer.create({
+          data: {
+            customerName: s.customerName,
+            gender: s.gender,
+            phone: s.phone,
+            activePhone: s.phone,
+            businessName: s.businessName,
+            followUpDetail: s.followUpDetail,
+            email: s.email,
+            whatsappOptIn: s.whatsappOptIn,
+            createdByEmail: actorEmail,
+            ...(language !== DEFAULT_AI_CALL_LANGUAGE ? { language } : {}),
+          },
+          select: { id: true, stage: true },
+        });
+        await addCustomerEvent({
+          customerId: c.id,
+          type: "created",
+          stage: c.stage,
+          detail: `Copied from the ${AI_CALL_LANGUAGE_NAMES[asAiCallLanguage(s.language)]} list`,
+          actorEmail,
+        });
+        r.added++;
+      } catch (err) {
+        if (isUniqueViolation(err)) {
+          r.exists++; // saved meanwhile (or migration 0030 not applied yet)
+        } else {
+          logger.warn({ language, err: err instanceof Error ? err.message : String(err) }, "ai call customer: copy into a language list failed");
+          r.failed++;
+        }
+      }
+    }
+    results.push(r);
+  }
+  if (!dryRun) {
+    logger.info({ customers: sources.length, results, by: actorEmail }, "ai call customers copied to other language lists");
+  }
+  return { customers: sources.length, results };
+}
+
+/** Import the same mapped rows into several language lists, each with the usual import rules and summary. */
+export async function importCustomersToLanguages(
+  rows: Parameters<typeof importCustomers>[0],
+  actorEmail: string,
+  languages: AiCallLanguage[],
+): Promise<(ImportSummary & { language: AiCallLanguage; failed: boolean })[]> {
+  await assertLanguagesOpen(languages);
+  const out: (ImportSummary & { language: AiCallLanguage; failed: boolean })[] = [];
+  for (const language of languages) {
+    try {
+      out.push({ language, failed: false, ...(await importCustomers(rows, actorEmail, language)) });
+    } catch (err) {
+      logger.warn({ language, err: err instanceof Error ? err.message : String(err) }, "ai call customers: import into a language list failed");
+      out.push({ language, failed: true, imported: 0, skipped: 0, duplicates: 0, doNotCall: 0, problems: [] });
+    }
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ detail + timeline */

@@ -33,12 +33,16 @@ export const AI_CALL_LANGUAGE_NAMES: Record<AiCallLanguage, string> = {
   od: "Odia",
 };
 
-/** Default line for the voice "Listen" button, in that language (editable in the page). */
+/**
+ * Line for the voice "Listen" button when the flow's own opening can't be shown (the editor uses the
+ * flow's greeting first). Editable in the page. Tamil, Hindi and Kannada are written in their own script;
+ * TODO(native review before release): ta, hi, kn. Hindi uses the female form: every offered voice is female.
+ */
 export const AI_CALL_VOICE_SAMPLES: Record<AiCallLanguage, string> = {
   en: "Hello, am I speaking with Ragul?",
-  ta: "Hello, Ragul sir-கிட்ட தான் பேசறேனா?",
-  hi: "Hello, क्या मेरी बात Ragul जी से हो रही है?",
-  kn: "Hello, ನಾನು Ragul ಅವರ ಜೊತೆ ಮಾತಾಡ್ತಿದೀನಾ?",
+  ta: "வணக்கம், நான் ராகுல் சாரிடம் பேசுகிறேனா?",
+  hi: "नमस्ते, क्या मैं राहुल सर से बात कर रही हूँ?",
+  kn: "ನಮಸ್ಕಾರ, ನಾನು ರಾಹುಲ್ ಸರ್ ಜೊತೆ ಮಾತನಾಡುತ್ತಿದ್ದೇನಾ?",
   te: "Hello, నేను Ragul గారితో మాట్లాడుతున్నానా?",
   ml: "Hello, ഞാൻ Ragul-നോടാണോ സംസാരിക്കുന്നത്?",
   mr: "Hello, मी Ragul यांच्याशी बोलत आहे का?",

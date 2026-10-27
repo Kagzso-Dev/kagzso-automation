@@ -8,10 +8,24 @@ import type { VoiceOption } from "../lib/callFlows";
  * plays a sample (POST /api/voices/preview — text-to-speech, never a call); it
  * never changes the chosen voice. Picking a voice changes the form, which is
  * saved by the editor's own Save button. The sample is spoken by the flow
- * language's own voice backend, and starts as a line in that language.
+ * language's own voice backend. It starts as the flow's own opening (what the
+ * customer hears first), or a line in that language while the flow can't be previewed.
  */
 
 export const DEFAULT_SAMPLE = AI_CALL_VOICE_SAMPLES.en;
+export const SAMPLE_MAX = 200;
+
+/** A line for the sample box: whitespace collapsed, at most 200 characters, cut after a sentence (or word) when longer. */
+export function sampleLine(text: string | null | undefined): string | null {
+  const t = (text ?? "").replace(/\s+/g, " ").trim();
+  if (!t) return null;
+  if (t.length <= SAMPLE_MAX) return t;
+  const head = t.slice(0, SAMPLE_MAX);
+  const sentence = Math.max(...[".", "?", "!", "।"].map((p) => head.lastIndexOf(p)));
+  if (sentence > 0) return head.slice(0, sentence + 1);
+  const word = head.lastIndexOf(" ");
+  return word > 0 ? head.slice(0, word) : head;
+}
 
 /** Previews already fetched this session: language + voice + text + pause lengths → object URL. */
 const played = new Map<string, string>();
@@ -49,6 +63,7 @@ export function VoicePicker({
   onChange,
   pauses,
   language = DEFAULT_AI_CALL_LANGUAGE,
+  flowLine,
 }: {
   voices: VoiceOption[];
   defaultVoice: string;
@@ -57,11 +72,22 @@ export function VoicePicker({
   onChange: (voiceId: string) => void;
   /** The flow's pause lengths, for {{short_delay}} etc. in the sample line (absent = the defaults). */
   pauses?: CallFlowPauses;
-  /** The flow's language: which voice backend speaks the sample, and the sample's starting line. */
+  /** The flow's language: which voice backend speaks the sample, and the sample's line when there is no flowLine. */
   language?: AiCallLanguage;
+  /** The flow's own opening as the customer hears it (from the Live preview); null while it can't be previewed. */
+  flowLine?: string | null;
 }) {
-  const defaultSample = AI_CALL_VOICE_SAMPLES[language];
+  const defaultSample = sampleLine(flowLine) ?? AI_CALL_VOICE_SAMPLES[language];
   const [sample, setSample] = useState(defaultSample);
+  // A new default (the flow's opening was edited): filled in only while the box is empty or still shows
+  // the previous default. A line typed here is never replaced.
+  const shownDefault = useRef(defaultSample);
+  useEffect(() => {
+    if (shownDefault.current === defaultSample) return;
+    const previous = shownDefault.current;
+    shownDefault.current = defaultSample;
+    setSample((s) => (s.trim() === "" || s === previous ? defaultSample : s));
+  }, [defaultSample]);
   const [playing, setPlaying] = useState<string | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -142,8 +168,17 @@ export function VoicePicker({
       </ul>
       {!known && <p className="mt-1.5 text-xs text-warn">Previous voice is no longer available, using {defaultName}.</p>}
       <label className="label mt-3">Sample line to listen to</label>
-      <input className="input" maxLength={200} value={sample} onChange={(e) => setSample(e.target.value)} placeholder={defaultSample} />
-      <span className="mt-1 block text-xs text-slate-550">{sample.length}/200 · only plays a sample — nothing is called or saved.</span>
+      <input
+        className="input"
+        maxLength={SAMPLE_MAX}
+        aria-label="Sample line to listen to"
+        value={sample}
+        onChange={(e) => setSample(e.target.value)}
+        placeholder={defaultSample}
+      />
+      <span className="mt-1 block text-xs text-slate-550">
+        {sample.length}/{SAMPLE_MAX} · {flowLine ? "starts as this flow's opening · " : ""}only plays a sample — nothing is called or saved.
+      </span>
       {error && <p className="mt-1 text-xs text-crit">{error}</p>}
     </div>
   );

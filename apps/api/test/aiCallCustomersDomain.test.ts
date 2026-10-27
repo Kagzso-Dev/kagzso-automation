@@ -13,6 +13,7 @@ process.env.AI_CALL_FOLLOWUP_MAX_RETRIES = "2";
 
 type Row = Record<string, any>;
 let seq = 0;
+let failCreateIn: string | null = null; // a language whose customer inserts fail (partial-failure tests)
 const tables: Record<string, Row[]> = {};
 const T = (name: string) => (tables[name] ??= []);
 
@@ -45,9 +46,12 @@ function model(name: string) {
     r && args?.include?.customer ? { ...r, customer: { ...T("aiCallCustomer").find((c) => c.id === r.customerId) } } : r && { ...r };
   return {
     create: async ({ data }: Row) => {
-      if (name === "aiCallCustomer" && data.activePhone && rows().some((r) => r.activePhone === data.activePhone)) {
+      // Unique (activePhone, language), like migration 0030: once per language list.
+      const lang = (r: Row) => r.language ?? "en";
+      if (name === "aiCallCustomer" && data.activePhone && rows().some((r) => r.activePhone === data.activePhone && lang(r) === lang(data))) {
         throw new Prisma.PrismaClientKnownRequestError("Unique constraint failed", { code: "P2002", clientVersion: "test" });
       }
+      if (name === "aiCallCustomer" && failCreateIn && lang(data) === failCreateIn) throw new Error("database unavailable");
       const row = { id: `${name}-${++seq}`, createdAt: new Date(Date.now() + seq), ...DEFAULTS[name], ...data };
       rows().push(row);
       return { ...row };
@@ -121,6 +125,7 @@ const pending = (customerId: string) =>
 
 beforeEach(() => {
   for (const k of Object.keys(tables)) delete tables[k];
+  failCreateIn = null;
   vi.clearAllMocks();
 });
 
@@ -423,5 +428,115 @@ describe("gender: Male or Female only, Male by default", () => {
     }
     const f = await customers.createCustomer(input({ phone: "9000000200", gender: "F" }) as any, ADMIN);
     expect(f.gender).toBe("female");
+  });
+});
+
+describe("several language lists", () => {
+  const ofLanguage = (language: string) => T("aiCallCustomer").filter((r) => (r.language ?? "en") === language && !r.deletedAt);
+
+  it("the same number can be in two language lists; inside one list a duplicate is still refused, naming that list", async () => {
+    const en = await customers.createCustomer(input() as any, ADMIN);
+    const ta = await customers.createCustomer(input() as any, ADMIN, "ta");
+    expect([en.language, ta.language, en.phone === ta.phone]).toEqual(["en", "ta", true]);
+    await expect(customers.createCustomer(input({ phone: "+91 98765 43210" }) as any, ADMIN, "ta")).rejects.toMatchObject({
+      status: 409,
+      message: "A customer with this phone number already exists in the Tamil list",
+    });
+    await expect(customers.createCustomer(input() as any, ADMIN)).rejects.toMatchObject({
+      status: 409,
+      message: "A customer with this phone number already exists in the English list",
+    });
+  });
+
+  it("do-not-call set in one list blocks calls from every list, and every list shows where it was set", async () => {
+    const en = await customers.createCustomer(input() as any, ADMIN);
+    const ta = await customers.createCustomer(input() as any, ADMIN, "ta");
+    await customers.setCustomerStage(ta.id, "DO_NOT_CALL", ADMIN);
+    expect(cust(en.id).doNotCall).toBe(false); // the English row's own data is not edited
+
+    const dnc = await loadDoNotCallPhones("91");
+    const plan = planAiCallRun({ rows: [{ phone: en.phone }], mode: "all", randomCount: 1, selectedIndexes: [], maxCalls: 5 }, { doNotCall: dnc, hardCap: 10 });
+    expect([plan.targets.length, plan.skipped.doNotCall]).toEqual([0, 1]);
+
+    const english = await customers.listCustomers({ language: "en", page: 1, pageSize: 25 });
+    expect(english.items[0]).toMatchObject({ id: en.id, doNotCallSetIn: "ta" });
+    const tamil = await customers.listCustomers({ language: "ta", page: 1, pageSize: 25 });
+    expect(tamil.items[0]).toMatchObject({ id: ta.id, doNotCall: true, doNotCallSetIn: null }); // its own badge says so
+  });
+
+  it("add to several languages reports added / already there / failed per list; a failure doesn't undo the others", async () => {
+    await customers.createCustomer(input() as any, ADMIN, "ta");
+    failCreateIn = "kn";
+    const results = await customers.addCustomerToLanguages(input() as any, ADMIN, ["en", "ta", "kn"]);
+    expect(results.map((r) => [r.language, r.status])).toEqual([
+      ["en", "added"],
+      ["ta", "exists"],
+      ["kn", "failed"],
+    ]);
+    expect(results[1]!.message).toBe("A customer with this phone number already exists in the Tamil list");
+    expect(ofLanguage("en")).toHaveLength(1); // kept although Kannada failed
+    expect(ofLanguage("kn")).toHaveLength(0);
+    await expect(customers.addCustomerToLanguages(input({ phone: "123" }) as any, ADMIN, ["en", "hi"])).rejects.toMatchObject({ status: 400 });
+    expect(ofLanguage("hi")).toHaveLength(0); // a bad row touches no list
+  });
+
+  it("copy: the preview counts, then the copy skips numbers already in a list and do-not-call numbers; sources are untouched", async () => {
+    const a = await customers.createCustomer(input({ customerName: "A", phone: "9000000301", whatsappOptIn: true }) as any, ADMIN);
+    const b = await customers.createCustomer(input({ customerName: "B", phone: "9000000302" }) as any, ADMIN);
+    T("contact").push({ phone: "9000000303", status: "UNSUBSCRIBED" });
+    const c = await customers.createCustomer(input({ customerName: "C", phone: "9000000303" }) as any, ADMIN); // saved as Do not call
+    await customers.createCustomer(input({ customerName: "B in Tamil", phone: "9000000302" }) as any, ADMIN, "ta");
+    T("aiCallCustomerCall").push({ logId: "log-a", customerId: a.id }); // A has a call: never copied
+    const before = JSON.stringify(T("aiCallCustomer"));
+    const sources = () => JSON.stringify([a.id, b.id, c.id].map((id) => cust(id)));
+    const sourcesBefore = sources();
+
+    const preview = await customers.copyCustomersToLanguages([a.id, b.id, c.id], ["ta", "hi"], ADMIN, true);
+    expect(preview.results).toEqual([
+      { language: "ta", added: 1, exists: 1, doNotCall: 1, failed: 0 },
+      { language: "hi", added: 2, exists: 0, doNotCall: 1, failed: 0 },
+    ]);
+    expect(JSON.stringify(T("aiCallCustomer"))).toBe(before); // the preview saves nothing
+
+    const done = await customers.copyCustomersToLanguages([a.id, b.id, c.id], ["ta", "hi"], ADMIN, false);
+    expect(done.results).toEqual(preview.results);
+    expect(ofLanguage("ta").map((r) => r.customerName).sort()).toEqual(["A", "B in Tamil"]);
+    expect(ofLanguage("hi").map((r) => r.customerName).sort()).toEqual(["A", "B"]);
+    const aHindi = ofLanguage("hi").find((r) => r.customerName === "A")!;
+    expect(aHindi).toMatchObject({ phone: "+919000000301", whatsappOptIn: true, stage: "NOT_CALLED", lastCallLogId: null, doNotCall: false });
+    expect(T("aiCallCustomerCall").filter((l) => l.customerId === aHindi.id)).toEqual([]); // no call history copied
+    expect(sources()).toBe(sourcesBefore); // the copied customers are not changed
+    expect(T("aiCallCustomerEvent").filter((e) => e.detail === "Copied from the English list")).toHaveLength(3);
+  });
+
+  it("a language switched off in Settings can't receive customers (add, copy, import)", async () => {
+    T("setting").push({ key: "aiCallLanguagesDisabled", value: ["hi"] });
+    const a = await customers.createCustomer(input() as any, ADMIN);
+    const off = { status: 400, message: "Hindi is switched off (Settings → AI call languages)" };
+    await expect(customers.addCustomerToLanguages(input({ phone: "9000000401" }) as any, ADMIN, ["en", "hi"])).rejects.toMatchObject(off);
+    await expect(customers.copyCustomersToLanguages([a.id], ["hi"], ADMIN, true)).rejects.toMatchObject(off);
+    await expect(customers.importCustomersToLanguages([{ phone: "9000000402" }], ADMIN, ["en", "hi"])).rejects.toMatchObject(off);
+    expect(ofLanguage("hi")).toHaveLength(0);
+    expect(ofLanguage("en")).toHaveLength(1); // a refused request adds to no list at all
+  });
+
+  it("import into several lists: a summary per list, duplicates counted only inside each list", async () => {
+    await customers.createCustomer(input({ phone: "9000000501" }) as any, ADMIN, "ta");
+    const results = await customers.importCustomersToLanguages(
+      [{ customerName: "X", phone: "9000000501" }, { customerName: "Y", phone: "9000000502" }],
+      ADMIN,
+      ["en", "ta"],
+    );
+    expect(results.map((r) => [r.language, r.imported, r.duplicates, r.failed])).toEqual([
+      ["en", 2, 0, false],
+      ["ta", 1, 1, false],
+    ]);
+  });
+
+  it("one list, as before: a number already saved in that list is a duplicate on import", async () => {
+    await customers.createCustomer(input({ phone: "9000000601" }) as any, ADMIN, "ta");
+    const res = await customers.importCustomers([{ phone: "9000000601" }, { phone: "9000000602" }], ADMIN, "ta");
+    expect(res).toMatchObject({ imported: 1, duplicates: 1 });
+    expect(res.problems).toEqual([{ row: 1, errors: ["Number already saved"] }]);
   });
 });

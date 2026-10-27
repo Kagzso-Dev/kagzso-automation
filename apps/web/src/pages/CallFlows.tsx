@@ -69,6 +69,8 @@ const SAMPLES = [
   { label: "Male, no name", customer_name: "", gender: "male", follow_up_detail: "" },
 ];
 type Sample = Omit<(typeof SAMPLES)[number], "label">;
+/** The Live preview's first sample customer (Ragul, male), without its label. */
+const { label: _firstSampleLabel, ...FIRST_SAMPLE } = SAMPLES[0]!;
 
 const blockTitle = (text: string) => text.split("\n").find((l) => l.trim())?.replace(/^#+\s*/, "") ?? "Untitled";
 const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleString() : "—");
@@ -590,6 +592,7 @@ function CallFlowEditor({
   });
 
   const check = useMemo(() => (form ? callFlowDefinition.safeParse(form) : null), [form]);
+  const openingLine = useFlowOpeningLine(form, !!check?.success);
   const dirty = !!form && !!baseDefinition && JSON.stringify(form) !== JSON.stringify(baseDefinition);
   const textOf = (d: CallFlowDefinition | null, id: string) => {
     const b = d?.blocks.find((x) => x.id === id);
@@ -723,6 +726,7 @@ function CallFlowEditor({
                 onChange={(id) => update((f) => void (f.voice_id = id))}
                 pauses={form.pauses}
                 language={form.language}
+                flowLine={openingLine}
               />
             ) : (
               <input
@@ -1102,6 +1106,33 @@ function withPauseTags(text: string | null, pauses: CallFlowPauses | undefined):
   }
   out.push(text.slice(last));
   return out;
+}
+
+/**
+ * The flow's opening as the customer hears it: the greeting, then (after a time-of-day opening) the
+ * identity question, rendered for the first sample customer by the flow language's own voice backend
+ * (text only, no audio). Same request and key as the Live preview with that sample, so it is fetched
+ * once. Null while the flow is invalid or not rendered yet.
+ */
+function useFlowOpeningLine(definition: CallFlowDefinition | null, valid: boolean): string | null {
+  const [debounced, setDebounced] = useState(definition);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(definition), 600);
+    return () => clearTimeout(t);
+  }, [definition]);
+  const preview = useQuery({
+    queryKey: ["call-flow-preview", { definition: debounced, sample: FIRST_SAMPLE }],
+    queryFn: () =>
+      api<CallFlowPreview>("/api/call-flows/preview", {
+        method: "POST",
+        json: { definition: debounced, sample: Object.fromEntries(Object.entries(FIRST_SAMPLE).filter(([, v]) => v)) },
+        notify: false,
+      }),
+    enabled: valid && !!debounced,
+    placeholderData: (prev) => prev,
+  });
+  const p = preview.data;
+  return p?.valid && p.greeting ? [p.greeting, p.identity_question].filter(Boolean).join(" ") : null;
 }
 
 function PreviewPanel({ definition, valid }: { definition: CallFlowDefinition; valid: boolean }) {

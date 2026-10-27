@@ -13,33 +13,43 @@
 //   POST   /api/ai-call-customers/:id/stage     review: approve / reject / change stage
 //   POST   /api/ai-call-customers/:id/followups add a follow-up (pending approval)
 //   POST   /api/ai-call-customers/call          start AI calls for saved customers
+//   POST   /api/ai-call-customers/add-to-languages     add one customer to several language lists (ADMIN)
+//   POST   /api/ai-call-customers/copy-to-languages    copy ticked customers to other lists, dryRun = preview (ADMIN)
+//   POST   /api/ai-call-customers/import-to-languages  import rows into several language lists (ADMIN)
 //
 // Each language has its own list: ?language=ta on list / callable / import / add (absent =
 // English, exactly as before), and `language` in the /call body (only that list is called).
+// The same number may be in each list once; do-not-call set in any list blocks it in every list.
 
 import { Router, type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
 import { rateLimit } from "express-rate-limit";
 import {
+  addCustomerToLanguagesInput,
   aiCallCustomerInput,
   aiCallLanguageQuery,
   bulkIdsInput,
   callAiCallCustomersInput,
+  copyCustomersToLanguagesInput,
   createFollowupInput,
   detectAiCallCustomerColumns,
   idParam,
   importAiCallCustomersInput,
+  importAiCallCustomersToLanguagesInput,
   listAiCallCustomersQuery,
   setAiCallStageInput,
 } from "@dispatch/shared";
 import { aiCallsConfig } from "../../config/aiCalls.js";
 import { aiCallFormatFromFilename, readAiCallSheet } from "../../domain/aiCallImport.js";
 import {
+  addCustomerToLanguages,
   callableCustomers,
+  copyCustomersToLanguages,
   createCustomer,
   CustomerError,
   customerDetail,
   importCustomers,
+  importCustomersToLanguages,
   listCustomers,
   setCustomerStage,
   softDeleteCustomers,
@@ -139,6 +149,40 @@ aiCallCustomersRouter.post(
     const { rows } = importAiCallCustomersInput.parse(req.body);
     const { language } = aiCallLanguageQuery.parse(req.query);
     res.json(await guarded(importCustomers(rows, req.user!.email, language)));
+  }),
+);
+
+/* ------------------------------------------------------------------ several language lists (ADMIN) */
+
+const adminOnly = requireRole("ADMIN");
+
+aiCallCustomersRouter.post(
+  "/add-to-languages",
+  writeLimiter,
+  adminOnly,
+  wrap(async (req, res) => {
+    const { customer, languages } = addCustomerToLanguagesInput.parse(req.body);
+    res.json({ results: await guarded(addCustomerToLanguages(customer, req.user!.email, languages)) });
+  }),
+);
+
+aiCallCustomersRouter.post(
+  "/copy-to-languages",
+  writeLimiter,
+  adminOnly,
+  wrap(async (req, res) => {
+    const { ids, targets, dryRun } = copyCustomersToLanguagesInput.parse(req.body);
+    res.json(await guarded(copyCustomersToLanguages(ids, targets, req.user!.email, dryRun)));
+  }),
+);
+
+aiCallCustomersRouter.post(
+  "/import-to-languages",
+  writeLimiter,
+  adminOnly,
+  wrap(async (req, res) => {
+    const { rows, languages } = importAiCallCustomersToLanguagesInput.parse(req.body);
+    res.json({ results: await guarded(importCustomersToLanguages(rows, req.user!.email, languages)) });
   }),
 );
 

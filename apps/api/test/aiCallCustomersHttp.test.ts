@@ -41,6 +41,9 @@ const ENDPOINTS: [string, string][] = [
   ["PUT", "/api/ai-call-customers/abc"],
   ["POST", "/api/ai-call-customers/abc/stage"],
   ["POST", "/api/ai-call-customers/abc/followups"],
+  ["POST", "/api/ai-call-customers/add-to-languages"],
+  ["POST", "/api/ai-call-customers/copy-to-languages"],
+  ["POST", "/api/ai-call-customers/import-to-languages"],
   ["GET", "/api/ai-call-followups"],
   ["PATCH", "/api/ai-call-followups/abc"],
   ["POST", "/api/ai-call-followups/abc/approve"],
@@ -54,6 +57,18 @@ describe("AI Call Customers / follow-ups access", () => {
 
   it("lets editors through the role gate", async () => {
     const res = await call("/api/ai-call-customers/delete", { method: "POST", role: "EDITOR", body: JSON.stringify({ ids: [] }) });
+    expect(res.status).toBe(400);
+  });
+
+  it.each(["add-to-languages", "copy-to-languages", "import-to-languages"])("several language lists: %s is for admins only (editors get 403)", async (path) => {
+    const res = await call(`/api/ai-call-customers/${path}`, { method: "POST", role: "EDITOR", body: "{}" });
+    expect(res.status).toBe(403);
+    // An admin gets past the role gate to input validation (refused before any database access).
+    expect((await call(`/api/ai-call-customers/${path}`, { method: "POST", role: "ADMIN", body: "{}" })).status).toBe(400);
+  });
+
+  it("several language lists: a language that doesn't exist is refused", async () => {
+    const res = await call("/api/ai-call-customers/copy-to-languages", { method: "POST", role: "ADMIN", body: JSON.stringify({ ids: ["a"], targets: ["xx"] }) });
     expect(res.status).toBe(400);
   });
 

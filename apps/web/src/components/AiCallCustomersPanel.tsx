@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CallRecording, RecordingBadge, useRecordingStatuses } from "./CallRecording";
 import {
   AI_CALL_CUSTOMER_FIELDS,
+  AI_CALL_LANGUAGE_NAMES,
   AI_CALL_MANUAL_STAGES,
   AI_CALL_STAGE_LABELS,
   AI_CALL_STAGES,
@@ -11,20 +12,26 @@ import {
   parseOptIn,
   type AiCallCustomerColumnMapping,
   type AiCallCustomerField,
+  type AiCallLanguage,
   type AiCallStage,
 } from "@dispatch/shared";
 import { api } from "../lib/api";
-import type { AiCallsConfig } from "../lib/aiCalls";
+import { useAuth } from "../lib/auth";
+import { useAiCallsConfig, type AiCallsConfig } from "../lib/aiCalls";
 import { isEnglish, titleFor, useAiCallLanguage, useLanguageReady, withLanguage } from "../lib/aiCallLanguage";
 import { AiCallLanguageNotice } from "./AiCallLanguageNotice";
 import {
   downloadSample,
+  openLanguages,
   STAGE_TONE,
   useAiCallCustomerDetail,
+  type AddToLanguageResult,
   type AiCallCustomer,
   type AiCallCustomerPage,
+  type CopyToLanguageResult,
   type CustomerSheet,
   type ImportSummary,
+  type LanguageImportSummary,
 } from "../lib/aiCallCustomers";
 import { formatDateTime } from "../lib/schedule";
 import { PageHeader } from "./Layout";
@@ -56,6 +63,10 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
   const [importOpen, setImportOpen] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [callIds, setCallIds] = useState<string[] | null>(null);
+  const [copyIds, setCopyIds] = useState<string[] | null>(null);
+  const isAdmin = useAuth().user?.role === "ADMIN";
+  // Other language lists the ticked customers can be copied into (switched on in Settings).
+  const copyTargets = openLanguages(config.languages, language).slice(1);
 
   const query = useQuery({
     queryKey: ["ai-call-customers", language, search, gender, stage, page],
@@ -113,7 +124,7 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
         subtitle={
           isEnglish(language)
             ? "Customers for AI voice calls, their call stage and follow-ups. Separate from email and WhatsApp contacts."
-            : "This language's own customer list: they are called only with its call flows, in its language. A number can be in one list at a time; do-not-call applies to every list."
+            : "This language's own customer list: they are called only with its call flows, in its language. The same number can also be in other languages' lists; do-not-call applies to every list."
         }
         action={
           <div className="flex flex-wrap gap-2">
@@ -140,6 +151,11 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
               >
                 <Icon name="trash" size={16} />
                 Delete ({selected.size})
+              </button>
+            )}
+            {selected.size > 0 && isAdmin && copyTargets.length > 0 && (
+              <button className="btn-ghost" onClick={() => setCopyIds([...selected])}>
+                Copy to other languages ({selected.size})
               </button>
             )}
             <button className="btn-ghost" onClick={() => setImportOpen(true)}>
@@ -264,6 +280,11 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
                     <StageBadge stage={c.stage} />
                   </button>
                   {c.needsReview && <div className="mt-0.5 text-[11px] text-warn">suggested — review</div>}
+                  {c.doNotCallSetIn && (
+                    <div className="mt-0.5 text-[11px] text-crit" title="Never called from any list">
+                      Do not call (set in {AI_CALL_LANGUAGE_NAMES[c.doNotCallSetIn]})
+                    </div>
+                  )}
                 </td>
                 <td className="px-4 py-2.5 text-slate-550">{new Date(c.createdAt).toLocaleDateString()}</td>
                 <td className="px-4 py-2.5">
@@ -294,6 +315,14 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
         onClose={() => setEditing(null)}
       />
       <ImportCustomersModal open={importOpen} onClose={() => setImportOpen(false)} />
+      <CopyToLanguagesModal
+        key={copyIds ? copyIds.join(",") : "none"}
+        ids={copyIds}
+        onClose={(copied) => {
+          setCopyIds(null);
+          if (copied) setSelected(new Set());
+        }}
+      />
       <CustomerDetailModal id={detailId} onClose={() => setDetailId(null)} />
       <AiCallModal
         open={callIds !== null}
@@ -339,7 +368,12 @@ function Pager({ page, pageSize, total, onChange }: { page: number; pageSize: nu
 function CustomerFormModal({ customer, onClose }: { customer: AiCallCustomer | "new" | null; onClose: () => void }) {
   const qc = useQueryClient();
   const language = useAiCallLanguage(); // a new customer goes into this page's language list
+  const isAdmin = useAuth().user?.role === "ADMIN";
+  const offered = openLanguages(useAiCallsConfig().data?.languages, language);
   const existing = customer && customer !== "new" ? customer : null;
+  // Admins: also add the new customer to other language lists (this page's list is always included).
+  const [also, setAlso] = useState<AiCallLanguage[]>([]);
+  const [results, setResults] = useState<AddToLanguageResult[] | null>(null);
   const [form, setForm] = useState({
     customerName: existing?.customerName ?? "",
     gender: existing?.gender === "female" ? "female" : "male", // Male by default
@@ -351,18 +385,45 @@ function CustomerFormModal({ customer, onClose }: { customer: AiCallCustomer | "
   });
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
   const save = useMutation({
-    mutationFn: () =>
-      existing
-        ? api(`/api/ai-call-customers/${existing.id}`, { method: "PUT", json: form, notify: "Customer saved" })
-        : api(withLanguage("/api/ai-call-customers", language), { method: "POST", json: form, notify: "Customer added" }),
-    onSuccess: () => {
+    mutationFn: async (): Promise<AddToLanguageResult[] | null> => {
+      if (existing) {
+        await api(`/api/ai-call-customers/${existing.id}`, { method: "PUT", json: form, notify: "Customer saved" });
+        return null;
+      }
+      if (also.length === 0) {
+        // One list: exactly as before.
+        await api(withLanguage("/api/ai-call-customers", language), { method: "POST", json: form, notify: "Customer added" });
+        return null;
+      }
+      const r = await api<{ results: AddToLanguageResult[] }>("/api/ai-call-customers/add-to-languages", {
+        method: "POST",
+        json: { customer: form, languages: [language, ...also] },
+        notify: false,
+      });
+      return r.results;
+    },
+    onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: ["ai-call-customers"] });
       void qc.invalidateQueries({ queryKey: ["ai-call-customer"] });
-      onClose();
+      if (r) setResults(r);
+      else onClose();
     },
   });
   const emailOk = !form.email.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim());
   const valid = phoneInputOk(form.phone, true) && emailOk;
+
+  if (results) {
+    return (
+      <Modal open={customer !== null} onClose={onClose} title="Add customer">
+        <AddResults results={results} />
+        <div className="mt-4 flex justify-end">
+          <button className="btn-primary" onClick={onClose}>
+            Done
+          </button>
+        </div>
+      </Modal>
+    );
+  }
 
   return (
     <Modal open={customer !== null} onClose={onClose} title={existing ? "Edit customer" : "Add customer"}>
@@ -418,6 +479,9 @@ function CustomerFormModal({ customer, onClose }: { customer: AiCallCustomer | "
             Opted in to WhatsApp messages
           </label>
         </div>
+        {!existing && isAdmin && offered.length > 1 && (
+          <LanguageChecks label="Also add to these languages" current={language} offered={offered} value={also} onChange={setAlso} />
+        )}
         {save.error && <ErrorNote error={save.error} />}
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" className="btn-ghost" onClick={onClose}>
@@ -457,10 +521,15 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const language = useAiCallLanguage(); // imported into this page's language list
+  const isAdmin = useAuth().user?.role === "ADMIN";
+  const offered = openLanguages(useAiCallsConfig().data?.languages, language);
   const fileRef = useRef<HTMLInputElement>(null);
   const [sheet, setSheet] = useState<CustomerSheet | null>(null);
   const [mapping, setMapping] = useState<AiCallCustomerColumnMapping | null>(null);
   const [result, setResult] = useState<ImportSummary | null>(null);
+  // Admins: also import into other language lists (this page's list is always included).
+  const [also, setAlso] = useState<AiCallLanguage[]>([]);
+  const [perLanguage, setPerLanguage] = useState<LanguageImportSummary[] | null>(null);
 
   const parse = useMutation({
     mutationFn: (file: File) => {
@@ -502,13 +571,48 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
   const validRows = rows.filter((_, i) => checks[i]!.errors.length === 0 && !checks[i]!.duplicate);
 
   const doImport = useMutation({
-    mutationFn: () =>
-      api<ImportSummary>(withLanguage("/api/ai-call-customers/import", language), { method: "POST", json: { rows: validRows }, notify: false }),
-    onSuccess: (r) => {
-      setResult(r);
-      void qc.invalidateQueries({ queryKey: ["ai-call-customers"] });
+    mutationFn: async () => {
+      if (also.length === 0) {
+        // One list: exactly as before.
+        setResult(await api<ImportSummary>(withLanguage("/api/ai-call-customers/import", language), { method: "POST", json: { rows: validRows }, notify: false }));
+        return;
+      }
+      const r = await api<{ results: LanguageImportSummary[] }>("/api/ai-call-customers/import-to-languages", {
+        method: "POST",
+        json: { rows: validRows, languages: [language, ...also] },
+        notify: false,
+      });
+      setPerLanguage(r.results);
     },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["ai-call-customers"] }),
   });
+
+  if (perLanguage) {
+    return (
+      <div>
+        <p className="mb-2 text-sm text-slate-550">
+          Each language list is imported on its own; a number already in a list is a duplicate there.
+          {invalid > 0 || duplicates > 0 ? ` ${invalid} invalid and ${duplicates} repeated rows in the file were skipped for every list.` : ""}
+        </p>
+        <Table head={["Language", "Imported", "Duplicates", "Do not call", "Problem"]}>
+          {perLanguage.map((r) => (
+            <tr key={r.language} className="border-b border-line-subtle last:border-0">
+              <td className="px-4 py-2 font-medium">{AI_CALL_LANGUAGE_NAMES[r.language]}</td>
+              <td className="px-4 py-2 font-mono">{r.imported}</td>
+              <td className="px-4 py-2 font-mono">{r.duplicates}</td>
+              <td className="px-4 py-2 font-mono">{r.doNotCall}</td>
+              <td className="px-4 py-2 text-xs text-crit">{r.failed ? "Failed — nothing imported into this list; try again" : ""}</td>
+            </tr>
+          ))}
+        </Table>
+        <div className="mt-4 flex justify-end">
+          <button className="btn-primary" onClick={onClose}>
+            Done
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (result) {
     return (
@@ -662,6 +766,11 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
         <p className="-mt-2 mb-4 text-xs text-slate-550">Showing the first {IMPORT_PREVIEW} rows; every valid row is imported.</p>
       )}
       {!mapping.phone && <p className="mb-3 text-sm text-warn">Map the Phone column to continue.</p>}
+      {isAdmin && offered.length > 1 && (
+        <div className="mb-3">
+          <LanguageChecks label="Also import into other languages" current={language} offered={offered} value={also} onChange={setAlso} />
+        </div>
+      )}
       {doImport.error && <ErrorNote error={doImport.error} />}
       <div className="mt-4 flex justify-end gap-2">
         <button type="button" className="btn-ghost" onClick={onClose}>
@@ -676,6 +785,151 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
         </button>
       </div>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ several language lists (admins) */
+
+/** Language lists to use: this page's list (when given) ticked and locked, the others (switched on in Settings) to pick. */
+function LanguageChecks({
+  label,
+  current,
+  offered,
+  value,
+  onChange,
+}: {
+  label: string;
+  current?: AiCallLanguage;
+  offered: AiCallLanguage[];
+  value: AiCallLanguage[];
+  onChange: (v: AiCallLanguage[]) => void;
+}) {
+  return (
+    <fieldset>
+      <legend className="label">{label}</legend>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
+        {offered.map((l) => (
+          <label key={l} className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={l === current || value.includes(l)}
+              disabled={l === current}
+              onChange={(e) => onChange(e.target.checked ? [...value, l] : value.filter((x) => x !== l))}
+            />
+            {AI_CALL_LANGUAGE_NAMES[l]}
+            {l === current && <span className="text-xs text-slate-550">(this list)</span>}
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
+const ADD_STATUS: Record<AddToLanguageResult["status"], [string, BadgeTone]> = {
+  added: ["Added", "ok"],
+  exists: ["Already in this list", "warn"],
+  failed: ["Failed", "crit"],
+};
+
+function AddResults({ results }: { results: AddToLanguageResult[] }) {
+  return (
+    <ul className="space-y-2 text-sm">
+      {results.map((r) => (
+        <li key={r.language} className="flex flex-wrap items-center gap-2">
+          <span className="w-20 font-medium">{AI_CALL_LANGUAGE_NAMES[r.language]}</span>
+          <Badge tone={ADD_STATUS[r.status][1]}>{ADD_STATUS[r.status][0]}</Badge>
+          {r.message && <span className="text-xs text-slate-550">{r.message}</span>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * Copy ticked customers into other language lists: pick the lists, see what would happen (will add /
+ * already there / do-not-call), then copy. The ticked customers are never changed; no call history,
+ * follow-ups or recordings are copied.
+ */
+function CopyToLanguagesModal({ ids, onClose }: { ids: string[] | null; onClose: (copied: boolean) => void }) {
+  const qc = useQueryClient();
+  const language = useAiCallLanguage();
+  const targetsOffered = openLanguages(useAiCallsConfig().data?.languages, language).slice(1);
+  const [targets, setTargets] = useState<AiCallLanguage[]>([]);
+  const [preview, setPreview] = useState<CopyToLanguageResult[] | null>(null);
+  const [done, setDone] = useState<CopyToLanguageResult[] | null>(null);
+  const run = useMutation({
+    mutationFn: (dryRun: boolean) =>
+      api<{ customers: number; results: CopyToLanguageResult[] }>("/api/ai-call-customers/copy-to-languages", {
+        method: "POST",
+        json: { ids, targets, dryRun },
+        notify: false,
+      }),
+    onSuccess: (r, dryRun) => {
+      if (dryRun) return setPreview(r.results);
+      setDone(r.results);
+      void qc.invalidateQueries({ queryKey: ["ai-call-customers"] });
+    },
+  });
+  const n = ids?.length ?? 0;
+  const willAdd = (preview ?? []).reduce((s, r) => s + r.added, 0);
+  const shown = done ?? preview;
+
+  return (
+    <Modal open={ids !== null} onClose={() => onClose(!!done)} title={`Copy ${n} customer${n === 1 ? "" : "s"} to other languages`}>
+      <div className="space-y-3 text-sm">
+        <p className="text-slate-550">
+          Name, gender, phone, business, follow-up detail, email and WhatsApp opt-in are copied. These customers are not changed, and no call
+          history, follow-ups or recordings are copied.
+        </p>
+        {!done && (
+          <LanguageChecks
+            label="Copy into"
+            offered={targetsOffered}
+            value={targets}
+            onChange={(v) => {
+              setTargets(v);
+              setPreview(null);
+            }}
+          />
+        )}
+        {shown && (
+          <Table head={["Language", done ? "Added" : "Will add", "Already in that list", "Do not call (skipped)", ...(done ? ["Failed"] : [])]}>
+            {shown.map((r) => (
+              <tr key={r.language} className="border-b border-line-subtle last:border-0">
+                <td className="px-4 py-2 font-medium">{AI_CALL_LANGUAGE_NAMES[r.language]}</td>
+                <td className="px-4 py-2 font-mono">{r.added}</td>
+                <td className="px-4 py-2 font-mono">{r.exists}</td>
+                <td className="px-4 py-2 font-mono">{r.doNotCall}</td>
+                {done && <td className={`px-4 py-2 font-mono ${r.failed ? "text-crit" : ""}`}>{r.failed}</td>}
+              </tr>
+            ))}
+          </Table>
+        )}
+        {run.error && <ErrorNote error={run.error} />}
+        <div className="flex justify-end gap-2 pt-1">
+          {done ? (
+            <button className="btn-primary" onClick={() => onClose(true)}>
+              Done
+            </button>
+          ) : (
+            <>
+              <button className="btn-ghost" onClick={() => onClose(false)}>
+                Cancel
+              </button>
+              {preview ? (
+                <button className="btn-primary" disabled={willAdd === 0 || run.isPending} onClick={() => run.mutate(false)}>
+                  {run.isPending ? "Copying…" : `Copy ${willAdd} customer${willAdd === 1 ? "" : "s"}`}
+                </button>
+              ) : (
+                <button className="btn-primary" disabled={targets.length === 0 || run.isPending} onClick={() => run.mutate(true)}>
+                  {run.isPending ? "Checking…" : "Preview"}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </Modal>
   );
 }
 

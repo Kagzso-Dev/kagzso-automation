@@ -658,9 +658,9 @@ model AiCallCustomer {
   customerName   String?             @db.VarChar(100)
   gender         String              @default("male") @db.VarChar(16) // male | female (CHECK in migration 0026)
   phone          String              @db.VarChar(20) // E.164, e.g. +919876543210
-  // Same as `phone` while the row is live, null once soft-deleted: a unique
-  // index on it = "one live customer per number" (MySQL has no partial index).
-  activePhone    String?             @unique @db.VarChar(20)
+  // Same as `phone` while the row is live, null once soft-deleted: unique with `language`
+  // = "one live customer per number in each language list" (MySQL has no partial index).
+  activePhone    String?             @db.VarChar(20)
   businessName   String?             @db.VarChar(160)
   followUpDetail String?             @db.Text
   email          String?             @db.VarChar(191) // stored for reference; no email is sent from here
@@ -682,6 +682,7 @@ model AiCallCustomer {
   events         AiCallCustomerEvent[]
   followups      AiCallFollowup[]
 
+  @@unique([activePhone, language])
   @@index([deletedAt, stage])
   @@index([phone])
   @@index([language, deletedAt])

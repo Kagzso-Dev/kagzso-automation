@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import type { AiCallCustomerColumnMapping, AiCallLanguage, AiCallStage } from "@dispatch/shared";
+import type { AiCallCustomerColumnMapping, AiCallLanguage, AiCallLanguageInfo, AiCallStage } from "@dispatch/shared";
 import { api, getAccessToken } from "./api";
 import type { BadgeTone } from "../components/ui";
 
@@ -15,8 +15,30 @@ export interface AiCallCustomer {
   stage: AiCallStage;
   needsReview: boolean;
   doNotCall: boolean;
+  /** Do not call was set for this number in another language's list (this row's own flag is false). */
+  doNotCallSetIn?: AiCallLanguage | null;
   lastCalledAt: string | null;
   createdAt: string;
+}
+
+/** The lists a customer can also go into: languages switched on in Settings, this page's own first. */
+export function openLanguages(languages: AiCallLanguageInfo[] | undefined, current: AiCallLanguage): AiCallLanguage[] {
+  return [current, ...(languages ?? []).filter((l) => l.enabled && l.code !== current).map((l) => l.code)];
+}
+
+export interface AddToLanguageResult {
+  language: AiCallLanguage;
+  status: "added" | "exists" | "failed";
+  message: string | null;
+  customerId: string | null;
+}
+
+export interface CopyToLanguageResult {
+  language: AiCallLanguage;
+  added: number;
+  exists: number;
+  doNotCall: number;
+  failed: number;
 }
 
 export interface AiCallCustomerPage {
@@ -102,6 +124,8 @@ export interface ImportSummary {
   doNotCall: number;
   problems: { row: number; errors: string[] }[];
 }
+
+export type LanguageImportSummary = ImportSummary & { language: AiCallLanguage; failed: boolean };
 
 export const STAGE_TONE: Record<AiCallStage, BadgeTone> = {
   NOT_CALLED: "neutral",

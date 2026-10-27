@@ -302,6 +302,27 @@ export const importAiCallCustomersInput = z.object({
 
 export const bulkIdsInput = z.object({ ids: z.array(z.string().min(1).max(64)).min(1).max(500) });
 
+/* ------------------------------------------------------------------ several language lists (admin) */
+// The same number may be in each language's list. The server accepts only languages switched on in Settings.
+
+/** Language lists to add / copy / import into, each once. */
+export const aiCallLanguageList = z
+  .array(aiCallLanguage)
+  .min(1, "Pick at least one language")
+  .max(20)
+  .transform((l) => [...new Set(l)]);
+
+/** Add one customer to several language lists at once (the page's own language first). */
+export const addCustomerToLanguagesInput = z.object({ customer: aiCallCustomerInput, languages: aiCallLanguageList }).strict();
+
+/** Copy ticked customers into other language lists. dryRun = the preview (counts only, nothing saved). */
+export const copyCustomersToLanguagesInput = z
+  .object({ ids: z.array(z.string().min(1).max(64)).min(1).max(500), targets: aiCallLanguageList, dryRun: z.boolean().default(false) })
+  .strict();
+
+/** Import mapped rows into several language lists (the page's own language first). */
+export const importAiCallCustomersToLanguagesInput = importAiCallCustomersInput.extend({ languages: aiCallLanguageList }).strict();
+
 export const setAiCallStageInput = z.object({
   stage: z.enum(AI_CALL_STAGES).refine((s) => s !== "QUEUED" && s !== "CALLING", "That stage is set by the dialler"),
   note: z.string().trim().max(500).optional(),
