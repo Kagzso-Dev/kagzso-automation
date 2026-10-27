@@ -93,6 +93,8 @@ async def preview_flow(body: PreviewRequest) -> PreviewResponse:
     variables = build_call_variables(s.customer_name, normalize_gender(s.gender), "+910000000000",
                                      follow_up_detail=s.follow_up_detail, company_name=s.company_name,
                                      business_type=s.business_type)
+    if flow.language_style == "pure":  # the prompt shown follows the flow's style, as in a call
+        variables["flow_language_style"] = "pure"
     script = render_blocks(flow)
     question, reask = (identity_lines(variables, flow.identity.question if flow.identity else None,
                                       flow.identity.reask if flow.identity else None)

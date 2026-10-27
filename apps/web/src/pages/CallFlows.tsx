@@ -24,7 +24,13 @@ import { api } from "../lib/api";
 import { useAiCallsConfig, type AiCallRun } from "../lib/aiCalls";
 import { isEnglish, titleFor, useAiCallLanguage, useLanguageReady, withLanguage } from "../lib/aiCallLanguage";
 import { AiCallLanguageNotice } from "../components/AiCallLanguageNotice";
-import { AI_CALL_LANGUAGE_NAMES } from "@dispatch/shared";
+import {
+  AI_CALL_LANGUAGE_NAMES,
+  CALL_FLOW_MIXED_STARTERS,
+  languageStyleLabel,
+  languageStyleOf,
+  type CallFlowLanguageStyle,
+} from "@dispatch/shared";
 import {
   BASE_LABELS,
   testCallDefaultVersion,
@@ -37,6 +43,7 @@ import {
   type CallFlowVersion,
 } from "../lib/callFlows";
 import { PageHeader } from "../components/Layout";
+import { RunningCallsNote } from "../components/RunningCallsNote";
 import { Badge, EmptyState, ErrorNote, Modal, Spinner } from "../components/ui";
 import { useConfirm } from "../components/confirm";
 import { useToast } from "../components/toast";
@@ -134,6 +141,7 @@ export function CallFlowsPage() {
       </p>
       {/* Tamil / Hindi / Kannada before their voice backend is set up: say so instead of a raw error. */}
       {languageReady ? catalog.error && <ErrorNote error={catalog.error} /> : <AiCallLanguageNotice />}
+      <RunningCallsNote />
       {catalog.data && <BuiltinScripts catalog={catalog.data} onCustomized={setSelectedId} />}
       <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.06em] text-slate-550">Your call flows</h2>
       <div className={selectedId ? "grid gap-6 min-[1600px]:grid-cols-[280px_minmax(0,1fr)]" : "flex flex-col gap-4"}>
@@ -644,6 +652,24 @@ function CallFlowEditor({
       if (!question.trim() && !reask.trim()) delete f.identity;
       else f.identity = { question, ...(reask.trim() ? { reask } : {}) };
     });
+  /** "Use sample mixed text": the starter lines (needs native review) into this draft, after a confirm. Never automatic. */
+  const applyMixedStarter = async () => {
+    const s = CALL_FLOW_MIXED_STARTERS[form.language];
+    if (!s) return;
+    const ok = await confirm({
+      title: "Use sample mixed text?",
+      body:
+        "Replaces this draft's identity question, re-ask and both silence lines with starter text in the mixed style. " +
+        "It needs a native speaker's review. Nothing is saved until you press Save.",
+      confirmText: "Use sample text",
+    });
+    if (ok) {
+      update((f) => {
+        f.identity = { question: s.identity.question, reask: s.identity.reask };
+        f.silence = { reprompt: s.silence.reprompt, closing: s.silence.closing };
+      });
+    }
+  };
   const bind = (key: FieldKey) => ({
     value: getField(key),
     onChange: (e: { target: { value: string } }) => setField(key, e.target.value),
@@ -716,6 +742,38 @@ function CallFlowEditor({
               <option value={form.language}>{AI_CALL_LANGUAGE_NAMES[form.language]} — fixed for this flow</option>
             </select>
           </div>
+          {form.language !== "en" && (
+            <div className="min-w-0 sm:col-span-2">
+              <label className="label" htmlFor="language-style">
+                Language style
+              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  id="language-style"
+                  className="input max-w-xs"
+                  value={languageStyleOf(form)}
+                  onChange={(e) => update((f) => void (f.language_style = e.target.value as CallFlowLanguageStyle))}
+                >
+                  {(["mixed", "pure"] as const).map((s) => (
+                    <option key={s} value={s}>
+                      {languageStyleLabel(form.language, s)}
+                    </option>
+                  ))}
+                </select>
+                {CALL_FLOW_MIXED_STARTERS[form.language] && (
+                  <button type="button" className="btn-ghost text-xs" onClick={() => void applyMixedStarter()}>
+                    Use sample mixed text
+                  </button>
+                )}
+              </div>
+              <span className="mt-1 block text-xs text-slate-550">
+                {languageStyleOf(form) === "mixed"
+                  ? "The AI speaks everyday mixed style: the language's own words, with common English words (sir, business, WhatsApp…) kept in English."
+                  : "The AI speaks plain everyday words of this language; only names, the company name and words like WhatsApp stay in English."}{" "}
+                Saved with this draft; published versions don't change.
+              </span>
+            </div>
+          )}
           <div className="min-w-0 sm:col-span-2">
             <label className="label">Voice</label>
             {catalog.voices?.length ? (
@@ -727,6 +785,7 @@ function CallFlowEditor({
                 pauses={form.pauses}
                 language={form.language}
                 flowLine={openingLine}
+                languageStyle={form.language_style}
               />
             ) : (
               <input

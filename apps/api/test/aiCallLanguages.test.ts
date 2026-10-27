@@ -55,8 +55,18 @@ const db = {
       return [];
     },
   },
-  aiCallRun: { findFirst: async () => null, findMany: async () => [] },
+  aiCallRun: { findFirst: async (args: { where: RunWhere }) => runningMatching(args.where), findMany: async () => [] },
+  aiCallRunFlow: { findUnique: async () => (running && running !== "en" ? { flowVersion: { flow: { language: running } } } : null) },
 };
+// The language of the one run still dialling (null: none). An English run has no flow (the default agent).
+let running: string | null = null;
+type RunWhere = { status?: string; OR?: unknown; flow?: { is: { flowVersion: { is: { flow: { is: { language: string } } } } } } };
+function runningMatching(where: RunWhere) {
+  if (!running) return null;
+  if (where.OR) return running === "en" ? { id: "run-en" } : null; // English runs
+  if (where.flow) return where.flow.is.flowVersion.is.flow.is.language === running ? { id: `run-${running}` } : null;
+  return { id: `run-${running}` }; // any language
+}
 vi.mock("../src/prisma.js", () => ({ prisma: db }));
 
 let en: Server;
@@ -93,6 +103,7 @@ beforeEach(() => {
   flowListWheres.length = 0;
   settings.clear();
   tamilSays = "ta";
+  running = null;
 });
 
 describe("language addresses", () => {
@@ -223,5 +234,32 @@ describe("placing a call", () => {
     expect(tamil!.body).not.toHaveProperty("agent_id"); // the English backend's row id means nothing there
     expect(tamil!.body).not.toHaveProperty("language");
     expect(english!.lang).toBe("en");
+  });
+});
+
+describe("one language calls at a time", () => {
+  it("a run in any language blocks the others; its own language keeps the old message; nothing running = no block", async () => {
+    const { runInProgressReason } = await import("../src/domain/aiCallLanguages.js");
+    expect(await runInProgressReason("en")).toBeNull();
+    expect(await runInProgressReason("ta")).toBeNull();
+
+    running = "en";
+    expect(await runInProgressReason("en")).toBe("Another AI call run is still in progress — wait for it to finish or cancel it first");
+    expect(await runInProgressReason("ta")).toBe(
+      "English AI calls are running now — one language calls at a time. Wait for that run to finish or cancel it on the English pages",
+    );
+
+    running = "ta";
+    expect(await runInProgressReason("ta")).toBe("Another Tamil AI call run is still in progress — wait for it to finish or cancel it first");
+    expect(await runInProgressReason("en")).toMatch(/^Tamil AI calls are running now — one language calls at a time/);
+    expect(await runInProgressReason("hi")).toMatch(/^Tamil AI calls are running now/);
+  });
+
+  it("every language page can see which language is calling", async () => {
+    expect(await (await call("/api/ai-calls/running", "EDITOR")).json()).toEqual({ running: null });
+    running = "ta";
+    expect(await (await call("/api/ai-calls/running", "EDITOR")).json()).toEqual({ running: { runId: "run-ta", language: "ta" } });
+    running = "en";
+    expect(await (await call("/api/ai-calls/running", "EDITOR")).json()).toEqual({ running: { runId: "run-en", language: "en" } });
   });
 });

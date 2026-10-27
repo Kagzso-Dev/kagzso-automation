@@ -59,7 +59,7 @@ from app.services.llm_service import (
 )
 from app.services.plivo_service import PlivoError, PlivoService, get_plivo_service
 from app.services.twilio_service import TwilioService, get_twilio_service
-from app.services.sarvam_stt import STTError, STTProvider, STTStream, create_stt_provider
+from app.services.sarvam_stt import SarvamSTT, STTError, STTProvider, STTStream, create_stt_provider
 from app.services.session_store import SessionStore, get_session_store
 
 log = get_logger("voice.pipeline")
@@ -431,6 +431,15 @@ def set_providers(p: Optional[Providers]) -> None:
     _providers = p
 
 
+def stt_for_call(stt: STTProvider, variables: Mapping[str, Optional[str]], cfg: Settings = default_settings) -> STTProvider:
+    """The speech recogniser for one call: the shared one, except a "Pure" language-style flow while
+    SARVAM_STT_MODE_PURE is set - then its own copy with that mode (same connection pool)."""
+    mode = (cfg.SARVAM_STT_MODE_PURE or "").strip()
+    if not mode or variables.get("flow_language_style") != "pure" or not isinstance(stt, SarvamSTT) or mode == cfg.SARVAM_STT_MODE:
+        return stt
+    return SarvamSTT(cfg.model_copy(update={"SARVAM_STT_MODE": mode}), client=stt._client)
+
+
 # ===========================================================================
 # Status transitions
 # ===========================================================================
@@ -577,6 +586,8 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
                          "flow_silence_closing": resolved.flow.silence.closing}
             if resolved.flow.recording_notice:
                 flow_vars["flow_recording_notice"] = resolved.flow.recording_notice
+            if resolved.flow.language_style == "pure":  # else "mixed": the AI speaks as before
+                flow_vars["flow_language_style"] = "pure"
             if resolved.flow.identity is not None:  # else the built-in identity lines
                 flow_vars["flow_identity_question"] = resolved.flow.identity.question
                 if resolved.flow.identity.reask:
@@ -990,6 +1001,7 @@ class CallSession:
         self.cfg = cfg
         self.providers = providers or get_providers()
         self.tts = self.providers.tts_for_voice(ctx.voice_id)
+        self.stt = stt_for_call(self.providers.stt, ctx.variables, cfg)
         self.store = store or get_session_store()
         # Input noise reduction: speech is detected on cleaned audio with an adaptive floor and a
         # low minimum (no fixed loudness gate), so quiet voices are heard; anything that started
@@ -1169,7 +1181,7 @@ class CallSession:
 
     def _open_stt_stream(self) -> None:
         self._drop_stt_stream()
-        stream = self.providers.stt.open_stream()
+        stream = self.stt.open_stream()
         if stream is None:
             return
         stream.feed(self.endpointer.utterance_so_far())
@@ -1396,7 +1408,7 @@ class CallSession:
     async def _run_barge_check(self, audio_pcm: bytes, t1: float, t0: Optional[float] = None) -> None:
         with call_context(self.call_id):
             try:
-                result = await self.providers.stt.transcribe(self._stt_wav(audio_pcm))
+                result = await self.stt.transcribe(self._stt_wav(audio_pcm))
             except STTError as exc:
                 log.warning("STT failed on possible interruption (%s) - agent keeps talking", exc.kind)
                 return
@@ -1812,7 +1824,7 @@ class CallSession:
                 log.warning("Streamed STT failed (%s) - using the REST request", exc.kind)
             finally:
                 await stt_stream.aclose()
-        return await self.providers.stt.transcribe(self._stt_wav(audio_pcm))
+        return await self.stt.transcribe(self._stt_wav(audio_pcm))
 
     def _stt_wav(self, audio_pcm: bytes) -> bytes:
         """What STT hears for an utterance: the original audio, or (STT_NORMALIZE_AUDIO) a

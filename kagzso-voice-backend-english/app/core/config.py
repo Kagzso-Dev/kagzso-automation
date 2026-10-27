@@ -95,6 +95,9 @@ class Settings(BaseSettings):
     SARVAM_API_KEY: SecretStr = SecretStr("")
     SARVAM_STT_MODEL: str = "saaras:v3"
     SARVAM_STT_MODE: str = "transcribe"  # only used by saaras:v3
+    # STT mode for calls with a flow in "Pure" language style (saaras:v3, e.g. "transcribe").
+    # Empty (default) = SARVAM_STT_MODE for every call, whatever the flow's style.
+    SARVAM_STT_MODE_PURE: str = ""
     # Words Sarvam should expect (saaras:v4 REST only, up to 50, 64 chars each), comma-separated,
     # e.g. "Kexo,Kagzso,UiPath,automation,WhatsApp". Empty = none (today's behaviour).
     STT_KEYTERMS: str = ""

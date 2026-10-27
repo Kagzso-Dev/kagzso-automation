@@ -59,7 +59,7 @@ import { prisma } from "../../prisma.js";
 import { logger } from "../../logger.js";
 import { aiCallsConfig, configuredAiCallLanguages, isAiCallsConfigured, isCallFlowEditorEnabled } from "../../config/aiCalls.js";
 import { callsCountedTowardDailyCap, loadDoNotCallPhones } from "../../domain/aiCalls.js";
-import { aiCallLanguageBlockedReason, asAiCallLanguage, runningRunOf } from "../../domain/aiCallLanguages.js";
+import { aiCallLanguageBlockedReason, asAiCallLanguage, runInProgressReason } from "../../domain/aiCallLanguages.js";
 import { CallFlowError, definitionHash, deleteVersion, latestPublished, publishDraft, removeFlow, saveDraft } from "../../domain/callFlows.js";
 import { analyzeImport, changedBlockIds } from "../../domain/callFlowImport.js";
 import { addTestNumber, listTestNumbers, removeTestNumber, resolveTestNumber, TestNumberError } from "../../domain/callFlowTestNumbers.js";
@@ -499,11 +499,9 @@ callFlowsRouter.post(
     if ((await loadDoNotCallPhones(aiCallsConfig.defaultCountryCode)).has(phone)) {
       throw conflict("That number is on the do-not-call list");
     }
-    // One run at a time per language (the test call is a one-call run of the flow's language).
-    if (await runningRunOf(language)) {
-      const which = language === DEFAULT_AI_CALL_LANGUAGE ? "" : `${AI_CALL_LANGUAGE_NAMES[language]} `;
-      throw conflict(`Another ${which}AI call run is still in progress — wait for it to finish or cancel it first`);
-    }
+    // One run at a time, one language at a time (the test call is a one-call run of the flow's language).
+    const inProgress = await runInProgressReason(language);
+    if (inProgress) throw conflict(inProgress);
     // Plivo / Twilio can't reach the voice backend (e.g. ngrok stopped): the test call would ring, then go silent.
     const blocked = await voiceCallsBlockedReason(language);
     if (blocked) throw new AppError(503, blocked, "voice_unreachable");

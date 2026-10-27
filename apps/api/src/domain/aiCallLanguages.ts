@@ -8,7 +8,8 @@
 //     are hidden, new runs are refused and queued calls of a running run are cancelled before dialling.
 //   - Flows and saved customers have their own language column. A run's language is its pinned
 //     flow's; a run without a flow uses the default agent, which is English.
-//   - One run at a time per language (each language's calls are independent).
+//   - One run at a time, and one language at a time: while a run of any language is dialling, new
+//     runs and test calls in every language are refused (runInProgressReason). Nothing is cancelled.
 
 import type { Prisma } from "@prisma/client";
 import {
@@ -95,9 +96,30 @@ export function runLanguageWhere(language: AiCallLanguage): Prisma.AiCallRunWher
   return language === DEFAULT_AI_CALL_LANGUAGE ? { OR: [{ flow: { is: null } }, ofLanguage] } : ofLanguage;
 }
 
-/** The run of this language still dialling, if any (one run at a time per language). */
+/** The run of this language still dialling, if any. */
 export function runningRunOf(language: AiCallLanguage) {
   return prisma.aiCallRun.findFirst({ where: { status: "RUNNING", ...runLanguageWhere(language) }, select: { id: true } });
+}
+
+/** The run still dialling in any language, with its language, or null (one language calls at a time). */
+export async function runningRun(): Promise<{ runId: string; language: AiCallLanguage } | null> {
+  const run = await prisma.aiCallRun.findFirst({ where: { status: "RUNNING" }, orderBy: { createdAt: "asc" }, select: { id: true } });
+  return run ? { runId: run.id, language: await languageOfRun(run.id) } : null;
+}
+
+/**
+ * Why a new run or test call in `language` can't start while another run is dialling, or null.
+ * One language calls at a time: a run in another language blocks it too (nothing is cancelled).
+ */
+export async function runInProgressReason(language: AiCallLanguage): Promise<string | null> {
+  if (await runningRunOf(language)) {
+    const which = language === DEFAULT_AI_CALL_LANGUAGE ? "" : `${languageName(language)} `;
+    return `Another ${which}AI call run is still in progress — wait for it to finish or cancel it first`;
+  }
+  const other = await runningRun();
+  return other
+    ? `${languageName(other.language)} AI calls are running now — one language calls at a time. Wait for that run to finish or cancel it on the ${languageName(other.language)} pages`
+    : null;
 }
 
 /** A run's language: its pinned flow's, English for a run without a flow. */

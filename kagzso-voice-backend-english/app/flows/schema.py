@@ -179,6 +179,9 @@ class CallFlow(_Strict):
     recording_notice: Optional[str] = Field(None, max_length=300)
     # Identity question / re-ask spoken by the system; None = the built-in lines.
     identity: Optional[FlowIdentity] = None
+    # How a non-English flow speaks: "mixed" (Tanglish / Hinglish / Kanglish, everyday English words kept
+    # in English) or "pure". None = "mixed", what every flow did before this setting. English flows: None.
+    language_style: Optional[Literal["mixed", "pure"]] = None
 
     @field_validator("language")
     @classmethod
@@ -194,6 +197,12 @@ class CallFlow(_Strict):
     def _notice(cls, v: Optional[str]) -> Optional[str]:
         v = (v or "").strip()
         return check_text(v, multiline=False) if v else None
+
+    @model_validator(mode="after")
+    def _style(self) -> "CallFlow":
+        if self.language_style is not None and self.language == "en":
+            raise ValueError("an English flow has no language style")
+        return self
 
     @model_validator(mode="after")
     def _blocks(self) -> "CallFlow":

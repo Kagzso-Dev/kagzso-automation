@@ -12,7 +12,7 @@ import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
 import { aiCallsConfig } from "../config/aiCalls.js";
 import { callsCountedTowardDailyCap, loadDoNotCallPhones } from "../domain/aiCalls.js";
-import { aiCallLanguageBlockedReason, asAiCallLanguage, languageName, runningRunOf } from "../domain/aiCallLanguages.js";
+import { aiCallLanguageBlockedReason, asAiCallLanguage, languageName, runInProgressReason } from "../domain/aiCallLanguages.js";
 import { flowVersionForCallAgain } from "../domain/callFlows.js";
 import { addCustomerEvent } from "../domain/aiCallFollowups.js";
 import { linkCustomersToRun } from "../domain/aiCallCustomerSync.js";
@@ -50,8 +50,8 @@ export async function processAiCallFollowup(payload: Record<string, unknown>): P
     flowVersionId = version.id;
   }
 
-  // One run at a time per language (same rule as the Start button): wait for the current one.
-  if (await runningRunOf(language)) throw later(60_000);
+  // One run at a time, one language at a time (same rule as the Start button): wait for the current one.
+  if (await runInProgressReason(language)) throw later(60_000);
   if ((await callsCountedTowardDailyCap()) + 1 > aiCallsConfig.dailyCap) throw later(60 * 60_000);
 
   const run = await prisma.aiCallRun.create({

@@ -102,3 +102,38 @@ def test_preview_puts_real_silence_where_the_pause_markers_are(client, auth, fak
     assert frames[2205 * 2:(2205 + 11025) * 2] == b"\x00\x00" * 11025
     assert sorted(seen) == ["Good afternoon.", "Hi sir,"]  # the marker never reaches TTS
     assert client.post("/api/voices/preview", json={**body, "pauses": {"short_ms": 4000}}, headers=auth).status_code == 422
+
+
+def test_preview_tries_once_more_after_a_dropped_connection_and_explains_a_second_failure(client, auth, fakes, monkeypatch):
+    tries = []
+
+    def flaky(request: httpx.Request) -> httpx.Response:
+        tries.append(1)
+        if len(tries) == 1:
+            raise httpx.ConnectTimeout("connect timed out")
+        return httpx.Response(200, json={"audios": [base64.b64encode(_wav(b"\x01\x00" * 2205, 22050)).decode()]})
+
+    monkeypatch.setattr(settings, "SARVAM_API_KEY", type(settings.SARVAM_API_KEY)("sarvam-test-key"))
+    fakes.tts = SarvamTTS(settings, client=httpx.AsyncClient(base_url="https://api.sarvam.ai", transport=httpx.MockTransport(flaky)))
+    r = client.post("/api/voices/preview", json={"voice_id": "simran", "text": "Hello, am I speaking with Ragul?"}, headers=auth)
+    assert r.status_code == 200 and r.headers["content-type"] == "audio/wav" and len(tries) == 2
+
+    def down(request: httpx.Request) -> httpx.Response:
+        tries.append(1)
+        raise httpx.ConnectError("unreachable")
+
+    tries.clear()
+    fakes.tts = SarvamTTS(settings, client=httpx.AsyncClient(base_url="https://api.sarvam.ai", transport=httpx.MockTransport(down)))
+    r = client.post("/api/voices/preview", json={"voice_id": "roopa", "text": "Hello"}, headers=auth)
+    assert r.status_code == 502 and len(tries) == 2  # one retry only, then a clear JSON message
+    assert r.json() == {"detail": "Voice preview failed: Sarvam TTS connection error: ConnectError"}
+
+    def refused(request: httpx.Request) -> httpx.Response:
+        tries.append(1)
+        return httpx.Response(401, json={"error": {"message": "Invalid API key"}})
+
+    tries.clear()
+    fakes.tts = SarvamTTS(settings, client=httpx.AsyncClient(base_url="https://api.sarvam.ai", transport=httpx.MockTransport(refused)))
+    r = client.post("/api/voices/preview", json={"voice_id": "roopa", "text": "Hello"}, headers=auth)
+    assert r.status_code == 502 and len(tries) == 1  # a wrong key is not retried
+    assert r.json()["detail"].startswith("Voice preview failed:")

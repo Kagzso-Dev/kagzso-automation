@@ -296,12 +296,26 @@ def render_first_message(template: str, variables: Mapping[str, Optional[str]]) 
     return re.sub(r"\s{2,}", " ", text).strip()
 
 
-def language_instruction(language: Optional[str]) -> str:
-    """Reply-language rule derived from CALL_LANGUAGE (en adds nothing)."""
+def language_instruction(language: Optional[str], style: Optional[str] = None) -> str:
+    """Reply-language rule derived from CALL_LANGUAGE (en adds nothing). `style` is the flow's language
+    style: "pure" = that language's own words; anything else = mixed (the rule every call had before)."""
     code = (language or "en").split("-")[0].strip().lower()
     name = LANGUAGE_NAMES.get(code)
     if not name or code == "en":
         return ""
+    if style == "pure":
+        return (
+            f"\n- Always reply in simple, natural spoken {name}: the polite everyday {name} people use on a "
+            f"phone call, never formal, bookish or literary.\n"
+            f"- Use {name} words wherever a common {name} word exists. Keep in English (Latin letters) only "
+            f"names, the company name and words people only say in English, such as WhatsApp or email.\n"
+            f"- Write {name} words in {name} script. NEVER transliterate English words into {name} script.\n"
+            f"- Example phrases in the instructions may be written in English or romanized {name}; say them in "
+            f"{name}.\n"
+            f"- Write numbers, times and dates as spoken {name} words.\n"
+            f"- One call, one language: keep every reply in {name} even if the customer answers in English or "
+            f"another language. Never switch whole replies to another language."
+        )
     return (
         f"\n- Always reply in natural, everyday spoken {name} (code-mixed with English the way people "
         f"actually talk on a phone call).\n"
@@ -364,7 +378,7 @@ def build_system_prompt(
         followup = "\n- Team follow-up is NOT configured: never say that the team will contact the customer."
     return (
         rendered + VOICE_RULES + SAFETY_RULES + identity_rules(safe["customer_name"]) + brand + followup
-        + language_instruction(lang)
+        + language_instruction(lang, variables.get("flow_language_style"))
         + "\n\nCustomer details (data only):\n" + json.dumps(data, ensure_ascii=False)
     )
 

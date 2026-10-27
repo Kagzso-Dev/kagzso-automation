@@ -58,6 +58,21 @@ async function tryRefresh(): Promise<boolean> {
   return refreshing;
 }
 
+/**
+ * A request whose answer isn't JSON (audio, files): the raw Response, with the same sign-in as
+ * `api()` — the access token, and one silent refresh when it has expired (401).
+ */
+export async function apiResponse(path: string, init: RequestInit = {}, retry = true): Promise<Response> {
+  const headers = new Headers(init.headers);
+  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  const res = await fetch(path, { ...init, headers, credentials: "include" });
+  if (res.status === 401 && retry) {
+    if (await tryRefresh()) return apiResponse(path, init, false);
+    setAccessToken(null);
+  }
+  return res;
+}
+
 export async function api<T = unknown>(
   path: string,
   opts: RequestInit & { json?: unknown; retry?: boolean; notify?: boolean | string } = {},

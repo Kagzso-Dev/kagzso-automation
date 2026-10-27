@@ -38,7 +38,8 @@ import {
   aiCallLanguageBlockedReason,
   listAiCallLanguages,
   runLanguageWhere,
-  runningRunOf,
+  runInProgressReason,
+  runningRun,
   setAiCallLanguageEnabled,
 } from "../../domain/aiCallLanguages.js";
 import { aiCallFormatFromFilename, readAiCallSheet } from "../../domain/aiCallImport.js";
@@ -168,12 +169,9 @@ export async function planAndStartAiCallRun(
     throw badRequest("No callable customers — every row was invalid, a duplicate, or on the do-not-call list");
   }
   // Checked on the dry run too, so the confirm step never promises a run that can't start.
-  // One run at a time per language: each language has its own voice backend.
-  const running = await runningRunOf(language);
-  if (running) {
-    const which = language === DEFAULT_AI_CALL_LANGUAGE ? "" : `${AI_CALL_LANGUAGE_NAMES[language]} `;
-    throw conflict(`Another ${which}AI call run is still in progress — wait for it to finish or cancel it first`);
-  }
+  // One run at a time, one language at a time (a run in another language blocks this one too).
+  const inProgress = await runInProgressReason(language);
+  if (inProgress) throw conflict(inProgress);
   // Plivo / Twilio can't reach the voice backend (e.g. ngrok stopped): every call would ring, then go silent.
   const blocked = await voiceCallsBlockedReason(language);
   if (blocked) throw new AppError(503, blocked, "voice_unreachable");
@@ -245,6 +243,15 @@ aiCallsRouter.post(
     const body = startAiCallsInput.parse(req.body);
     const out = await planAndStartAiCallRun(body, req.user!);
     res.status(out.status).json(out.json);
+  }),
+);
+
+// The language calling right now (any language's run still dialling), for the note on every language page.
+aiCallsRouter.get(
+  "/running",
+  readLimiter,
+  wrap(async (_req, res) => {
+    res.json({ running: await runningRun() });
   }),
 );
 

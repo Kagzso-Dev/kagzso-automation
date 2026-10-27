@@ -74,12 +74,22 @@ async def preview_voice(body: PreviewRequest) -> Response:
     tts = get_providers().tts_for_voice(voice)
     if not hasattr(tts, "synthesize_preview"):
         raise HTTPException(503, "Voice previews need the Sarvam text-to-speech provider")
-    try:
+    async def synthesize() -> bytes:
         parts = split_pauses(text, (body.pauses or FlowPauses()).model_dump()) if has_pause_markers(text) else []
         if len(parts) > 1:
-            wav = await _preview_with_pauses(tts, text, body.pauses or FlowPauses())
-        else:  # no markers (or only at the start / end): the line as before, markers never spoken
-            wav = await tts.synthesize_preview(parts[0][0] if parts else text)
+            return await _preview_with_pauses(tts, text, body.pauses or FlowPauses())
+        # no markers (or only at the start / end): the line as before, markers never spoken
+        return await tts.synthesize_preview(parts[0][0] if parts else text)
+
+    try:
+        try:
+            wav = await synthesize()
+        except TTSError as exc:
+            # A dropped or slow connection to Sarvam is usually gone a moment later: try once more.
+            if exc.kind != "timeout" and "connection error" not in str(exc):
+                raise
+            log.warning("Voice preview: %s - trying once more", exc)
+            wav = await synthesize()
     except TTSError as exc:
         code = {"auth": 502, "rate_limit": 429, "timeout": 504, "not_configured": 503}.get(exc.kind, 502)
         raise HTTPException(code, f"Voice preview failed: {exc}") from None

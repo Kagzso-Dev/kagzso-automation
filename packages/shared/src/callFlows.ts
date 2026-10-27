@@ -190,6 +190,8 @@ export const callFlowDefinition = z
       .object({ question: identityLine, reask: identityLine.optional() })
       .strict()
       .optional(),
+    /** Non-English flows: "mixed" (Tanglish / Hinglish / Kanglish) or "pure". Absent = "mixed", as before. */
+    language_style: z.enum(["mixed", "pure"]).optional(),
     transfer: z
       .object({
         // Live transfer is not implemented yet: the number is stored only.
@@ -203,6 +205,9 @@ export const callFlowDefinition = z
   })
   .strict()
   .superRefine((flow, ctx) => {
+    if (flow.language_style && flow.language === DEFAULT_AI_CALL_LANGUAGE) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["language_style"], message: "An English flow has no language style" });
+    }
     const ids = flow.blocks.map((b) => b.id);
     const dupes = [...new Set(ids.filter((id, i) => ids.indexOf(id) !== i))];
     if (dupes.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["blocks"], message: `Duplicate block id(s): ${dupes.join(", ")}` });

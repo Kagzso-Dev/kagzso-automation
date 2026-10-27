@@ -17,6 +17,7 @@ let seq = 0;
 let missing = false; // simulate "migration 0023 not applied yet"
 const runs: { data: { skipped: { greetingDelaySec?: number }; logs: { create: { phone: string } } } }[] = [];
 const dnc = new Set<string>();
+let tamilRunning = false; // a Tamil run still dialling (one language calls at a time)
 
 const missingErr = () => new Prisma.PrismaClientKnownRequestError("table does not exist", { code: "P2021", clientVersion: "test" });
 const guard = () => {
@@ -44,11 +45,13 @@ const db = {
     },
   },
   callFlow: { findUnique: async () => ({ id: "f1", archivedAt: null }) },
+  aiCallRunFlow: { findUnique: async () => ({ flowVersion: { flow: { language: "ta" } } }) },
   callFlowVersion: {
     findUnique: async () => ({ id: "ver1", version: 1, status: "DRAFT", definition: nila }),
   },
   aiCallRun: {
-    findFirst: async () => null,
+    // Only the any-language lookup ({ status }) sees the Tamil run; this English flow's own lookup has a language filter.
+    findFirst: async ({ where }: { where: Record<string, unknown> }) => (tamilRunning && Object.keys(where).length === 1 ? { id: "run-ta" } : null),
     create: async (args: (typeof runs)[number]) => {
       runs.push(args);
       return { id: `run${runs.length}` };
@@ -110,6 +113,7 @@ beforeEach(() => {
   seq = 0;
   missing = false;
   dnc.clear();
+  tamilRunning = false;
   readyBody = null;
 });
 
@@ -235,6 +239,20 @@ describe("test call allowlist", () => {
     const res = await testCall(id, "u-a4");
     expect(res.status).toBe(409);
     expect(await errorOf(res)).toMatch(/do-not-call/);
+  });
+
+  it("one language calls at a time: a Tamil run in progress blocks an English test call (nothing is cancelled)", async () => {
+    const { id } = (await (await add("9876543211")).json()) as Item;
+    tamilRunning = true;
+    const before = runs.length;
+    const res = await testCall(id, "u-a9");
+    expect(res.status).toBe(409);
+    expect(await errorOf(res)).toBe(
+      "Tamil AI calls are running now — one language calls at a time. Wait for that run to finish or cancel it on the Tamil pages",
+    );
+    expect(runs.length).toBe(before); // no run, no call
+    tamilRunning = false;
+    expect((await testCall(id, "u-a9")).status).toBe(201); // once it has finished
   });
 
   it("env fallback: AI_CALL_FLOW_TEST_NUMBERS still works, even without the new table", async () => {

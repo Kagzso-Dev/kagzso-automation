@@ -20,6 +20,7 @@ import { useAuth } from "../lib/auth";
 import { useAiCallsConfig, type AiCallsConfig } from "../lib/aiCalls";
 import { isEnglish, titleFor, useAiCallLanguage, useLanguageReady, withLanguage } from "../lib/aiCallLanguage";
 import { AiCallLanguageNotice } from "./AiCallLanguageNotice";
+import { RunningCallsNote } from "./RunningCallsNote";
 import {
   downloadSample,
   openLanguages,
@@ -169,6 +170,7 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
       />
 
       <AiCallLanguageNotice>You can already add and import this language's customers; calling them starts working once it is.</AiCallLanguageNotice>
+      <RunningCallsNote />
 
       <div className="mb-4 flex flex-col gap-2 sm:flex-row">
         <input
