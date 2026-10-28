@@ -288,13 +288,6 @@ def opening_line(first_message: str, variables: Mapping[str, Any]) -> str:
     return render_first_message(first_message, variables)
 
 
-def greeting_needs_name(first_message: str) -> bool:
-    """The opening line, or the identity question right after it, speaks the customer's name.
-    Without a name the call still goes ahead (opening_line, no identity question)."""
-    return ("customer_name" in first_message or bool(_NAME_ALIAS_RE.search(first_message))
-            or identity_after_greeting(first_message))
-
-
 def identity_lines(variables: Mapping[str, Any], question: Optional[str] = None,
                    reask: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
     """The identity question and its re-ask as spoken: a call flow's own lines (templates) when it
