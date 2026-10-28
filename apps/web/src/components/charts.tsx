@@ -18,7 +18,6 @@ export const SERIES = {
   opened: "#eb6834",
   clicked: "#009a80",
 } as const;
-export type SeriesKey = keyof typeof SERIES;
 
 const STATUS = {
   good: "#009a80",

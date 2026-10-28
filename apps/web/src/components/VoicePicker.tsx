@@ -20,7 +20,6 @@ import type { VoiceOption } from "../lib/callFlows";
  * customer hears first), or a line in that language while the flow can't be previewed.
  */
 
-export const DEFAULT_SAMPLE = AI_CALL_VOICE_SAMPLES.en;
 export const SAMPLE_MAX = 200;
 
 /** A line for the sample box: whitespace collapsed, at most 200 characters, cut after a sentence (or word) when longer. */

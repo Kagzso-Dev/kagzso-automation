@@ -1,16 +1,10 @@
 let accessToken: string | null = null;
-const listeners = new Set<(t: string | null) => void>();
 
 export function setAccessToken(token: string | null) {
   accessToken = token;
-  listeners.forEach((l) => l(token));
 }
 export function getAccessToken() {
   return accessToken;
-}
-export function onTokenChange(fn: (t: string | null) => void) {
-  listeners.add(fn);
-  return () => listeners.delete(fn);
 }
 
 /**
