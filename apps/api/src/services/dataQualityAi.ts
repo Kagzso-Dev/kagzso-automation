@@ -128,11 +128,6 @@ export async function checkAi(s: AiSettings = dataQualityConfig.ai): Promise<AiH
   return health;
 }
 
-/** Forget the cached cloud health (tests). */
-export function resetAiHealthCache(): void {
-  cached = null;
-}
-
 /** One generation that must answer with a JSON object; returns it parsed. Throws AiError. */
 export async function generateJson(prompt: string, s: AiSettings = dataQualityConfig.ai): Promise<unknown> {
   const json = { "Content-Type": "application/json" };
