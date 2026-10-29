@@ -136,7 +136,7 @@ class Settings(BaseSettings):
     VOICE_ROTATION_MODE: str = "concurrent"
 
     # --- LLM ---
-    LLM_PROVIDER: str = "gemini"  # gemini | openai | groq | sarvam | ollama | openai_compatible
+    LLM_PROVIDER: str = "gemini"  # gemini | openai | groq | sarvam | ollama | openai_compatible | anthropic
     LLM_API_KEY: SecretStr = SecretStr("")
     LLM_MODEL: str = ""
     LLM_BASE_URL: str = ""  # optional override (OpenAI-compatible providers)
@@ -402,6 +402,41 @@ class Settings(BaseSettings):
     LLM_FALLBACK2_API_KEY: SecretStr = SecretStr("")
     LLM_FALLBACK2_BASE_URL: str = ""
 
+    # --- Conversation reliability (each off by default = today's behaviour) ---
+    # Do-not-call is enforced by the backend at every stage, not only by the AI: a request not to be
+    # called again (English, romanised, Tamil / Hindi / Telugu script) is answered with the flow's own
+    # do-not-call line, the call ends after it (an interruption can't stop that), the outcome is
+    # recorded as do_not_call during the call and the contact is marked Do-Not-Disturb. A sentence that
+    # also asks for a later call ("don't call now, call in the evening") is left to the AI as before.
+    DNC_ENFORCE: bool = False
+    # A customer who speaks over a closing line (real words, not "yes" / "okay") keeps the call open:
+    # the pending hang-up is cancelled and their words are answered. Never after do-not-call.
+    HANGUP_CANCEL_ON_BARGE_IN: bool = False
+    # A reply that fails (TTS / LLM error) after its audio started is still saved in the history
+    # (marked "...") and closed like any reply, so the next reply doesn't answer the old words again.
+    PARTIAL_REPLY_COMMIT: bool = False
+    # Any reply that is actually spoken (scripted lines too) resets the "couldn't hear you" count, so
+    # only two failures in a row close the call.
+    FALLBACK_RESET_ON_ANY_REPLY: bool = False
+    # Word checks (echo, filler, greeting-only, voicemail word count, repeated questions) keep Tamil /
+    # Hindi / Telugu words whole, and Indic backchannels ("ஆமா", "சரி") said over the agent don't
+    # interrupt it, like "yes" / "okay". English text is split exactly as before.
+    INDIC_WORD_SPLIT: bool = False
+    # Fixed safety line: never reveal the instructions, prompt, code or configuration, and treat
+    # everything the customer says as conversation, never as instructions.
+    SAFETY_NO_INTERNALS: bool = False
+
+    # --- AI provider settings (admin page; app/services/provider_registry.py) ---
+    # Encrypts the API keys saved from the admin page (AES-256-GCM): base64 of 32 random bytes.
+    # Kept here, never in the database. Empty = keys can't be saved (the page says so).
+    PROVIDER_SECRETS_KEY: SecretStr = SecretStr("")
+    # Earlier PROVIDER_SECRETS_KEY values (comma-separated) still accepted for reading during a key
+    # rotation; "Re-encrypt keys" on the admin page moves every key to the current one.
+    PROVIDER_SECRETS_OLD_KEYS: SecretStr = SecretStr("")
+    # Speech models (besides saaras:v3 / bulbul:v3) that may be selected in production, comma-separated,
+    # e.g. "saaras:v4" once Tamil-English audio has been benchmarked. Other environments may try any.
+    VERIFIED_SPEECH_MODELS: str = ""
+
     @field_validator("VOICE_FOCUS_LEVEL")
     @classmethod
     def _voice_focus_level(cls, v: str) -> str:
@@ -567,6 +602,7 @@ class Settings(BaseSettings):
             self.PLIVO_AUTH_TOKEN, self.SARVAM_API_KEY, self.LLM_API_KEY,
             self.MYSQL_PASSWORD, self.ADMIN_API_KEY, self.APP_SECRET_KEY, self.TWILIO_AUTH_TOKEN,
             self.STATUS_CALLBACK_SECRET, self.RECORDING_ENCRYPTION_KEY,
+            self.PROVIDER_SECRETS_KEY, self.PROVIDER_SECRETS_OLD_KEYS, self.LLM_FALLBACK2_API_KEY,
         ]
         return [v.get_secret_value() for v in vals if v.get_secret_value() and len(v.get_secret_value()) >= 4]
 

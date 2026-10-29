@@ -25,7 +25,7 @@ from app.db import repositories as repo
 from app.db.database import session_factory
 from app.db.models import CallStatus
 from app.services import audio_service as audio
-from app.services import call_service
+from app.services import call_service, provider_registry
 from app.services.session_store import get_session_store
 
 log = get_logger("plivo.stream")
@@ -120,7 +120,9 @@ async def plivo_media(ws: WebSocket, call_id: Optional[str] = Query(None), token
                             )
                     await get_session_store().set_fields(resolved_call_id, stream_id=stream_id,
                                                          provider_call_id=ctx.provider_call_id or "")
-                    session = call_service.CallSession(ctx, PlivoMediaSender(ws, stream_id))
+                    # One provider snapshot for the whole call (admin AI provider settings, else .env).
+                    session = call_service.CallSession(ctx, PlivoMediaSender(ws, stream_id),
+                                                       providers=await provider_registry.providers_for_call())
                     await session.start()
 
             elif event == "media":

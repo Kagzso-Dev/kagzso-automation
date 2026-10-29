@@ -35,6 +35,7 @@ from app.db.models import FINAL_CALL_STATUSES, LOCKED_OUTCOMES, Call, CallOutcom
 from app.flows.loader import FlowError, resolve_flow_agent
 from app.schemas.calls import OutboundCallRequest
 from app.services import audio_service as audio
+from app.services import provider_registry
 from app.services import status_callback
 from app.services import recording
 from app.services.noise_suppression import InputCleaner
@@ -111,8 +112,9 @@ _FILLER_WORDS = {
 
 
 def is_filler(text: str) -> bool:
-    words = [w for w in "".join(c if c.isalnum() or c.isspace() else " " for c in text.lower()).split()]
-    return 0 < len(words) <= 7 and all(w in _FILLER_WORDS for w in words)
+    words = _words(text)
+    allowed = _FILLER_WORDS | rs.INDIC_BACKCHANNELS if default_settings.INDIC_WORD_SPLIT else _FILLER_WORDS
+    return 0 < len(words) <= 7 and all(w in allowed for w in words)
 
 
 # A bare "Hello?" in answer to "Hi, is this <name>?" is not a yes - the customer is
@@ -210,12 +212,42 @@ def needs_script_at_opening(text: str) -> bool:
     return bool(_DO_NOT_CALL_RE.search(text) or _AI_QUESTION_RE.search(text))
 
 
+# DNC_ENFORCE: the same request in Tamil, Hindi and Telugu script (code-mixed STT writes "call" / "phone"
+# in English letters). NEEDS NATIVE-SPEAKER REVIEW before DNC_ENFORCE is switched on for those languages.
+_DO_NOT_CALL_INDIC_RE = re.compile(
+    r"(?:call|phone|\u0b95\u0bbe\u0bb2\u0bcd|\u0baa\u0bcb\u0ba9\u0bcd)\s*-?\s*(?:\u0baa\u0ba3\u0bcd\u0ba3\u0bbe\u0ba4\u0bc0\u0b99\u0bcd\u0b95|\u0baa\u0ba3\u0bcd\u0ba3\u0bbe\u0ba4\u0bc0\u0bb0\u0bcd\u0b95\u0bb3\u0bcd|\u0baa\u0ba3\u0bcd\u0ba3\s*\u0bb5\u0bc7\u0ba3\u0bcd\u0b9f\u0bbe\u0bae\u0bcd|\u0baa\u0ba3\u0bcd\u0ba3\s*\u0bb5\u0bc7\u0ba3\u0bbe\u0bae\u0bcd)"
+    r"|\u0b95\u0bc2\u0baa\u0bcd\u0baa\u0bbf\u0b9f\u0bbe\u0ba4\u0bc0\u0b99\u0bcd\u0b95|\u0b95\u0bc2\u0baa\u0bcd\u0baa\u0bbf\u0b9f\s*\u0bb5\u0bc7\u0ba3\u0bcd\u0b9f\u0bbe\u0bae\u0bcd|\u0b95\u0bc2\u0baa\u0bcd\u0baa\u0bbf\u0b9f\s*\u0bb5\u0bc7\u0ba3\u0bbe\u0bae\u0bcd|\u0ba4\u0bca\u0ba8\u0bcd\u0ba4\u0bb0\u0bb5\u0bc1\s*\u0baa\u0ba3\u0bcd\u0ba3\u0bbe\u0ba4\u0bc0\u0b99\u0bcd\u0b95"
+    r"|(?:call|phone|\u0915\u0949\u0932|\u092b\u094b\u0928|\u092b\u093c\u094b\u0928)\s*(?:\u092e\u0924|\u0928\u093e)\s*(?:\u0915\u0930\u094b|\u0915\u0930\u0928\u093e|\u0915\u0930\u0947\u0902|\u0915\u0940\u091c\u093f\u090f|\u0915\u0930\u093f\u090f|\u0915\u0930\u093f\u092f\u0947\u0917\u093e)"
+    r"|(?:call|phone|\u0c15\u0c3e\u0c32\u0c4d|\u0c2b\u0c4b\u0c28\u0c4d)\s*(?:\u0c1a\u0c47\u0c2f\u0c15\u0c02\u0c21\u0c3f|\u0c1a\u0c47\u0c2f\u0c4a\u0c26\u0c4d\u0c26\u0c41|\u0c1a\u0c47\u0c2f\u0c35\u0c26\u0c4d\u0c26\u0c41)",
+    re.IGNORECASE,
+)
+# "Don't call me now" / "don't call now, call in the evening" is busy or a callback, not do-not-call:
+# DNC_ENFORCE leaves those to the AI, as before.
+_NOT_NOW_RE = re.compile(
+    r"\b(now|later|evening|tomorrow|morning|afternoon|tonight|after|next\s+week|some\s*other\s+time)\b"
+    r"|\u0b87\u0baa\u0bcd\u0baa\u0bcb|\u0b87\u0baa\u0bcd\u0baa|\u0b85\u0baa\u0bcd\u0baa\u0bc1\u0bb1\u0bae\u0bcd|\u0b85\u0baa\u0bcd\u0baa\u0bb1\u0bae\u0bcd|\u0baa\u0bbf\u0bb1\u0b95\u0bc1|\u0b9a\u0bbe\u0baf\u0b99\u0bcd\u0b95\u0bbe\u0bb2\u0bae\u0bcd|\u0ba8\u0bbe\u0bb3\u0bc8\u0b95\u0bcd\u0b95\u0bc1|\u0ba8\u0bbe\u0bb3\u0bc8|\u0b95\u0bbe\u0bb2\u0bc8\u0baf\u0bbf\u0bb2|\u0bae\u0ba4\u0bbf\u0baf\u0bae\u0bcd"
+    r"|\u0905\u092d\u0940|\u092c\u093e\u0926\s*\u092e\u0947\u0902|\u0915\u0932|\u0936\u093e\u092e|\u0938\u0941\u092c\u0939"
+    r"|\u0c07\u0c2a\u0c4d\u0c2a\u0c41\u0c21\u0c41|\u0c24\u0c30\u0c4d\u0c35\u0c3e\u0c24|\u0c30\u0c47\u0c2a\u0c41|\u0c38\u0c3e\u0c2f\u0c02\u0c24\u0c4d\u0c30\u0c02",
+    re.IGNORECASE,
+)
+
+
+def is_do_not_call(text: str) -> bool:
+    """DNC_ENFORCE: a request never to be called again (English, romanised, Tamil / Hindi / Telugu script),
+    unless the same words only mean "not now" or ask for a later call."""
+    text = text.replace("\u2019", "'")
+    asked = _DO_NOT_CALL_RE.search(text) or _DO_NOT_CALL_INDIC_RE.search(text)
+    return bool(asked) and not _NOT_NOW_RE.search(text)
+
+
 def is_greeting_only(text: str) -> bool:
-    words = "".join(c if c.isalnum() or c.isspace() else " " for c in text.lower()).split()
+    words = _words(text)
     return 0 < len(words) <= 3 and all(w in _GREETING_ONLY_WORDS for w in words)
 
 
 def _words(text: str) -> List[str]:
+    if default_settings.INDIC_WORD_SPLIT:
+        return vf.words(text)  # the same words for English text; Tamil / Hindi words stay whole
     return "".join(c if c.isalnum() or c.isspace() else " " for c in text.lower()).split()
 
 
@@ -320,7 +352,10 @@ _WORDS_RE = re.compile(r"[a-z0-9']+")
 
 
 def _question_words(text: str) -> List[str]:
-    return _WORDS_RE.findall(text.lower())
+    words = _WORDS_RE.findall(text.lower())
+    if default_settings.INDIC_WORD_SPLIT:  # English words exactly as before, plus the Indic-script words
+        words += [w for w in vf.words(text) if not w.isascii()]
+    return words
 
 
 def asked_questions(lines: List[str]) -> List[List[str]]:
@@ -505,7 +540,8 @@ async def synthesize_line(tts: TTSProvider, text: str, pauses: Optional[Mapping[
 
 async def prerender_greeting(call_id: str, text: str, voice_id: Optional[str], pace: Optional[float] = None,
                              pauses: Optional[Mapping[str, int]] = None) -> None:
-    tts = get_providers().tts_for_voice(voice_id)
+    # The same speech settings the call itself will use (admin AI provider settings, else .env).
+    tts = (await provider_registry.providers_for_call()).tts_for_voice(voice_id)
     try:
         mulaw = await asyncio.wait_for(synthesize_line(tts, text, pauses, pace), timeout=15)
     except Exception as exc:  # live TTS still works; never fail the call over this
@@ -592,6 +628,8 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
                     flow_vars["flow_identity_reask"] = resolved.flow.identity.reask
             if cfg.KEY_LINES_SCRIPTED:  # else the AI says them, as before
                 flow_vars.update({f"flow_key_{k}": v for k, v in rs.flow_key_lines(resolved.flow).items()})
+            if cfg.DNC_ENFORCE and (dnc_line := rs.flow_dnc_line(resolved.flow)):
+                flow_vars["flow_dnc_line"] = dnc_line  # spoken word for word on a do-not-call request
             if resolved.flow.pauses is not None:  # else the default pause lengths
                 flow_vars.update({f"flow_pause_{k}": str(v) for k, v in resolved.flow.pauses.model_dump().items()})
             time_limit = min(resolved.flow.limits.max_duration_sec, cfg.MAX_CALL_DURATION_SECONDS)
@@ -925,6 +963,8 @@ class CallContextData:
     # KEY_LINES_SCRIPTED: the flow's introduction + permission line and company introduction (rendered).
     key_permission: Optional[str] = None
     key_intro: Optional[str] = None
+    # DNC_ENFORCE: the flow's do-not-call line (rendered); None = the AI says its closing line.
+    dnc_line: Optional[str] = None
 
 
 @dataclass
@@ -1011,6 +1051,7 @@ class _TurnState:
     audio_ms: float = 0.0  # audio sent for it so far
     heard: Optional[int] = None  # BARGE_EARLY_STOP: sentences (roughly) heard before an interruption
     committed: Optional[str] = None  # the reply as saved in the history
+    fallback: bool = False  # the reply is the "couldn't hear you" line (FALLBACK_RESET_ON_ANY_REPLY)
 
 
 ACTIVE_SESSIONS: Dict[str, "CallSession"] = {}
@@ -1119,6 +1160,8 @@ class CallSession:
         self._silence_prompts = 0
         self._silence_task: Optional[asyncio.Task] = None
         self.end_call_requested = False
+        self._end_locked = False  # DNC_ENFORCE: the call ends after the do-not-call line, whatever is said next
+        self._dnc_recorded = False
         self._closed = False
         self._agent_audio_end = 0.0  # when the agent's audio last stopped (echo tail)
         self._speaking_turn: Optional[_TurnState] = None  # the line the agent is / was last saying
@@ -1283,6 +1326,8 @@ class CallSession:
             lines += list(self.key_lines())
         if self.cfg.THINKING_ACK:
             lines += self.ack_lines()
+        if self.cfg.DNC_ENFORCE and self.ctx.dnc_line:
+            lines.append(self.ctx.dnc_line)
         return list(dict.fromkeys(line for line in lines if line))
 
     def ack_lines(self) -> List[str]:
@@ -1350,7 +1395,7 @@ class CallSession:
                     self._last_activity = time.monotonic()
                     self._silence_prompts = 0
                     self._identity_silence_over = self._identity_asked
-                    if self._hangup_task is None:
+                    if self._hangup_task is None and not self._end_locked:
                         self.end_call_requested = False  # customer is talking again; keep the call open
                 if (self._greeting_task and not self._greeting_task.done() and not self._first_speech_mode
                         and self.greeting_delay is None):
@@ -1635,7 +1680,8 @@ class CallSession:
             # Over a time-of-day opening or its identity question any words are held (never
             # discarded, never talked over) - except do-not-call / AI questions, which interrupt.
             held_ok = is_filler(result["text"]) or (identity_after_greeting(self.ctx.first_message)
-                                                     and not needs_script_at_opening(result["text"]))
+                                                     and not needs_script_at_opening(result["text"])
+                                                     and not (self.cfg.DNC_ENFORCE and is_do_not_call(result["text"])))
             if self.ai_busy and held_ok and self._identity_question_playing():
                 # "Yes" said over "Hi, is this <name>?" is the answer, not a backchannel: keep it
                 # and answer once the question has finished playing.
@@ -1722,7 +1768,7 @@ class CallSession:
         self._last_activity = time.monotonic()
         self._silence_prompts = 0
         self._identity_silence_over = self._identity_asked  # cancels the identity-silence timers
-        if self._hangup_task is None:
+        if self._hangup_task is None and not self._end_locked:
             self.end_call_requested = False  # customer is talking again; keep the call open
 
     def _after_noise(self) -> None:
@@ -1737,6 +1783,15 @@ class CallSession:
         log.info("Barge-in: customer interrupted, stopping playback")
         if self.cfg.BARGE_EARLY_STOP and self._speaking_turn is not None and self.ai_busy:
             self._note_heard(self._speaking_turn)
+        hangup = self._hangup_task
+        if (self.cfg.HANGUP_CANCEL_ON_BARGE_IN and not self._end_locked and hangup is not None
+                and not hangup.done()):
+            # Words over the closing line: the call stays open and they are answered.
+            hangup.cancel()
+            self._hangup_task = None
+            self.end_call_requested = False
+            log.info("Customer spoke over the closing line - hang-up cancelled")
+            self._event("hangup_cancelled", {"turn": self.turn_index})
         task = self._turn_task
         if task and not task.done():
             task.cancel()
@@ -1984,7 +2039,7 @@ class CallSession:
             self._customer_texts.append(text)
             log.info("Customer said (before the greeting): %s", text[:200])
             self._persist(lambda db, t=text, c=result.get("confidence"): repo.add_transcript(db, self.call_id, "customer", t, confidence=c))
-            if not needs_script_at_opening(text):
+            if not (needs_script_at_opening(text) or (self.cfg.DNC_ENFORCE and is_do_not_call(text))):
                 return
             log.info("First words need the script - answering them instead of the greeting")
             self._event("greeting_skipped", {"reason": "script"})
@@ -2217,7 +2272,9 @@ class CallSession:
                     st.user_text = f"{self._pending_user_text} {text}".strip()
                     st.record_user = True
                     self._pending_user_text = st.user_text  # cleared once a reply is delivered
-                    if not self._greeted and self._first_speech_mode and needs_script_at_opening(text):
+                    if self.cfg.DNC_ENFORCE and is_do_not_call(text):
+                        self._do_not_call(st)  # any stage: highest priority, before every scripted line
+                    elif not self._greeted and self._first_speech_mode and needs_script_at_opening(text):
                         # Do-not-call / "are you a bot?" before the greeting: the script answers it
                         # (safety rules keep priority) and the greeting is skipped.
                         log.info("First words need the script - greeting skipped")
@@ -2280,6 +2337,8 @@ class CallSession:
                     await self._speak_recording_notice(st)
                 m.t_sound = st.first_sound
                 self._commit_turn(st, interrupted=False)
+                if self.cfg.FALLBACK_RESET_ON_ANY_REPLY and st.audio_started and not st.fallback:
+                    self._fallback_streak = 0  # a reply got through (scripted lines too)
                 if m.t6:
                     log.info("Total response latency: %dms", _ms(m.t1, m.t6))
                 row: Dict[str, Any] = m.as_row()
@@ -2306,6 +2365,11 @@ class CallSession:
                     await self._recover_tts_failure(st, m, turn)
                 elif stage != "tts" and not st.audio_started:
                     await self._speak_fallback(st, f"{stage}_{exc.kind}")
+                elif st.audio_started and self.cfg.PARTIAL_REPLY_COMMIT and not self._closed:
+                    # Part of the reply already played: keep it (and the customer's words) in the history,
+                    # so the next reply doesn't answer the same words again, and close it like any reply.
+                    self._commit_turn(st, interrupted=True)
+                    await self._after_reply()
             except Exception as exc:  # never kill the call on an unexpected bug
                 log.exception("Unexpected pipeline error: %s", type(exc).__name__)
                 self._event("pipeline_error", {"stage": "unknown", "kind": type(exc).__name__, "turn": turn})
@@ -2382,6 +2446,28 @@ class CallSession:
         log.info("Clear yes - the flow's %s line is spoken word for word", which)
         self._event("key_line", {"turn": self.turn_index, "line": which})
         return line
+
+    def _do_not_call(self, st: _TurnState) -> None:
+        """DNC_ENFORCE: the flow's do-not-call line word for word (without one, the AI's reply, which the
+        safety rules make a short closing line), then the call ends whatever is said next. do_not_call
+        (a locked outcome the classifier can't change) and Do-Not-Disturb are recorded now, not after the call."""
+        log.info("Do-not-call request - backend enforced: closing line, then hang-up")
+        self._event("do_not_call_detected", {"turn": self.turn_index})
+        self._opening_taken = self._greeted = True
+        self.end_call_requested = self._end_locked = True
+        if self.ctx.dnc_line:
+            st.scripted = self.ctx.dnc_line
+        if not self._dnc_recorded:
+            self._dnc_recorded = True
+            self._persist(self._record_do_not_call)
+
+    async def _record_do_not_call(self, db: AsyncSession) -> None:
+        call = await repo.get_call(db, self.call_id)
+        if call is None:
+            return
+        await repo.update_call(db, call, outcome=CallOutcome.do_not_call.value)
+        await repo.set_contact_dnd(db, call.contact_id, True)
+        log.info("Contact marked Do-Not-Call (during the call)")
 
     def ai_busy_after_turn(self) -> bool:
         return time.monotonic() < self._playback_until
@@ -2497,6 +2583,7 @@ class CallSession:
                     self._last_opening = opening
             if not st.spoken:
                 log.warning("LLM returned no speakable text - using fallback")
+                st.fallback = True
                 text, close = self._next_fallback_line("llm_empty")
                 if close:
                     self.end_call_requested = True
@@ -2639,6 +2726,8 @@ class CallSession:
             st.spoken = [text]
             await self._play(mulaw, st)
             self._commit_turn(st, interrupted=False)
+            if self.cfg.FALLBACK_RESET_ON_ANY_REPLY and not st.fallback:
+                self._fallback_streak = 0
             self._event("tts_recovered", {"turn": turn})
             log.info("Recovered from TTS failure with one-shot synthesis")
             await self._after_reply()
@@ -2789,4 +2878,6 @@ async def load_call_context(call_id: str) -> Optional[CallContextData]:
             if variables.get("flow_key_permission") else None,
             key_intro=render_first_message(variables["flow_key_intro"], variables) or None
             if variables.get("flow_key_intro") else None,
+            dnc_line=render_first_message(variables["flow_dnc_line"], variables) or None
+            if variables.get("flow_dnc_line") else None,
         )

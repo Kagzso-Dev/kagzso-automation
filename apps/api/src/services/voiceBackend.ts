@@ -7,7 +7,15 @@
 // language last, English by default, so English callers work exactly as before. A call's
 // status, recording and so on are read from the backend of the language that placed it.
 
-import { AI_CALL_LANGUAGE_NAMES, DEFAULT_AI_CALL_LANGUAGE, type AiCallLanguage } from "@dispatch/shared";
+import {
+  AI_CALL_LANGUAGE_NAMES,
+  DEFAULT_AI_CALL_LANGUAGE,
+  type AiCallLanguage,
+  type AiProviderId,
+  type AiProviderSelectionInput,
+  type AiProviderSettingsView,
+  type AiProviderUpdateInput,
+} from "@dispatch/shared";
 import { aiCallsConfig, isAiCallsConfigured, voiceBackendFor, type VoiceBackendTarget } from "../config/aiCalls.js";
 
 export class VoiceBackendError extends Error {
@@ -16,6 +24,8 @@ export class VoiceBackendError extends Error {
     public readonly status: number | null,
     /** True for network errors / 5xx / 429 — the call may succeed if retried later. */
     public readonly retryable: boolean,
+    /** The voice backend's own error code, when it sends one ({"detail": {"message", "code"}}). */
+    public readonly code?: string,
   ) {
     super(message);
     this.name = "VoiceBackendError";
@@ -60,6 +70,9 @@ export interface VoiceCallDetail {
 function detailMessage(body: unknown, fallback: string): string {
   const detail = (body as { detail?: unknown } | null)?.detail;
   if (typeof detail === "string") return detail;
+  if (detail && typeof detail === "object" && typeof (detail as { message?: unknown }).message === "string") {
+    return (detail as { message: string }).message;
+  }
   if (Array.isArray(detail)) {
     return detail
       .map((d: { loc?: unknown[]; msg?: string }) => {
@@ -93,6 +106,7 @@ async function request<T>(
   path: string,
   json?: unknown,
   language: AiCallLanguage = DEFAULT_AI_CALL_LANGUAGE,
+  extraHeaders: Record<string, string> = {},
 ): Promise<T> {
   const backend = target(language);
   let res: Response;
@@ -100,6 +114,7 @@ async function request<T>(
     res = await fetch(`${backend.url}${path}`, {
       method,
       headers: {
+        ...extraHeaders,
         "X-API-Key": backend.apiKey,
         ...(json !== undefined ? { "Content-Type": "application/json" } : {}),
       },
@@ -113,7 +128,9 @@ async function request<T>(
   const body = await res.json().catch(() => null);
   if (!res.ok) {
     const msg = detailMessage(body, res.statusText);
-    throw new VoiceBackendError(`Voice backend ${res.status}: ${msg}`, res.status, res.status >= 500 || res.status === 429);
+    const code = (body as { detail?: { code?: unknown } } | null)?.detail?.code;
+    throw new VoiceBackendError(`Voice backend ${res.status}: ${msg}`, res.status, res.status >= 500 || res.status === 429,
+      typeof code === "string" ? code : undefined);
   }
   return body as T;
 }
@@ -358,4 +375,60 @@ export async function fetchRecordingAudio(
     const why = err instanceof Error ? err.message : String(err);
     throw new VoiceBackendError(`Voice backend unreachable: ${why}`, null, true);
   }
+}
+
+/* ------------------------------------------------------------------ AI provider settings (admins only) */
+// The language's voice backend keeps the settings and the encrypted keys; it never returns a key.
+// The admin's e-mail goes along in X-Actor for its audit log.
+
+const KEY_FIELD = /^(api_?key|encrypted_key|secret|key)$/i;
+
+/** Defence in depth: drop any key-like field before a provider-settings answer reaches the browser. */
+export function stripProviderSecrets<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(stripProviderSecrets) as T;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([k]) => !KEY_FIELD.test(k))
+        .map(([k, v]) => [k, stripProviderSecrets(v)]),
+    ) as T;
+  }
+  return value;
+}
+
+const actorHeaders = (actor: string) => ({ "X-Actor": actor });
+
+export async function getAiProviderSettings(language: AiCallLanguage): Promise<AiProviderSettingsView> {
+  return stripProviderSecrets(await request<AiProviderSettingsView>("GET", "/api/admin/ai-providers", undefined, language));
+}
+
+export async function updateAiProvider(
+  language: AiCallLanguage,
+  providerId: AiProviderId,
+  change: AiProviderUpdateInput,
+  actor: string,
+): Promise<AiProviderSettingsView> {
+  const path = `/api/admin/ai-providers/providers/${encodeURIComponent(providerId)}`;
+  return stripProviderSecrets(await request<AiProviderSettingsView>("PUT", path, change, language, actorHeaders(actor)));
+}
+
+export async function updateAiProviderSelection(
+  language: AiCallLanguage,
+  change: AiProviderSelectionInput,
+  actor: string,
+): Promise<AiProviderSettingsView> {
+  return stripProviderSecrets(
+    await request<AiProviderSettingsView>("PUT", "/api/admin/ai-providers/selection", change, language, actorHeaders(actor)),
+  );
+}
+
+export async function testAiProvider(language: AiCallLanguage, providerId: AiProviderId, actor: string): Promise<AiProviderSettingsView> {
+  const path = `/api/admin/ai-providers/providers/${encodeURIComponent(providerId)}/test`;
+  return stripProviderSecrets(await request<AiProviderSettingsView>("POST", path, undefined, language, actorHeaders(actor)));
+}
+
+export async function reencryptAiProviderKeys(language: AiCallLanguage, actor: string): Promise<AiProviderSettingsView> {
+  return stripProviderSecrets(
+    await request<AiProviderSettingsView>("POST", "/api/admin/ai-providers/reencrypt", undefined, language, actorHeaders(actor)),
+  );
 }

@@ -23,6 +23,7 @@ import { SendQueuePage } from "./pages/SendQueue";
 import { TriggersPage } from "./pages/Triggers";
 import { SettingsPage } from "./pages/Settings";
 import { DataQualityPage } from "./pages/DataQuality";
+import { AiProvidersPage } from "./pages/AiProviders";
 import { canSeePath } from "./lib/navAccess";
 import type { ReactNode } from "react";
 
@@ -72,6 +73,7 @@ export function App() {
       <Routes>
         <Route path="/" element={<DashboardPage />} />
         <Route path="/data-quality" element={<RoleRoute path="/data-quality"><DataQualityPage /></RoleRoute>} />
+        <Route path="/admin/ai-providers" element={<RoleRoute path="/admin/ai-providers"><AiProvidersPage /></RoleRoute>} />
         <Route path="/insights" element={<InsightsPage />} />
         <Route path="/contacts" element={<ContactsPage />} />
         <Route path="/whatsapp-contacts" element={<WhatsAppContactsPage />} />

@@ -27,7 +27,7 @@ from app.db import repositories as repo
 from app.db.database import session_factory
 from app.db.models import CallStatus
 from app.services import audio_service as audio
-from app.services import call_service
+from app.services import call_service, provider_registry
 from app.services.session_store import get_session_store
 from app.websocket.plivo_stream import _CLOSING, _authorize, _close_session
 
@@ -109,7 +109,8 @@ async def twilio_media(ws: WebSocket) -> None:
                             )
                     await get_session_store().set_fields(resolved_call_id, stream_id=stream_sid,
                                                          provider_call_id=call_sid or "")
-                    session = call_service.CallSession(ctx, TwilioMediaSender(ws, stream_sid))
+                    session = call_service.CallSession(ctx, TwilioMediaSender(ws, stream_sid),
+                                                       providers=await provider_registry.providers_for_call())
                     await session.start()
 
             elif event == "media":

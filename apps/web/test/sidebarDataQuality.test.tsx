@@ -14,19 +14,24 @@ const BEFORE = [
 ];
 const shape = (groups: typeof NAV_GROUPS) => groups.map((g) => [g.label, g.items.map((i) => [i.to, i.label, i.icon])]);
 
+// Admin-only additions: Data Quality (Main) and AI Providers (System, before Settings).
+const ADMIN_ADDED = ["/data-quality", "/admin/ai-providers"];
+
 describe("sidebar", () => {
-  it("admin: Main is Dashboard, Data Quality, then the items that were there", () => {
+  it("admin: Main is Dashboard, Data Quality, then the items that were there; System has AI Providers", () => {
     const admin = shape(navForRole(NAV_GROUPS, "ADMIN"));
     expect(admin[0]).toEqual(["Main", [["/", "Dashboard", "dashboard"], ["/data-quality", "Data Quality", "quality"], ["/insights", "Insights", "insights"], ["/lists", "Lists", "lists"]]]);
-    expect(admin.slice(1)).toEqual(BEFORE.slice(1));
+    expect(admin.slice(1, 4)).toEqual(BEFORE.slice(1, 4));
+    expect(admin[4]).toEqual(["System", [["/send-queue", "Send Queue", "activity"], ["/admin/ai-providers", "AI Providers", "settings"], ["/settings", "Settings", "settings"]]]);
   });
 
-  it("removing Data Quality gives back the old menu exactly", () => {
-    const without = NAV_GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => i.to !== "/data-quality") }));
+  it("removing the admin-only items gives back the old menu exactly", () => {
+    const without = NAV_GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => !ADMIN_ADDED.includes(i.to)) }));
     expect(shape(without)).toEqual(BEFORE);
   });
 
-  it("editors never see it", () => {
-    expect(navForRole(NAV_GROUPS, "EDITOR").flatMap((g) => g.items.map((i) => i.to))).not.toContain("/data-quality");
+  it("editors never see them", () => {
+    const editor = navForRole(NAV_GROUPS, "EDITOR").flatMap((g) => g.items.map((i) => i.to));
+    for (const path of ADMIN_ADDED) expect(editor).not.toContain(path);
   });
 });

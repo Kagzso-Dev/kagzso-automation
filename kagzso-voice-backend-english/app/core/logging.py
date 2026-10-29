@@ -46,6 +46,10 @@ class RedactSecretsFilter(logging.Filter):
         super().__init__()
         self._secrets = sorted({s for s in secrets if s}, key=len, reverse=True)
 
+    def add(self, secret: str) -> None:
+        if secret and len(secret) >= 4 and secret not in self._secrets:
+            self._secrets = sorted({*self._secrets, secret}, key=len, reverse=True)
+
     def filter(self, record: logging.LogRecord) -> bool:
         if not self._secrets:
             return True
@@ -78,6 +82,14 @@ def configure_logging(level: str = "INFO", secrets: Iterable[str] = ()) -> None:
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     for noisy in ("httpx", "httpcore", "websockets", "plivo", "urllib3", "aiomysql"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
+def redact_secret(secret: str) -> None:
+    """Scrub a secret that is only known at runtime (an API key saved in the admin settings) from logs."""
+    for handler in logging.getLogger().handlers:
+        for f in handler.filters:
+            if isinstance(f, RedactSecretsFilter):
+                f.add(secret)
 
 
 def get_logger(name: str) -> logging.Logger:

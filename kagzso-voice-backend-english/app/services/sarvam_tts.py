@@ -78,11 +78,12 @@ class SarvamTTS(TTSProvider):
     name = "sarvam"
 
     def __init__(self, cfg: Optional[Settings] = None, voice_id: Optional[str] = None,
-                 client: Optional[httpx.AsyncClient] = None):
+                 client: Optional[httpx.AsyncClient] = None, exact_voice: bool = False):
         self.cfg = cfg or default_settings
         # Only offered voices (app/core/voices.py); anything else - a voice no longer offered,
         # or an old voice UUID on an older agent / call flow - plays as the main voice.
-        self.voice_id = offered_voice(voice_id) or self.cfg.tts_speaker
+        # exact_voice: the admin page's speaker for another model (bulbul:v4-flash personas), used as given.
+        self.voice_id = voice_id if exact_voice and voice_id else offered_voice(voice_id) or self.cfg.tts_speaker
         self._client = client or httpx.AsyncClient(base_url=self.cfg.SARVAM_BASE_URL,
                                                    timeout=httpx.Timeout(20.0, connect=5.0),
                                                    limits=self.cfg.http_limits())

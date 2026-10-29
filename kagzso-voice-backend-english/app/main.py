@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import agents, calls, dev_tests, flows, health, recordings, twilio_webhooks, voices, webhooks
+from app.api import agents, calls, dev_tests, flows, health, providers, recordings, twilio_webhooks, voices, webhooks
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.db import repositories as repo
@@ -105,6 +105,7 @@ app.include_router(calls.router)
 app.include_router(agents.router)
 app.include_router(flows.router)
 app.include_router(voices.router)
+app.include_router(providers.router)
 app.include_router(recordings.router)
 app.include_router(webhooks.router)
 app.include_router(dev_tests.router)

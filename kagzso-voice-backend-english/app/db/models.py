@@ -217,4 +217,46 @@ class Followup(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class AiProviderSetting(Base):
+    """One AI provider as set on the admin page (app/services/provider_registry.py). The API key is
+    stored only encrypted (app/services/provider_secrets.py) and never returned by any endpoint."""
+
+    __tablename__ = "ai_provider_settings"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)  # groq_llm | sarvam_llm | anthropic_llm | sarvam_stt | sarvam_tts
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    options: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # e.g. {"speaker": ...} / {"mode": ...}
+    encrypted_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    key_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    priority: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # LLM fallback order (1 = first)
+    last_test_status: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # ok | error
+    last_test_message: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # sanitized
+    last_test_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class AiProviderSelection(Base):
+    """This backend's (one language's) switch: use the saved settings for live calls, or the .env ones."""
+
+    __tablename__ = "ai_provider_selection"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)  # always 1
+    live: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class AiProviderAudit(Base):
+    """Who changed what on the admin page - field names only, never a key."""
+
+    __tablename__ = "ai_provider_audit"
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    actor: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    action: Mapped[str] = mapped_column(String(40))
+    provider: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    detail: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 Index("ix_call_events_call_type", CallEvent.call_id, CallEvent.event_type)
