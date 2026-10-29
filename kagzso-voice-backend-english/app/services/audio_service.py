@@ -285,6 +285,31 @@ class SpeechEndpointer:
         self._pitched = 0
         self._start_floor: Optional[int] = None
         self._max_gain = 1.0
+        self.hold_frames = 0  # this utterance only: wait at least this much silence (ADAPTIVE_EOS)
+
+    @property
+    def silence_ms(self) -> int:
+        """Silence since the customer's last voiced frame in the utterance in progress (0 when not in speech)."""
+        return self._silence * FRAME_MS if self.in_speech else 0
+
+    @property
+    def voiced_frames(self) -> int:
+        return self._voiced if self.in_speech else 0
+
+    def measure_so_far(self) -> Optional[EndpointResult]:
+        """The utterance in progress as measured so far, without ending it (BARGE_EARLY_STOP)."""
+        if not self.in_speech:
+            return None
+        voiced = self._voiced
+        return EndpointResult(VadEvent.SPEECH_START, b"", len(self._frames) * FRAME_MS, self._silence * FRAME_MS,
+                              voiced_ms=voiced * FRAME_MS,
+                              speech_rms=int((self._speech_power / voiced) ** 0.5) if voiced else 0,
+                              floor_rms=self._start_floor, max_gain=self._max_gain,
+                              pitched_ms=self._pitched * FRAME_MS if self.measure_pitch else None)
+
+    def finish_now(self) -> Optional[EndpointResult]:
+        """End the utterance in progress now, exactly as enough silence would (ADAPTIVE_EOS)."""
+        return self._finish() if self.in_speech else None
 
     def utterance_so_far(self) -> bytes:
         """PCM of the utterance in progress (pre-roll included); empty when not in speech."""
@@ -367,19 +392,22 @@ class SpeechEndpointer:
             if self._loud_gap > self.max_gap_frames:
                 self.loud_run_ms = 0
 
-        if self._silence >= self.end_frames or len(self._frames) >= self.max_frames:
-            voiced, frames, trailing = self._voiced, self._frames, self._silence
-            speech_rms = int((self._speech_power / voiced) ** 0.5) if voiced else 0
-            floor, gain = self._start_floor, self._max_gain
-            pitched_ms = self._pitched * FRAME_MS if self.measure_pitch else None
-            self.reset()
-            if voiced < self.min_frames:
-                return EndpointResult(VadEvent.SPEECH_END, b"", 0, trailing * FRAME_MS)  # noise burst, ignore
-            # Trim most of the trailing silence (keep ~200 ms).
-            keep = len(frames) - max(0, trailing - 10)
-            audio = b"".join(frames[:keep])
-            return EndpointResult(VadEvent.SPEECH_END, audio, len(audio) * 1000 // (TELEPHONY_SAMPLE_RATE * SAMPLE_WIDTH),
-                                  trailing * FRAME_MS, voiced_ms=voiced * FRAME_MS, speech_rms=speech_rms,
-                                  floor_rms=floor, peak=audioop.max(audio, SAMPLE_WIDTH) if audio else 0, max_gain=gain,
-                                  pitched_ms=pitched_ms)
+        if self._silence >= max(self.end_frames, self.hold_frames) or len(self._frames) >= self.max_frames:
+            return self._finish()
         return None
+
+    def _finish(self) -> EndpointResult:
+        voiced, frames, trailing = self._voiced, self._frames, self._silence
+        speech_rms = int((self._speech_power / voiced) ** 0.5) if voiced else 0
+        floor, gain = self._start_floor, self._max_gain
+        pitched_ms = self._pitched * FRAME_MS if self.measure_pitch else None
+        self.reset()
+        if voiced < self.min_frames:
+            return EndpointResult(VadEvent.SPEECH_END, b"", 0, trailing * FRAME_MS)  # noise burst, ignore
+        # Trim most of the trailing silence (keep ~200 ms).
+        keep = len(frames) - max(0, trailing - 10)
+        audio = b"".join(frames[:keep])
+        return EndpointResult(VadEvent.SPEECH_END, audio, len(audio) * 1000 // (TELEPHONY_SAMPLE_RATE * SAMPLE_WIDTH),
+                              trailing * FRAME_MS, voiced_ms=voiced * FRAME_MS, speech_rms=speech_rms,
+                              floor_rms=floor, peak=audioop.max(audio, SAMPLE_WIDTH) if audio else 0, max_gain=gain,
+                              pitched_ms=pitched_ms)

@@ -230,6 +230,17 @@ class SarvamStream(TTSStream):
         self._input_ended = True
         await self._send({"type": "flush"})
 
+    async def flush(self) -> None:
+        # Same message as end_input, but more text follows: audio() keeps reading after its "final".
+        await self._send({"type": "flush"})
+
+    def is_open(self) -> bool:
+        if self._ws is None or self._closed:
+            return False
+        from websockets.protocol import State
+
+        return getattr(self._ws, "state", None) is State.OPEN
+
     def _to_mulaw(self, raw: bytes) -> bytes:
         pcm = self._odd + _strip_wav_header(raw)
         cut = len(pcm) - len(pcm) % 2

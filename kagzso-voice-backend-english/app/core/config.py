@@ -333,6 +333,75 @@ class Settings(BaseSettings):
     # STT_NORMALIZE_AUDIO never boosts an utterance with less voiced speech than this.
     VOICE_FOCUS_NO_GAIN_UNDER_MS: int = 400
 
+    # --- Reply speed (each switch off = today's behaviour) ---
+    # Speak the flow's introduction + permission line (block "permission") word for word after a
+    # clear identity "yes", and its company introduction (block "company_intro", only when it says
+    # "exactly") after a clear permission "yes". Pre-rendered while the call starts. Any other answer
+    # (a question, a mixed reply, do-not-call) goes to the AI as before.
+    KEY_LINES_SCRIPTED: bool = False
+    # Adaptive end of speech: after ADAPTIVE_EOS_EARLY_MS of silence the words so far go to STT; a
+    # complete short answer ("ஆமா", "yes") ends the turn after ADAPTIVE_EOS_SHORT_MS, a sentence that
+    # trails off ("and...", "அப்புறம்") waits ADAPTIVE_EOS_LONG_MS; anything else keeps
+    # VAD_SPEECH_END_SILENCE_MS. Slow speakers keep SLOW_SPEAKER_END_SILENCE_MS. Costs extra STT
+    # requests when callers pause mid-sentence.
+    ADAPTIVE_EOS: bool = False
+    ADAPTIVE_EOS_EARLY_MS: int = 300
+    ADAPTIVE_EOS_SHORT_MS: int = 400
+    ADAPTIVE_EOS_LONG_MS: int = 1200
+    # Send the first clause of an AI reply to TTS at a comma (once it has 20+ characters) instead of
+    # waiting for the full sentence. Later text is still sent sentence by sentence.
+    TTS_FIRST_CLAUSE: bool = False
+    # Ask Sarvam to speak the first sentence at once (a "flush"), even under SARVAM_TTS_MIN_BUFFER_CHARS.
+    TTS_FLUSH_FIRST_SENTENCE: bool = False
+    # Open the next turn's TTS connection as soon as a reply ends (used if still open, at most
+    # TTS_WARM_MAX_AGE_SECONDS old; otherwise a fresh one as before).
+    TTS_WARM_STREAM: bool = False
+    TTS_WARM_MAX_AGE_SECONDS: float = 15.0
+    # Short pre-rendered acknowledgements ("சரிங்க sir", "ஓ, புரியுது", "Okay sir"), rotated: one plays
+    # when the AI has sent no text after THINKING_ACK_AFTER_SECONDS, or nothing has played for
+    # THINKING_ACK_DEAD_AIR_SECONDS since the customer stopped (0 = off), or (THINKING_ACK_AFTER_LONG_ANSWER)
+    # right after a long answer. Never two replies in a row, never the same one twice in a row, never
+    # after a one-word answer or while the customer speaks, never a customer turn, never instead of
+    # the reply. THINKING_ACK_TEXT replaces the built-in pool: lines separated by "|", {{title_to_use}} allowed.
+    THINKING_ACK: bool = False
+    THINKING_ACK_AFTER_SECONDS: float = 1.2
+    THINKING_ACK_DEAD_AIR_SECONDS: float = 2.0
+    THINKING_ACK_AFTER_LONG_ANSWER: bool = False
+    THINKING_ACK_TEXT: str = ""
+
+    # --- Natural call rhythm (each switch off = today's behaviour) ---
+    # A reply never starts sooner than this gap after the customer stopped: RHYTHM_GAP_SHORT_MS after a
+    # short answer, RHYTHM_GAP_LONG_MS after an answer of RHYTHM_LONG_ANSWER_WORDS+ words, each varied by
+    # +/- RHYTHM_GAP_JITTER and never under RHYTHM_GAP_MIN_MS. A reply that is ready later plays at once
+    # (no added delay), and nothing starts while the customer is speaking.
+    RHYTHM_GAP: bool = False
+    RHYTHM_GAP_SHORT_MS: int = 900
+    RHYTHM_GAP_LONG_MS: int = 1200
+    RHYTHM_GAP_JITTER: float = 0.15
+    RHYTHM_GAP_MIN_MS: int = 600
+    RHYTHM_LONG_ANSWER_WORDS: int = 8
+    # The flow's short pause ({{short_delay}}) between the sentences of the key lines the system
+    # speaks (KEY_LINES_SCRIPTED). Same voice and speed; AI replies are not changed.
+    RHYTHM_SENTENCE_PAUSES: bool = False
+    # Stop the agent as soon as voice focus hears BARGE_EARLY_STOP_PITCHED_MS of real voiced speech
+    # (above the line's noise, after the echo window) instead of waiting for BARGE_IN_MIN_SPEECH_MS or
+    # the end of the customer's words. If it was only a "ம்" / "yes" backchannel, the agent goes on from
+    # the next sentence (never the same one again); the history keeps only what was heard.
+    BARGE_EARLY_STOP: bool = False
+    BARGE_EARLY_STOP_PITCHED_MS: int = 400
+
+    # --- LLM resilience (each off by default) ---
+    # Circuit breaker: this many first-token timeouts of the first model within
+    # LLM_BREAKER_WINDOW_SECONDS put it behind its fallback for LLM_PRIMARY_COOLDOWN_SECONDS. 0 = off.
+    LLM_BREAKER_TIMEOUTS: int = 0
+    LLM_BREAKER_WINDOW_SECONDS: float = 60.0
+    # Second fallback on another provider (its own key), used for live replies when every model above
+    # failed before saying anything - instead of the "couldn't hear you" line. Empty provider = off.
+    LLM_FALLBACK2_PROVIDER: str = ""  # gemini | openai | groq | sarvam | ollama | openai_compatible
+    LLM_FALLBACK2_MODEL: str = ""
+    LLM_FALLBACK2_API_KEY: SecretStr = SecretStr("")
+    LLM_FALLBACK2_BASE_URL: str = ""
+
     @field_validator("VOICE_FOCUS_LEVEL")
     @classmethod
     def _voice_focus_level(cls, v: str) -> str:

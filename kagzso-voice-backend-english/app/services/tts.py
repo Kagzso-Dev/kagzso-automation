@@ -64,6 +64,14 @@ class TTSStream(ABC):
         """Speaking speed for the text sent from now on (providers without it ignore this)."""
         return None
 
+    async def flush(self) -> None:
+        """Speak the text sent so far now; more text may follow (TTS_FLUSH_FIRST_SENTENCE)."""
+        return None
+
+    def is_open(self) -> bool:
+        """Still usable for a new reply (TTS_WARM_STREAM)."""
+        return True
+
 
 class TTSProvider(ABC):
     name = "base"

@@ -45,6 +45,17 @@ def request_temperature(cfg: Settings) -> float:
     t = _TEMPERATURE.get()
     return cfg.LLM_TEMPERATURE if t is None else t
 
+
+# A dict the caller sets before streaming a live reply; filled with {"model", "failover"} once a
+# model sends text (timing logs). A context variable for the same reason as _TEMPERATURE.
+TURN_INFO: ContextVar[Optional[Dict[str, Any]]] = ContextVar("llm_turn_info", default=None)
+
+
+def _note_answer(model: str, failover: bool) -> None:
+    info = TURN_INFO.get()
+    if info is not None and "model" not in info:
+        info.update(model=model, failover=failover)
+
 END_CALL_TOKEN = "[[END_CALL]]"
 
 # --------------------------------------------------------------------------
@@ -487,29 +498,45 @@ def extract_end_call(text: str) -> Tuple[str, bool]:
 _SENTENCE_END = re.compile(r"(?<=[.!?])[\"')\]]?\s+")
 
 
+_SENTENCE_END_DANDA = re.compile(r"(?<=[.!?।])[\"')\]]?\s+")
+
+
 class SentenceChunker:
     """Accumulates streamed tokens and emits complete sentences, so TTS can
-    start speaking the first sentence while the LLM is still generating."""
+    start speaking the first sentence while the LLM is still generating.
 
-    def __init__(self, soft_limit: int = 160):
+    first_clause_chars > 0 (TTS_FIRST_CLAUSE): the first piece may end at a comma once it has that
+    many characters, and the Hindi full stop (।) also ends a sentence."""
+
+    def __init__(self, soft_limit: int = 160, first_clause_chars: int = 0):
         self._buf = ""
         self.soft_limit = soft_limit
+        self.first_clause_chars = first_clause_chars
+        self._end = _SENTENCE_END_DANDA if first_clause_chars else _SENTENCE_END
+        self._emitted = False
 
     def feed(self, delta: str) -> List[str]:
         self._buf += delta
         out: List[str] = []
         while True:
-            m = _SENTENCE_END.search(self._buf)
+            m = self._end.search(self._buf)
             if not m:
                 break
             out.append(self._buf[: m.end()].strip())
             self._buf = self._buf[m.end():]
+        if self.first_clause_chars and not self._emitted and not any(out):
+            idx = self._buf.find(", ", self.first_clause_chars - 1)
+            if idx >= 0:
+                out.append(self._buf[: idx + 1].strip())
+                self._buf = self._buf[idx + 2:]
         if len(self._buf) > self.soft_limit:  # very long clause: break at a comma
             idx = self._buf.rfind(", ")
             if idx > 40:
                 out.append(self._buf[: idx + 1].strip())
                 self._buf = self._buf[idx + 2:]
-        return [s for s in out if s]
+        out = [s for s in out if s]
+        self._emitted = self._emitted or bool(out)
+        return out
 
     def flush(self) -> List[str]:
         rest, self._buf = self._buf.strip(), ""
@@ -594,6 +621,9 @@ class LLMProvider(ABC):
         self.model = self.cfg.LLM_MODEL
         self._primary_skip_until = 0.0  # monotonic time until which LLM_MODEL is skipped
         self._skip_until: Dict[str, float] = {}  # same, for LLM_TURN_MODEL
+        self._timeouts: Dict[str, List[float]] = {}  # LLM_BREAKER_TIMEOUTS: recent first-token timeouts
+        self._chain_skip_until = 0.0  # LLM_FALLBACK2_*: every model above failed; second fallback first
+        self._fallback2_provider: Optional["LLMProvider"] = None
         self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(self.cfg.LLM_TIMEOUT_SECONDS, connect=5.0),
                                                    limits=self.cfg.http_limits())
 
@@ -636,12 +666,28 @@ class LLMProvider(ABC):
         return [primary, fallback]
 
     def _note_failure(self, model: str, chain_primary: str, exc: LLMError) -> bool:
-        """Put the fallback first for LLM_PRIMARY_COOLDOWN_SECONDS after a quota / overload error."""
+        """Put the fallback first for LLM_PRIMARY_COOLDOWN_SECONDS after a quota / overload error,
+        or (LLM_BREAKER_TIMEOUTS) after that many first-token timeouts within LLM_BREAKER_WINDOW_SECONDS."""
         cooldown = self.cfg.LLM_PRIMARY_COOLDOWN_SECONDS
-        cooling = model == chain_primary and cooldown > 0 and exc.kind in self.COOLDOWN_KINDS
+        cooling = model == chain_primary and cooldown > 0 and (
+            exc.kind in self.COOLDOWN_KINDS or (exc.kind == "timeout" and self._breaker_trips(model)))
         if cooling:
             self._cool_down(model, time.monotonic() + cooldown)
         return cooling
+
+    def _breaker_trips(self, model: str) -> bool:
+        limit = self.cfg.LLM_BREAKER_TIMEOUTS
+        if limit <= 0:
+            return False
+        now = time.monotonic()
+        recent = [t for t in self._timeouts.get(model, []) if now - t < self.cfg.LLM_BREAKER_WINDOW_SECONDS] + [now]
+        if len(recent) >= limit:
+            self._timeouts[model] = []
+            log.warning("LLM %s: %d first-token timeouts within %gs - circuit breaker open", model, len(recent),
+                        self.cfg.LLM_BREAKER_WINDOW_SECONDS)
+            return True
+        self._timeouts[model] = recent
+        return False
 
     async def _stream_with_failover(self, system_text: str, messages: List[Message],
                                     turn: bool = False) -> AsyncIterator[str]:
@@ -669,6 +715,8 @@ class LLMProvider(ABC):
                 stream = _with_first_token_timeout(stream, first_token_timeout)
             try:
                 async for delta in stream:
+                    if not produced:
+                        _note_answer(model, model != chain_primary)
                     produced = True
                     yield delta
                 return
@@ -743,6 +791,7 @@ class LLMProvider(ABC):
                     return
                 if winner is None:
                     winner = i
+                    _note_answer(models[i], models[i] != chain_primary)
                     if i == 1:
                         log.info("LLM %s answered first (hedged)", models[1])
                     for j, t in tasks.items():
@@ -787,8 +836,60 @@ class LLMProvider(ABC):
     ) -> AsyncIterator[str]:
         system_text = build_system_prompt(system_prompt, variables)
         messages = self._messages(conversation_history, user_message)
-        async for delta in self._stream_with_failover(system_text, messages, turn=True):
+        second = self._fallback2()
+        if second is None:
+            async for delta in self._stream_with_failover(system_text, messages, turn=True):
+                yield delta
+            return
+        async for delta in self._stream_with_fallback2(system_text, messages, second):
             yield delta
+
+    def _fallback2(self) -> Optional["LLMProvider"]:
+        """LLM_FALLBACK2_*: a provider of its own (own key and base URL), or None when not set."""
+        name = self.cfg.LLM_FALLBACK2_PROVIDER.strip().lower()
+        model = self.cfg.LLM_FALLBACK2_MODEL.strip()
+        if not name or not model or name not in PROVIDERS:
+            return None
+        if self._fallback2_provider is None:
+            cfg = self.cfg.model_copy(update={
+                "LLM_PROVIDER": name, "LLM_MODEL": model, "LLM_API_KEY": self.cfg.LLM_FALLBACK2_API_KEY,
+                "LLM_BASE_URL": self.cfg.LLM_FALLBACK2_BASE_URL, "LLM_FALLBACK_MODEL": "", "LLM_TURN_MODEL": "",
+                "LLM_HEDGE_AFTER_SECONDS": 0.0, "LLM_FALLBACK2_PROVIDER": ""})
+            self._fallback2_provider = PROVIDERS[name](cfg)
+        return self._fallback2_provider
+
+    async def _stream_with_fallback2(self, system_text: str, messages: List[Message],
+                                     second: "LLMProvider") -> AsyncIterator[str]:
+        """The models above first; if they all fail before any text (any error but a blocked prompt),
+        the second-fallback provider once. After that it goes first for LLM_PRIMARY_COOLDOWN_SECONDS.
+        Whichever goes first gets 2 x LLM_PRIMARY_FIRST_TOKEN_TIMEOUT_SECONDS to start speaking."""
+        label = f"{second.name}:{second.model}"
+        attempts = [("chain", lambda: self._stream_with_failover(system_text, messages, turn=True)),
+                    (label, lambda: second._stream(system_text, messages))]
+        if time.monotonic() < self._chain_skip_until:
+            log.info("LLM models above failed recently - using %s first", label)
+            attempts.reverse()
+        limit = self.cfg.LLM_PRIMARY_FIRST_TOKEN_TIMEOUT_SECONDS * 2
+        for i, (name, make) in enumerate(attempts):
+            last = i == len(attempts) - 1
+            stream = make() if last or limit <= 0 else _with_first_token_timeout(make(), limit)
+            produced = False
+            started = time.monotonic()
+            try:
+                async for delta in stream:
+                    if not produced and name == label:
+                        _note_answer(label, True)
+                    produced = True
+                    yield delta
+                return
+            except LLMError as exc:
+                if produced or last or exc.kind == "blocked":
+                    raise
+                cooldown = self.cfg.LLM_PRIMARY_COOLDOWN_SECONDS
+                if name == "chain" and cooldown > 0:
+                    self._chain_skip_until = time.monotonic() + cooldown
+                log.warning("LLM %s failed (%s) after %dms - using %s", "models" if name == "chain" else name,
+                            exc.kind, int((time.monotonic() - started) * 1000), attempts[i + 1][0])
 
     async def generate_response(
         self,
@@ -811,6 +912,8 @@ class LLMProvider(ABC):
         return "".join(parts).strip()
 
     async def aclose(self) -> None:
+        if self._fallback2_provider is not None:
+            await self._fallback2_provider.aclose()
         await self._client.aclose()
 
 
