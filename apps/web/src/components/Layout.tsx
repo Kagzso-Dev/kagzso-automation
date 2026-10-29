@@ -59,7 +59,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "System",
     items: [
       { to: "/send-queue", label: "Send Queue", icon: "activity" },
-      { to: "/admin/ai-providers", label: "AI Providers", icon: "settings" }, // admins only (lib/navAccess)
+      { to: "/admin/ai-providers", label: "AI Providers", icon: "settings", hideKey: "ai-providers" }, // admins only (lib/navAccess)
       { to: "/settings", label: "Settings", icon: "settings", hideKey: "settings-editors" },
     ],
   },

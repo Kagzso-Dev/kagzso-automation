@@ -2,15 +2,21 @@ import { describe, expect, it } from "vitest";
 import { HIDEABLE_NAV_ITEMS, normalizeHiddenNavItems, sidebarSettingsInput } from "@dispatch/shared";
 
 describe("sidebar menu setting", () => {
-  it("only Insights, Lists, Campaigns, Triggers and WhatsApp Inbox can be hidden", () => {
-    expect([...HIDEABLE_NAV_ITEMS]).toEqual(["insights", "lists", "campaigns", "triggers", "whatsapp-inbox", "settings-editors"]);
+  it("only Insights, Lists, Campaigns, Triggers, WhatsApp Inbox, Settings (editors) and AI Providers can be hidden", () => {
+    expect([...HIDEABLE_NAV_ITEMS]).toEqual(["insights", "lists", "campaigns", "triggers", "whatsapp-inbox", "settings-editors", "ai-providers"]);
+  });
+
+  it("AI Providers: hideable, and shown (default) when a saved list doesn't mention it", () => {
+    expect(sidebarSettingsInput.parse({ hiddenItems: ["ai-providers"] }).hiddenItems).toEqual(["ai-providers"]);
+    expect(normalizeHiddenNavItems(["insights", "settings-editors"])).not.toContain("ai-providers"); // pre-existing saved value
+    expect(normalizeHiddenNavItems([])).toEqual([]); // Reset to default
   });
 
   it("WhatsApp Inbox: hideable, and shown when an older saved list doesn't mention it", () => {
     expect(sidebarSettingsInput.parse({ hiddenItems: ["whatsapp-inbox"] }).hiddenItems).toEqual(["whatsapp-inbox"]);
     expect(normalizeHiddenNavItems(["lists", "campaigns"])).not.toContain("whatsapp-inbox"); // pre-existing saved value
     expect(normalizeHiddenNavItems(["whatsapp-inbox", "insights"])).toEqual(["insights", "whatsapp-inbox"]);
-    expect(sidebarSettingsInput.parse({ hiddenItems: [...HIDEABLE_NAV_ITEMS] }).hiddenItems).toHaveLength(6); // all at once
+    expect(sidebarSettingsInput.parse({ hiddenItems: [...HIDEABLE_NAV_ITEMS] }).hiddenItems).toHaveLength(7); // all at once
   });
 
   it("accepts any subset of the hideable items, including none", () => {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Navigate } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { PageHeader } from "../components/Layout";
@@ -184,6 +184,8 @@ export function SettingsPage() {
 
       <CostRatesSection isAdmin={isAdmin} />
 
+      {isAdmin && <AiProvidersLink />}
+
       {isAdmin && <AiCallLanguagesSection />}
 
       {isAdmin && <CallRecordingsSection />}
@@ -204,9 +206,36 @@ const SIDEBAR_ITEM_LABELS: Record<HideableNavItem, string> = {
   triggers: "Triggers",
   "whatsapp-inbox": "WhatsApp Inbox",
   "settings-editors": "Settings (for editors — admins always see it)",
+  "ai-providers": "AI Providers",
 };
 
-function SidebarMenuSection({ isAdmin }: { isAdmin: boolean }) {
+/** Rows only admins see in the panel (they only change what admins see, or are admin pages). */
+const ADMIN_ONLY_SIDEBAR_ROWS: readonly HideableNavItem[] = ["settings-editors", "ai-providers"];
+
+/** A short line under a row in the Sidebar menu panel. */
+const SIDEBAR_ITEM_NOTES: Partial<Record<HideableNavItem, string>> = {
+  "ai-providers": "Admins can still open AI Providers from Settings.",
+};
+
+/**
+ * Settings → "Open AI Providers" (admins only). Always reachable here, even when the AI Providers
+ * item is hidden from the sidebar menu.
+ */
+export function AiProvidersLink() {
+  return (
+    <section className="settings-section">
+      <h2 className="settings-heading">AI Providers</h2>
+      <div className="settings-card flex flex-wrap items-center justify-between gap-3">
+        <p className="text-slate-550">Language model, speech-to-text and text-to-speech providers for AI calls, per language.</p>
+        <Link to="/admin/ai-providers" className="btn-ghost settings-btn">
+          Open AI Providers
+        </Link>
+      </div>
+    </section>
+  );
+}
+
+export function SidebarMenuSection({ isAdmin }: { isAdmin: boolean }) {
   const qc = useQueryClient();
   const saved = useSidebarHiddenItems();
   const savedKey = saved.join(",");
@@ -253,12 +282,16 @@ function SidebarMenuSection({ isAdmin }: { isAdmin: boolean }) {
         </p>
 
         <ul className="divide-y divide-line-subtle">
-          {/* The "Settings (for editors)" switch is admin-only — editors don't see that row. */}
-          {HIDEABLE_NAV_ITEMS.filter((item) => isAdmin || item !== "settings-editors").map((item) => {
+          {/* Admin-only rows ("Settings (for editors)", "AI Providers") — editors don't see them. */}
+          {HIDEABLE_NAV_ITEMS.filter((item) => isAdmin || !ADMIN_ONLY_SIDEBAR_ROWS.includes(item)).map((item) => {
             const shown = !hidden.includes(item);
+            const note = SIDEBAR_ITEM_NOTES[item];
             return (
               <li key={item} className="flex items-center justify-between gap-3 py-3">
-                <span className="font-medium text-ink">{SIDEBAR_ITEM_LABELS[item]}</span>
+                <span>
+                  <span className="block font-medium text-ink">{SIDEBAR_ITEM_LABELS[item]}</span>
+                  {note && <span className="block text-xs text-slate-550">{note}</span>}
+                </span>
                 <label className="flex items-center gap-2 text-xs text-slate-550">
                   {shown ? "Shown" : "Hidden"}
                   <Switch
