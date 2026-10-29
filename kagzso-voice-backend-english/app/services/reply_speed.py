@@ -61,6 +61,19 @@ def flow_key_lines(flow) -> Dict[str, str]:
     return out
 
 
+def flow_dnc_line(flow) -> Optional[str]:
+    """The line a flow's block "do_not_call" tells the AI to say (its first quoted line, locked or
+    edited block alike), or None. DNC_ENFORCE speaks it word for word."""
+    from app.flows.schema import LOCKED_BLOCKS
+
+    for block in flow.blocks:
+        if block.id != "do_not_call":
+            continue
+        text = getattr(block, "text", None) or LOCKED_BLOCKS.get(getattr(block, "locked", "") or "", "")
+        return quoted_line(text) if text else None
+    return None
+
+
 # ------------------------------------------------------------------ a clear "yes"
 _YES = {
     "yes", "yeah", "yea", "ya", "yep", "yup", "yess", "speaking", "haan", "han",
@@ -82,6 +95,9 @@ _COURTESY = {"sir", "madam", "mam", "maam", "ma", "ji", "சார்", "மே�
 _PHRASES = {"நான் தான்", "நான்தான்", "naan dhaan", "naan than", "naan thaan", "that s me", "it s me", "this is me",
             "मैं ही हूँ", "मैं ही हूं", "मैं बोल रहा हूँ", "मैं बोल रही हूँ", "main hi hoon", "నేనే మాట్లాడుతున్నాను"}
 _PERMISSION_PHRASES = {"ठीक है", "ठीक हैं", "theek hai", "thik hai"}
+# INDIC_WORD_SPLIT: Tamil / Hindi / Telugu / Kannada backchannels said over the agent ("ஆமா", "சரிங்க",
+# "ம்", "हाँ जी") - the non-English words of the yes / courtesy / hum lists above and in voice focus.
+INDIC_BACKCHANNELS = frozenset(w for w in _PERMISSION_YES | _COURTESY | vf.LONE_FILLERS if not w.isascii())
 
 
 def clear_yes(text: str, kind: str) -> bool:
