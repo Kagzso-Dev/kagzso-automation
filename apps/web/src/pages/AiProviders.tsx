@@ -24,6 +24,13 @@ import { Switch } from "../components/Switch";
 import { useConfirm } from "../components/confirm";
 
 /**
+ * UI-only switch: hides the Speech-to-text and Text-to-speech sections for every language.
+ * Set VITE_SHOW_SPEECH_PROVIDERS=true in the root .env to show them (hidden by default).
+ * Backend settings and any saved values are untouched.
+ */
+const SHOW_SPEECH_PROVIDERS = import.meta.env.VITE_SHOW_SPEECH_PROVIDERS === "true";
+
+/**
  * Settings → AI providers (admins only; the API checks the role on every request). One tab per
  * language with a voice backend: each language has its own providers, keys and fallback order.
  */
@@ -152,6 +159,7 @@ function LanguageProviders({ language }: { language: AiCallLanguage }) {
         ))}
       </section>
 
+      {SHOW_SPEECH_PROVIDERS && (<>
       <section className="space-y-3">
         <h2 className="settings-heading">Speech-to-text (hearing)</h2>
         <p className="text-sm text-slate-550">
@@ -173,6 +181,7 @@ function LanguageProviders({ language }: { language: AiCallLanguage }) {
           <ProviderCard key={p.id} language={language} provider={p} view={view} />
         ))}
       </section>
+      </>)}
     </div>
   );
 }

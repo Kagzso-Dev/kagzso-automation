@@ -1,8 +1,11 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  // Read the repo-root .env (shared with the API). Only VITE_* variables reach the browser.
+  envDir: fileURLToPath(new URL("../..", import.meta.url)),
   server: {
     port: 5173,
     // Fail loudly if 5173 is taken instead of silently drifting to 5174 —
