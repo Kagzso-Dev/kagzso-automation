@@ -64,15 +64,24 @@ def flow_key_lines(flow) -> Dict[str, str]:
 # ------------------------------------------------------------------ a clear "yes"
 _YES = {
     "yes", "yeah", "yea", "ya", "yep", "yup", "yess", "speaking", "haan", "han",
+    # Tamil
     "ஆமா", "ஆமாம்", "ஆம்", "ஆமாங்க", "சொல்லுங்க", "சொல்லுங்கள்", "பேசுறேன்", "பேசறேன்",
     "aama", "aamaa", "amaa", "aamam", "sollunga",
+    # Hindi (the Thaara Hindi flow's identity words)
+    "हाँ", "हां", "हाँजी", "हांजी", "जी", "बोलिए", "बताइए", "haanji", "ji", "boliye", "bataiye",
+    # Telugu (the Thaara Telugu flow's identity words)
+    "అవును", "అవునండి", "చెప్పండి", "నేనే", "మాట్లాడుతున్నాను", "avunu", "avunandi", "cheppandi",
 }
 _PERMISSION_YES = _YES | {
     "ok", "okay", "okey", "sure", "fine", "go", "ahead", "tell", "please",
     "சரி", "சரிங்க", "ஓகே", "ஓக்கே", "பேசுங்க", "sari", "saringa", "pesunga",
+    "సరే", "సరేనండి", "మాట్లాడండి", "ఓకే", "sare", "matladandi",
 }
-_COURTESY = {"sir", "madam", "mam", "maam", "ma", "ji", "சார்", "மேடம்", "ங்க", "me", "ம்", "உம்", "hmm", "hm"}
-_PHRASES = {"நான் தான்", "நான்தான்", "naan dhaan", "naan than", "naan thaan", "that s me", "it s me", "this is me"}
+_COURTESY = {"sir", "madam", "mam", "maam", "ma", "ji", "சார்", "மேடம்", "ங்க", "me", "ம்", "உம்", "hmm", "hm",
+             "सर", "मैडम", "సార్", "మేడం", "అండి"}
+_PHRASES = {"நான் தான்", "நான்தான்", "naan dhaan", "naan than", "naan thaan", "that s me", "it s me", "this is me",
+            "मैं ही हूँ", "मैं ही हूं", "मैं बोल रहा हूँ", "मैं बोल रही हूँ", "main hi hoon", "నేనే మాట్లాడుతున్నాను"}
+_PERMISSION_PHRASES = {"ठीक है", "ठीक हैं", "theek hai", "thik hai"}
 
 
 def clear_yes(text: str, kind: str) -> bool:
@@ -85,7 +94,7 @@ def clear_yes(text: str, kind: str) -> bool:
     rest = [w for w in words if w not in _COURTESY]
     if not rest:
         return False
-    if " ".join(rest) in _PHRASES:
+    if " ".join(rest) in _PHRASES or (kind == "permission" and " ".join(rest) in _PERMISSION_PHRASES):
         return True
     return all(w in (_YES if kind == "identity" else _PERMISSION_YES) for w in rest)
 
@@ -94,14 +103,16 @@ def clear_yes(text: str, kind: str) -> bool:
 _SHORT_ANSWER = _PERMISSION_YES | _COURTESY | {
     "no", "nope", "nah", "not", "now", "interested", "busy", "thanks", "thank", "you",
     "இல்ல", "இல்லை", "இல்லங்க", "வேண்டாம்", "வேணாம்", "வேண்டாங்க", "இப்போ",
-    "illa", "illai", "venam", "vendam", "nahi", "nahin", "नहीं", "हाँ", "हां", "जी",
+    "illa", "illai", "venam", "vendam", "nahi", "nahin", "नहीं", "नही", "अभी", "ठीक", "है", "theek", "hai",
+    "లేదు", "వద్దు", "లేదండి", "ledu", "vaddu",
 }
 _TRAILING = {
     "and", "but", "so", "or", "because", "cause", "then", "the", "a", "an", "to", "of", "my", "our", "is", "are",
     "with", "like", "if", "that", "which", "for", "in", "on", "uh", "um", "er",
     "அப்புறம்", "வந்து", "அதாவது", "ஆனா", "அதனால", "அதனால்", "என்னன்னா", "அப்படின்னா", "மற்றும்",
     "apram", "appuram", "vandhu", "vanthu", "aana", "athavathu", "adhanala",
-    "और", "लेकिन", "तो", "क्योंकि",
+    "और", "लेकिन", "तो", "क्योंकि", "मतलब", "फिर",
+    "మరియు", "కానీ", "అంటే", "అందుకే", "తర్వాత", "ఇంకా",
 }
 
 
@@ -122,12 +133,13 @@ def utterance_kind(text: str, after_question: bool) -> str:
 
 
 # ------------------------------------------------------------------ acknowledgements
-# NEEDS NATIVE-SPEAKER REVIEW (Tamil, Hindi, Kannada) before THINKING_ACK is switched on for real calls.
+# NEEDS NATIVE-SPEAKER REVIEW (Tamil, Hindi, Telugu, Kannada) before THINKING_ACK is switched on for real calls.
 # One or two words each, said at the reply's own speed; {{title_to_use}} = sir / madam as given, never guessed.
 ACKS: Dict[str, List[str]] = {
     "en": ["Okay {{title_to_use}}.", "I see.", "Right, {{title_to_use}}.", "Sure."],
     "ta": ["சரிங்க {{title_to_use}}.", "ஓ, புரியுது.", "நல்லது {{title_to_use}}.", "Okay {{title_to_use}}."],
-    "hi": ["जी {{title_to_use}}.", "अच्छा.", "Okay {{title_to_use}}."],
+    "hi": ["जी {{title_to_use}}.", "अच्छा.", "ठीक है {{title_to_use}}.", "Okay {{title_to_use}}."],
+    "te": ["సరేనండి {{title_to_use}}.", "ఓ, అర్థమైంది.", "మంచిది {{title_to_use}}.", "Okay {{title_to_use}}."],
     "kn": ["ಸರಿ {{title_to_use}}.", "ಓಹ್, ಅರ್ಥ ಆಯ್ತು.", "Okay {{title_to_use}}."],
 }
 

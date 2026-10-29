@@ -168,7 +168,7 @@ def test_rotation_never_plays_the_same_acknowledgement_twice_in_a_row():
     assert set(seen) == {0, 1, 2, 3}
 
 
-@pytest.mark.parametrize("lang", ["en", "ta", "hi", "kn"])
+@pytest.mark.parametrize("lang", ["en", "ta", "hi", "te", "kn"])
 def test_acknowledgements_are_short_and_honest(lang):
     for line in rs.ack_templates(lang):
         words = vf.words(line.replace("{{title_to_use}}", ""))
