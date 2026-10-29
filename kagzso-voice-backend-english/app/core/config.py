@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
-from typing import List
+from typing import List, Optional
 
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -310,6 +310,47 @@ class Settings(BaseSettings):
     # A caller who resumes within this long after a pause (before the agent answered) is a
     # slow speaker: wait this long for their silence for the rest of the call. 0 = off.
     SLOW_SPEAKER_END_SILENCE_MS: int = 1600
+
+    # --- Customer voice focus (app/services/voice_focus.py) ---
+    # Which utterances count as a customer turn: real voiced speech clearly above the line's noise
+    # floor; never a lone "ம்" / "uh", noise heard while the agent talks, or its echo.
+    # off | balanced (soft voices still heard) | strict (noisy places; quiet speakers missed more often)
+    VOICE_FOCUS_LEVEL: str = "balanced"
+    # log = measure every turn and log what would be dropped, change nothing | enforce = drop them
+    VOICE_FOCUS_MODE: str = "log"
+    # Per-threshold overrides of the level (empty = the level's value).
+    VOICE_FOCUS_MIN_VOICED_MS: Optional[int] = None
+    VOICE_FOCUS_MIN_SNR_DB: Optional[float] = None
+    VOICE_FOCUS_SHORT_VOICED_MS: Optional[int] = None
+    VOICE_FOCUS_SHORT_SNR_DB: Optional[float] = None
+    VOICE_FOCUS_BARGE_VOICED_MS: Optional[int] = None
+    VOICE_FOCUS_BARGE_SNR_DB: Optional[float] = None
+    VOICE_FOCUS_AGENT_END_GUARD_MS: Optional[int] = None
+    VOICE_FOCUS_MIN_PITCHED_MS: Optional[int] = None
+    # Drop transcripts below this STT confidence - only for a provider that reports a real
+    # transcript confidence (Sarvam reports only how sure it is of the language). 0 = off.
+    VOICE_FOCUS_MIN_STT_CONFIDENCE: float = 0.0
+    # STT_NORMALIZE_AUDIO never boosts an utterance with less voiced speech than this.
+    VOICE_FOCUS_NO_GAIN_UNDER_MS: int = 400
+
+    @field_validator("VOICE_FOCUS_LEVEL")
+    @classmethod
+    def _voice_focus_level(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        return v if v in ("off", "balanced", "strict") else "balanced"
+
+    @field_validator("VOICE_FOCUS_MODE")
+    @classmethod
+    def _voice_focus_mode(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        return v if v in ("log", "enforce") else "log"
+
+    @field_validator("VOICE_FOCUS_MIN_VOICED_MS", "VOICE_FOCUS_MIN_SNR_DB", "VOICE_FOCUS_SHORT_VOICED_MS",
+                     "VOICE_FOCUS_SHORT_SNR_DB", "VOICE_FOCUS_BARGE_VOICED_MS", "VOICE_FOCUS_BARGE_SNR_DB",
+                     "VOICE_FOCUS_AGENT_END_GUARD_MS", "VOICE_FOCUS_MIN_PITCHED_MS", mode="before")
+    @classmethod
+    def _voice_focus_override(cls, v):
+        return None if isinstance(v, str) and not v.strip() else v  # an empty line = the level's value
 
     @field_validator("PUBLIC_BASE_URL")
     @classmethod

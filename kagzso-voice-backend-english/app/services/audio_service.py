@@ -98,6 +98,27 @@ def normalize_for_stt(pcm8k: bytes, target_rms: int = 3000, max_gain_db: float =
     return y.astype("<i2").tobytes()
 
 
+PITCH_MIN_LAG, PITCH_MAX_LAG = 20, 114  # 400 Hz down to 70 Hz at 8 kHz: the range of a speaking voice
+PITCH_MIN_CORRELATION = 0.6  # a voiced vowel repeats; breath, coughs, hiss and clatter do not
+
+
+def is_pitched(pcm: bytes) -> bool:
+    """The audio (40 ms works best) repeats at a voice's pitch - a vowel, not breath or noise.
+    Normalised autocorrelation over lags 70-400 Hz; about 30 us for 40 ms."""
+    import numpy as np
+
+    x = np.frombuffer(pcm[: len(pcm) - len(pcm) % SAMPLE_WIDTH], dtype="<i2").astype(np.float64)
+    n = len(x)
+    if n <= PITCH_MAX_LAG:
+        return False
+    x -= x.mean()
+    ac = np.correlate(x, x, "full")[n - 1:]
+    energy = np.concatenate(([0.0], np.cumsum(x * x)))
+    lags = np.arange(PITCH_MIN_LAG, PITCH_MAX_LAG + 1)
+    norm = np.sqrt(energy[n - lags] * (energy[n] - energy[lags])) + 1e-9
+    return bool(np.max(ac[lags] / norm) > PITCH_MIN_CORRELATION)
+
+
 def mulaw_to_stt_wav(mulaw8k: bytes) -> bytes:
     return telephony_pcm_to_stt_wav(mulaw_to_pcm16(mulaw8k))
 
@@ -152,6 +173,7 @@ class NoiseFloorGate:
         self.max_rms = max(self.min_rms, max_rms)
         self._levels: Deque[int] = deque(maxlen=self.WINDOW_FRAMES)
         self.threshold = self.min_rms
+        self.floor: Optional[int] = None  # the learned background level (None until observed)
         # Gain applied to the audio by noise reduction (auto-gain); levels are compared with it
         # divided out, so a boosted voice - and the boosted noise after it - are judged on the
         # same scale the floor was learned on.
@@ -172,7 +194,7 @@ class NoiseFloorGate:
             self.threshold = self.min_rms  # not enough observations yet
             return
         ordered = sorted(self._levels)
-        floor = ordered[int(len(ordered) * self.PERCENTILE)]
+        floor = self.floor = ordered[int(len(ordered) * self.PERCENTILE)]
         self.threshold = int(min(self.max_rms, max(self.min_rms, floor * self.multiplier)))
 
     def passes(self, level: int) -> bool:
@@ -190,6 +212,15 @@ class EndpointResult:
     audio: bytes = b""  # PCM16 8 kHz utterance (only on SPEECH_END)
     duration_ms: int = 0
     silence_ms: int = 0  # silence waited before SPEECH_END (the customer stopped this long ago)
+    # What the utterance was made of (SPEECH_END with audio): voiced frames, their level with the
+    # noise reduction's gain divided out, the noise floor learned before it began, peak sample and
+    # the highest gain the noise reduction applied while it lasted.
+    voiced_ms: int = 0
+    speech_rms: int = 0
+    floor_rms: Optional[int] = None
+    peak: int = 0
+    max_gain: float = 1.0
+    pitched_ms: Optional[int] = None  # speech frames with a voice's pitch (measure_pitch only)
 
 
 class SpeechEndpointer:
@@ -212,8 +243,12 @@ class SpeechEndpointer:
         noise_gate: Optional[NoiseFloorGate] = None,
         loud_rms: int = 0,
         max_gap_ms: int = 100,
+        measure_pitch: bool = False,
     ):
         self.classify = classifier
+        # Count speech frames that carry a voice's pitch (customer voice focus); off = no extra work.
+        self.measure_pitch = measure_pitch
+        self._prev_raw = b""
         self.noise_gate = noise_gate
         # Run of consecutive loud speech in the current utterance (gaps up to max_gap_ms),
         # used for the immediate barge-in decision.
@@ -226,6 +261,9 @@ class SpeechEndpointer:
         self.max_frames = max(self.min_frames + 1, max_utterance_ms // FRAME_MS)
         self._preroll: Deque[bytes] = deque(maxlen=max(1, preroll_ms // FRAME_MS))
         self._window: Deque[bool] = deque(maxlen=self.window_frames)
+        self._window_power: Deque[float] = deque(maxlen=self.window_frames)  # level^2 of speech frames, else 0
+        self._window_pitched: Deque[bool] = deque(maxlen=self.window_frames)
+        self._quiet_floor: Optional[int] = None  # noise floor while the window held no speech
         self._pending = b""
         self._pending_raw = b""
         # Optional: receives each frame of the current utterance as it arrives (pre-roll
@@ -239,8 +277,14 @@ class SpeechEndpointer:
         self._voiced = 0
         self._silence = 0
         self._window.clear()
+        self._window_power.clear()
+        self._window_pitched.clear()
         self.loud_run_ms = 0
         self._loud_gap = 0
+        self._speech_power = 0.0
+        self._pitched = 0
+        self._start_floor: Optional[int] = None
+        self._max_gain = 1.0
 
     def utterance_so_far(self) -> bytes:
         """PCM of the utterance in progress (pre-roll included); empty when not in speech."""
@@ -270,29 +314,48 @@ class SpeechEndpointer:
     def _process_frame(self, frame: bytes, raw: Optional[bytes] = None) -> Optional[EndpointResult]:
         raw = frame if raw is None else raw
         speech = self.classify(frame)
+        level = rms(frame)
+        scale = 1.0
         if self.noise_gate is not None:
-            level = rms(frame)
+            scale = self.noise_gate.scale
             if not self.in_speech:
                 self.noise_gate.observe(level)  # learned only while the customer is silent
             speech = speech and self.noise_gate.passes(level)
+        power = (level / scale) ** 2 if speech else 0.0  # on the scale the floor was learned on
+        pitched = self.measure_pitch and speech and is_pitched(self._prev_raw + raw)  # the last 40 ms
+        self._prev_raw = raw
         if not self.in_speech:
             self._preroll.append(raw)
             self._window.append(speech)
+            self._window_power.append(power)
+            self._window_pitched.append(pitched)
+            if self.noise_gate is not None and not any(self._window):
+                # The floor before this utterance's first frames, which the gate also observes.
+                self._quiet_floor = self.noise_gate.floor
             if sum(self._window) >= self.start_frames:
                 self.in_speech = True
                 self._frames = list(self._preroll)
                 self._voiced = sum(self._window)
+                self._speech_power = sum(self._window_power)
+                self._pitched = sum(self._window_pitched)
+                self._start_floor = self._quiet_floor
+                self._max_gain = scale
                 self._silence = 0
                 self._preroll.clear()
                 self._window.clear()
+                self._window_power.clear()
+                self._window_pitched.clear()
                 return EndpointResult(VadEvent.SPEECH_START)
             return None
 
         self._frames.append(raw)
         if self.frame_sink is not None:
             self.frame_sink(raw)
+        self._max_gain = max(self._max_gain, scale)
         if speech:
             self._voiced += 1
+            self._speech_power += power
+            self._pitched += pitched
             self._silence = 0
         else:
             self._silence += 1
@@ -306,6 +369,9 @@ class SpeechEndpointer:
 
         if self._silence >= self.end_frames or len(self._frames) >= self.max_frames:
             voiced, frames, trailing = self._voiced, self._frames, self._silence
+            speech_rms = int((self._speech_power / voiced) ** 0.5) if voiced else 0
+            floor, gain = self._start_floor, self._max_gain
+            pitched_ms = self._pitched * FRAME_MS if self.measure_pitch else None
             self.reset()
             if voiced < self.min_frames:
                 return EndpointResult(VadEvent.SPEECH_END, b"", 0, trailing * FRAME_MS)  # noise burst, ignore
@@ -313,5 +379,7 @@ class SpeechEndpointer:
             keep = len(frames) - max(0, trailing - 10)
             audio = b"".join(frames[:keep])
             return EndpointResult(VadEvent.SPEECH_END, audio, len(audio) * 1000 // (TELEPHONY_SAMPLE_RATE * SAMPLE_WIDTH),
-                                  trailing * FRAME_MS)
+                                  trailing * FRAME_MS, voiced_ms=voiced * FRAME_MS, speech_rms=speech_rms,
+                                  floor_rms=floor, peak=audioop.max(audio, SAMPLE_WIDTH) if audio else 0, max_gain=gain,
+                                  pitched_ms=pitched_ms)
         return None

@@ -42,6 +42,9 @@ class STTError(Exception):
 
 class STTProvider(ABC):
     name: str = "base"
+    # True only if STTResult.confidence is how sure the provider is of the words. Sarvam's is
+    # language_probability (how sure it is of the language), so voice focus never filters on it.
+    reports_transcript_confidence: bool = False
 
     @abstractmethod
     async def transcribe(self, audio_data: bytes, filename: str = "audio.wav", content_type: str = "audio/wav") -> STTResult:

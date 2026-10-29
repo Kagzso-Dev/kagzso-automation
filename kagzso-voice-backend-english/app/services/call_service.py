@@ -61,6 +61,7 @@ from app.services.plivo_service import PlivoError, PlivoService, get_plivo_servi
 from app.services.twilio_service import TwilioService, get_twilio_service
 from app.services.sarvam_stt import SarvamSTT, STTError, STTProvider, STTStream, create_stt_provider
 from app.services.session_store import SessionStore, get_session_store
+from app.services import voice_focus as vf
 
 log = get_logger("voice.pipeline")
 
@@ -228,11 +229,12 @@ def is_noise_text(text: str) -> bool:
 ECHO_MIN_WORDS = 3
 
 
-def is_echo(text: str, agent_text: str) -> bool:
+def is_echo(text: str, agent_text: str, split: Callable[[str], List[str]] = _words) -> bool:
     """The transcript is the agent's own line coming back: 3+ words, every one taken in order
     from `agent_text` and close together. A reply with any word of its own ("yes", "no",
-    a name) is never echo, and neither is anything shorter than 3 words."""
-    words, ref = _words(text), _words(agent_text)
+    a name) is never echo, and neither is anything shorter than 3 words. `split` = how text is
+    cut into words (voice focus uses one that keeps Tamil / Hindi words whole)."""
+    words, ref = split(text), split(agent_text)
     if len(words) < ECHO_MIN_WORDS or not ref:
         return False
     max_span = 2 * len(words) + 2
@@ -1012,6 +1014,11 @@ class CallSession:
             min_utterance_ms = cfg.VAD_MIN_UTTERANCE_MS
             vad_min_rms = cfg.VAD_MIN_RMS
         self._noise_gate = noise_gate
+        # Customer voice focus (VOICE_FOCUS_LEVEL): None = off; enforce = drop, else only measure + log.
+        self._focus = vf.thresholds_for(cfg)
+        self._focus_enforce = self._focus is not None and cfg.VOICE_FOCUS_MODE == "enforce"
+        self._speech_after_agent_ms: Optional[int] = None  # current utterance began this long after the agent stopped
+        self._filler_notes = 0  # lone filler sounds passed to the LLM since the last real answer (max 1)
         self._last_speech_end: Optional[float] = None
         self._slow_speaker = False
         self._latency_rows: List[Dict[str, Any]] = []  # LATENCY_DETAIL_METRICS: this call's turn timings
@@ -1024,6 +1031,7 @@ class CallSession:
             noise_gate=noise_gate,
             loud_rms=cfg.BARGE_IN_MIN_RMS,
             max_gap_ms=cfg.BARGE_IN_MAX_GAP_MS,
+            measure_pitch=self._focus is not None,
         )
         self.history: List[Dict[str, str]] = []
         self.state = CallStatus.connected.value
@@ -1274,6 +1282,10 @@ class CallSession:
                         and self.greeting_delay is None):
                     self._greeting_task.cancel()
                 self._speech_near_agent = self.ai_busy or self._agent_recently_spoke()
+                # Onset = now minus the voiced time it took to declare speech.
+                self._speech_after_agent_ms = (
+                    None if self.ai_busy or not self._agent_audio_end
+                    else max(0, int((time.monotonic() - self._agent_audio_end) * 1000) - self.cfg.VAD_SPEECH_START_MS))
                 if self.greeting_delay is not None and self.ctx.first_message and not self._agent_spoke:
                     self._opening_speech = True  # before the greeting: it never moves or cuts the greeting
                 if self.ai_busy:
@@ -1291,19 +1303,24 @@ class CallSession:
                     self._after_noise()
                     continue
                 t0 = time.monotonic() - ev.silence_ms / 1000
-                self._last_speech_end = t0
                 log.info("Customer audio received (%dms)", ev.duration_ms)
                 opening, self._opening_speech = self._opening_speech, False
+                focus = None if opening else self._turn_audio(ev, agent_speaking=candidate or self.ai_busy)
+                if self._focus_rejects_audio(focus):  # not real customer speech: no STT, no turn
+                    self._drop_stt_stream(stt_stream)
+                    self._after_noise()
+                    continue
+                self._last_speech_end = t0
                 if opening:
                     # AI Greeting Delay: words that began before the greeting don't start, move or cut it
                     # (it plays at the delay); only a do-not-call / AI question among them gets the script.
                     self._spawn(self._check_opening_words(ev.audio, stt_stream, t0))
                 elif candidate or self.ai_busy:
                     self._drop_stt_stream(stt_stream)
-                    self._check_barge_in(ev.audio, t0)  # interrupt only if STT hears real words
+                    self._check_barge_in(ev.audio, t0, focus)  # interrupt only if STT hears real words
                 else:
                     self._start_turn(audio_pcm=ev.audio, stt_stream=stt_stream, t0=t0,
-                                     near_agent=self._speech_near_agent)
+                                     near_agent=self._speech_near_agent, focus=focus)
         if self._barge_candidate and self.endpointer.in_speech:
             await self._confirm_loud_barge_in(pcm if raw is None else raw)  # barge-in rules use the original audio
 
@@ -1393,15 +1410,16 @@ class CallSession:
             self._barge_candidate = False
             await self.barge_in()
 
-    def _check_barge_in(self, audio_pcm: bytes, t0: Optional[float] = None) -> None:
+    def _check_barge_in(self, audio_pcm: bytes, t0: Optional[float] = None, focus: Optional[vf.TurnAudio] = None) -> None:
         if self._barge_check_task and not self._barge_check_task.done():
             self._barge_check_task.cancel()
-        self._barge_check_task = asyncio.create_task(self._run_barge_check(audio_pcm, time.monotonic(), t0))
+        self._barge_check_task = asyncio.create_task(self._run_barge_check(audio_pcm, time.monotonic(), t0, focus))
 
-    async def _run_barge_check(self, audio_pcm: bytes, t1: float, t0: Optional[float] = None) -> None:
+    async def _run_barge_check(self, audio_pcm: bytes, t1: float, t0: Optional[float] = None,
+                               focus: Optional[vf.TurnAudio] = None) -> None:
         with call_context(self.call_id):
             try:
-                result = await self.stt.transcribe(self._stt_wav(audio_pcm))
+                result = await self.stt.transcribe(self._stt_wav(audio_pcm, focus.voiced_ms if focus else None))
             except STTError as exc:
                 log.warning("STT failed on possible interruption (%s) - agent keeps talking", exc.kind)
                 return
@@ -1421,7 +1439,7 @@ class CallSession:
                 # A silence-triggered repeat / re-prompt never plays on top of the customer.
                 log.info("Customer spoke over a silence line - stopping it")
                 await self.barge_in()
-                self._start_turn(transcript=(result["text"], result.get("confidence"), t1), t0=t0)
+                self._start_turn(transcript=(result["text"], result.get("confidence"), t1), t0=t0, focus=focus)
                 return
             # Over a time-of-day opening or its identity question any words are held (never
             # discarded, never talked over) - except do-not-call / AI questions, which interrupt.
@@ -1434,14 +1452,15 @@ class CallSession:
                          result["text"])
                 self._held_reply = (result["text"], result.get("confidence"), t1)
                 return
-            if self.ai_busy and is_filler(result["text"]):
+            if self.ai_busy and (is_filler(result["text"])
+                                 or (self._focus_enforce and vf.is_lone_filler(result["text"]))):
                 self._customer_texts.append(result["text"])  # a "Hmm" / "Yes" is still a person
                 log.info("Customer said %r while agent busy - not an interruption, agent continues", result["text"])
                 self._event("barge_in_ignored", {"turn": self.turn_index, "text": result["text"][:60]})
                 return
             if self.ai_busy:
                 await self.barge_in()
-            self._start_turn(transcript=(result["text"], result.get("confidence"), t1), t0=t0)
+            self._start_turn(transcript=(result["text"], result.get("confidence"), t1), t0=t0, focus=focus)
 
     # ------------------------------------------------------------------ noise / echo
     def _agent_recently_spoke(self) -> bool:
@@ -1456,7 +1475,53 @@ class CallSession:
         last = self.history[-1] if self.history else None
         if last and last["role"] == "assistant":
             lines.append(last["content"])
-        return any(is_echo(text, line) for line in lines)
+        split = vf.words if self._focus_enforce else _words
+        return any(is_echo(text, line, split) for line in lines)
+
+    # ------------------------------------------------------------------ voice focus
+    def _turn_audio(self, ev: audio.EndpointResult, agent_speaking: bool) -> Optional[vf.TurnAudio]:
+        """The measurements the voice-focus gates judge an utterance on (None when off)."""
+        if self._focus is None:
+            return None
+        last = next((h["content"] for h in reversed(self.history) if h["role"] == "assistant"), None)
+        return vf.TurnAudio(
+            duration_ms=ev.duration_ms, voiced_ms=ev.voiced_ms, speech_rms=ev.speech_rms, floor_rms=ev.floor_rms,
+            peak=ev.peak, max_gain=ev.max_gain, pitched_ms=ev.pitched_ms, agent_speaking=agent_speaking,
+            after_agent_ms=None if agent_speaking else self._speech_after_agent_ms,
+            # Nothing said yet, a question, or the time-of-day opening ("Hi sir, Good morning.") all wait for a reply.
+            expects_short=last is None or vf.asks_question(last) or self._at_opening(),
+            # Said over the identity question or a silence line: that is an answer, not an interruption.
+            answering_question=agent_speaking and (self._identity_question_playing() or self._silence_line_playing()),
+        )
+
+    def _focus_rejects_audio(self, a: Optional[vf.TurnAudio]) -> bool:
+        """Gates before STT (real speech, short answer, agent speaking, echo window). Logs what was
+        measured; True = drop the utterance (VOICE_FOCUS_MODE=enforce only)."""
+        if a is None or self._focus is None:
+            return False
+        reason = vf.check_audio(self._focus, a)
+        verdict = "counts" if reason is None else f"{'dropped' if self._focus_enforce else 'would drop'} ({reason})"
+        log.info("Voice focus (%s): %s -> %s", self.cfg.VOICE_FOCUS_LEVEL, vf.describe(a), verdict)
+        if reason is not None:
+            self._focus_event(reason, a)
+        return reason is not None and self._focus_enforce
+
+    def _focus_event(self, reason: str, a: Optional[vf.TurnAudio] = None) -> None:
+        payload: Dict[str, Any] = {"turn": self.turn_index, "reason": reason, "level": self.cfg.VOICE_FOCUS_LEVEL}
+        if a is not None:
+            payload.update(duration_ms=a.duration_ms, voiced_ms=a.voiced_ms, snr_db=a.snr_db,
+                           agent_speaking=a.agent_speaking)
+        self._event("turn_rejected" if self._focus_enforce else "turn_would_reject", payload)
+
+    def _waiting_on_question(self) -> bool:
+        last = self._last_assistant_line()
+        return bool(last) and vf.asks_question(last)
+
+    def _low_confidence(self, confidence: Optional[float]) -> bool:
+        """Only for an STT that reports how sure it is of the words (Sarvam reports the language only)."""
+        floor = self.cfg.VOICE_FOCUS_MIN_STT_CONFIDENCE
+        return (self._focus is not None and floor > 0 and confidence is not None
+                and getattr(self.stt, "reports_transcript_confidence", False) and confidence < floor)
 
     def _confirm_customer_speech(self) -> None:
         """STT heard real words: now the customer counts as having spoken (NOISE_SAFE_STATE)."""
@@ -1575,7 +1640,8 @@ class CallSession:
         """Only once, only right after the identity question - the opening line
         ("Hi, is this {{customer_name}}?") or IDENTITY_QUESTION after a time-of-day
         opening - and only when the reply is nothing but a greeting."""
-        if self._identity_reasked or self.identity_reask_text() is None or not is_greeting_only(text):
+        greeting_only = is_greeting_only(text) or (self._focus_enforce and vf.is_lone_filler(text))  # "ம்" too
+        if self._identity_reasked or self.identity_reask_text() is None or not greeting_only:
             return False
         last = self._last_assistant_line()
         if not last:
@@ -1787,10 +1853,11 @@ class CallSession:
     def _start_turn(self, audio_pcm: Optional[bytes] = None, injected: Optional[str] = None,
                     scripted: Optional[str] = None, transcript: Optional[tuple] = None,
                     stt_stream: Optional[STTStream] = None, t0: Optional[float] = None,
-                    near_agent: bool = False) -> None:
+                    near_agent: bool = False, focus: Optional[vf.TurnAudio] = None) -> None:
         """transcript = (text, confidence, t1) when STT already ran (confirmed barge-in).
         near_agent = the speech started over / just after the agent's audio (echo check).
-        stt_stream = the streamed STT session for audio_pcm (STT_STREAMING), if any."""
+        stt_stream = the streamed STT session for audio_pcm (STT_STREAMING), if any.
+        focus = what voice focus measured for this utterance (VOICE_FOCUS_LEVEL), if anything."""
         if self._turn_task and not self._turn_task.done():
             self._turn_task.cancel()
         if self._held_reply and (audio_pcm is not None or transcript is not None):
@@ -1802,10 +1869,11 @@ class CallSession:
         self._last_activity = time.monotonic()
         t1 = transcript[2] if transcript else time.monotonic()
         self._turn_task = asyncio.create_task(
-            self._run_turn(self.turn_index, audio_pcm, injected, t1, scripted, transcript, stt_stream, t0, near_agent)
+            self._run_turn(self.turn_index, audio_pcm, injected, t1, scripted, transcript, stt_stream, t0, near_agent,
+                           focus)
         )
 
-    async def _transcribe(self, audio_pcm: bytes, stt_stream: Optional[STTStream]) -> dict:
+    async def _transcribe(self, audio_pcm: bytes, stt_stream: Optional[STTStream], voiced_ms: Optional[int] = None) -> dict:
         """Streamed transcript when available, else (or on any problem) the REST request."""
         if stt_stream is not None:
             try:
@@ -1817,12 +1885,15 @@ class CallSession:
                 log.warning("Streamed STT failed (%s) - using the REST request", exc.kind)
             finally:
                 await stt_stream.aclose()
-        return await self.stt.transcribe(self._stt_wav(audio_pcm))
+        return await self.stt.transcribe(self._stt_wav(audio_pcm, voiced_ms))
 
-    def _stt_wav(self, audio_pcm: bytes) -> bytes:
+    def _stt_wav(self, audio_pcm: bytes, voiced_ms: Optional[int] = None) -> bytes:
         """What STT hears for an utterance: the original audio, or (STT_NORMALIZE_AUDIO) a
-        level-normalised copy of it. The live call audio is never changed."""
-        if self.cfg.STT_NORMALIZE_AUDIO:
+        level-normalised copy of it. The live call audio is never changed. Voice focus never
+        boosts a very short utterance, so noise is not lifted into a word."""
+        short = (self._focus_enforce and voiced_ms is not None
+                 and voiced_ms < self.cfg.VOICE_FOCUS_NO_GAIN_UNDER_MS)
+        if self.cfg.STT_NORMALIZE_AUDIO and not short:
             audio_pcm = audio.normalize_for_stt(audio_pcm, self.cfg.STT_NORMALIZE_TARGET_RMS,
                                                 self.cfg.STT_NORMALIZE_MAX_GAIN_DB)
         return audio.telephony_pcm_to_stt_wav(audio_pcm)
@@ -1830,7 +1901,7 @@ class CallSession:
     async def _run_turn(self, turn: int, audio_pcm: Optional[bytes], injected: Optional[str], t1: float,
                         scripted: Optional[str] = None, transcript: Optional[tuple] = None,
                         stt_stream: Optional[STTStream] = None, t0: Optional[float] = None,
-                        near_agent: bool = False) -> None:
+                        near_agent: bool = False, focus: Optional[vf.TurnAudio] = None) -> None:
         with call_context(self.call_id):
             m = TurnMetrics(t1=t1, t0=t0)
             await self._set_state(CallStatus.processing.value)
@@ -1850,7 +1921,7 @@ class CallSession:
                     result = {"text": transcript[0], "confidence": transcript[1]}
                     m.t2 = time.monotonic()
                 elif audio_pcm is not None:
-                    result = await self._transcribe(audio_pcm, stt_stream)
+                    result = await self._transcribe(audio_pcm, stt_stream, focus.voiced_ms if focus else None)
                     stt_stream = None
                     m.t2 = time.monotonic()
                     log.info("STT completed: %dms", _ms(m.t1, m.t2))
@@ -1870,10 +1941,40 @@ class CallSession:
                         self._event("echo_ignored", {"turn": turn})
                         self._after_noise()
                         return
+                    stored = text  # what the transcript keeps
+                    if self._low_confidence(result.get("confidence")):
+                        log.info("Voice focus: STT confidence below %.2f -> %s", self.cfg.VOICE_FOCUS_MIN_STT_CONFIDENCE,
+                                 "dropped" if self._focus_enforce else "would drop")
+                        self._focus_event("low_confidence", focus)
+                        if self._focus_enforce:
+                            self._after_noise()
+                            return
+                    if self._focus is not None and vf.is_lone_filler(text):
+                        if not self._focus_enforce:
+                            log.info("Voice focus: lone filler sound -> would drop (filler)")
+                            self._focus_event("filler", focus)
+                        else:
+                            stored = f"[filler] {text}"
+                            if self._should_ask_identity(text) or self._should_reask_identity(text):
+                                pass  # only the cue for the scripted identity line, as for "Hello?"
+                            elif self._filler_notes == 0 and self._waiting_on_question():
+                                # Never an answer: the LLM is told so, once, and asks again (shorter).
+                                self._filler_notes += 1
+                                text = vf.FILLER_NOTE.format(text=text)
+                                log.info("Voice focus: lone filler sound after a question -> asking it again once")
+                            else:
+                                log.info("Voice focus: lone filler sound -> dropped (filler)")
+                                self._focus_event("filler", focus)
+                                self._persist(lambda db, t=stored, c=result.get("confidence"): repo.add_transcript(
+                                    db, self.call_id, "customer", t, confidence=c))
+                                self._after_noise()
+                                return
+                    elif self._focus is not None:
+                        self._filler_notes = 0  # a real answer
                     self._confirm_customer_speech()
                     self._customer_texts.append(text)
                     log.info("Customer said: %s", text[:200])
-                    self._persist(lambda db, t=text, c=result.get("confidence"): repo.add_transcript(db, self.call_id, "customer", t, confidence=c))
+                    self._persist(lambda db, t=stored, c=result.get("confidence"): repo.add_transcript(db, self.call_id, "customer", t, confidence=c))
                     st.user_text = f"{self._pending_user_text} {text}".strip()
                     st.record_user = True
                     self._pending_user_text = st.user_text  # cleared once a reply is delivered
