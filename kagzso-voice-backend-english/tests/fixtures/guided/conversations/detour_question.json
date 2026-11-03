@@ -1,0 +1,13 @@
+{
+  "about": "A price question in the middle of discovery: answered from approved knowledge, then the pending question again.",
+  "turns": [
+    {"customer": "Okay, tell me.", "decision": {"intent": "agreed", "captured": {}, "next": "discover", "asks": null}, "reply": "Thank you."},
+    {"customer": "First tell me, how much does it cost?",
+     "decision": {"intent": "question", "captured": {}, "next": "stay", "asks": null},
+     "reply": "The exact cost depends on your requirements and the automation scope. We can give an accurate price only after understanding your process."},
+    {"customer": "Okay. We have a restaurant.",
+     "decision": {"intent": "answered", "captured": {"business_type": "restaurant"}, "next": "stay", "asks": "current_process"},
+     "reply": "A restaurant, nice. How do you handle orders, billing or follow-ups today?"},
+    {"customer": "Sorry, I'm busy now.", "decision": {"intent": "busy", "captured": {}, "next": "close:busy", "asks": null}, "reply": "No problem."}
+  ]
+}

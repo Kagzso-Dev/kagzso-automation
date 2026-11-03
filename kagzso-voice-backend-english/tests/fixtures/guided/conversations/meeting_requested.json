@@ -1,0 +1,13 @@
+{
+  "about": "The customer asks for someone from the team: recorded as meeting_requested; the team line only with team follow-up on.",
+  "team_followup": true,
+  "turns": [
+    {"customer": "Yes.", "decision": {"intent": "agreed", "captured": {}, "next": "discover", "asks": null}, "reply": "Thank you."},
+    {"customer": "We are a clinic. Appointments and reminders are all done on the phone.",
+     "decision": {"intent": "answered", "captured": {"business_type": "clinic", "current_process": "appointments and reminders by phone"}, "next": "relate", "asks": null},
+     "reply": "Thank you, that is clear."},
+    {"customer": "Can someone from your team come and explain it to us?",
+     "decision": {"intent": "meeting_request", "captured": {"interest_level": "wants to talk to the team"}, "next": "close:meeting", "asks": null},
+     "reply": "Of course."}
+  ]
+}

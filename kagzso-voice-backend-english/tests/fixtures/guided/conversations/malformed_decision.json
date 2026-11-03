@@ -1,0 +1,7 @@
+{
+  "about": "The LLM sends no decision line (and an invented price): nothing it wrote is spoken; the pending exact question is.",
+  "turns": [
+    {"customer": "Yes, what is it?", "model_raw": "Sure! Our plan is only Rs 5000 per month, shall I book a demo?"},
+    {"customer": "Okay, go ahead.", "decision": {"intent": "agreed", "captured": {}, "next": "discover", "asks": null}, "reply": "Thank you."}
+  ]
+}

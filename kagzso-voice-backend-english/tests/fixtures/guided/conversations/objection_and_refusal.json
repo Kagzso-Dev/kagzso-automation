@@ -1,0 +1,12 @@
+{
+  "about": "A question and an objection before permission (the exact permission question comes back each time), then a refusal.",
+  "turns": [
+    {"customer": "What is this about?",
+     "decision": {"intent": "question", "captured": {}, "next": "stay", "asks": null},
+     "reply": "It's a short introduction to how we help businesses with repetitive work."},
+    {"customer": "We already have staff for all that.",
+     "decision": {"intent": "objection", "captured": {}, "next": "stay", "asks": null},
+     "reply": "Replacing employees is not the goal. The idea is to reduce the time they spend on repetitive work."},
+    {"customer": "No, I'm not interested.", "decision": {"intent": "not_interested", "captured": {}, "next": "stay", "asks": null}, "reply": "Okay."}
+  ]
+}

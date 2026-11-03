@@ -1,0 +1,17 @@
+{
+  "about": "A hotel owner: permission, two discovery answers (one volunteers a pain point), interest, closing.",
+  "turns": [
+    {"customer": "Yes, sure, go ahead.",
+     "decision": {"intent": "agreed", "captured": {"custom_permission": "yes"}, "next": "discover", "asks": null},
+     "reply": "Thank you."},
+    {"customer": "We run a hotel in Madurai, about forty rooms.",
+     "decision": {"intent": "answered", "captured": {"business_type": "hotel, about forty rooms"}, "next": "stay", "asks": "current_process"},
+     "reply": "A forty-room hotel, that helps. How does your team handle things like follow-ups, billing or reports today?"},
+    {"customer": "Mostly manually, in Excel and on paper. The front desk spends hours on it.",
+     "decision": {"intent": "answered", "captured": {"current_process": "manually in Excel and on paper", "pain_points": {"value": "front desk spends hours on manual work", "source": "customer"}}, "next": "relate", "asks": null},
+     "reply": "That is a lot of manual work for the front desk."},
+    {"customer": "Yes, I think it could be useful.",
+     "decision": {"intent": "interested", "captured": {"interest_level": "interested"}, "next": "close:interested", "asks": null},
+     "reply": "Great."}
+  ]
+}

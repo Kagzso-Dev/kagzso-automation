@@ -1,0 +1,9 @@
+{
+  "about": "Do-not-call during discovery: the code detector wins even though the LLM's decision says something else.",
+  "turns": [
+    {"customer": "Yes.", "decision": {"intent": "agreed", "captured": {}, "next": "discover", "asks": null}, "reply": "Thank you."},
+    {"customer": "Please don't call me again.",
+     "decision": {"intent": "objection", "captured": {}, "next": "stay", "asks": null},
+     "reply": "I understand, but may I just ask one quick question?"}
+  ]
+}
