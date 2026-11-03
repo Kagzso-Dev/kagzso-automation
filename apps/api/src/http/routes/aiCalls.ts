@@ -130,6 +130,9 @@ export async function planAndStartAiCallRun(
   body: StartAiCallsInput,
   user: { id: string; email: string },
   customerIdByRow?: (string | null)[],
+  /** AI Agents: rows whose contact gender is "Not specified" are called as "unknown" (neutral greeting, no sir /
+   *  madam) instead of the Male default. Absent = every row exactly as before. */
+  opts?: { neutralGenderRows?: ReadonlySet<number> },
 ): Promise<{ status: number; json: Record<string, unknown> }> {
   // The run's language: its voice backend must be set up (and, for any language but English, switched on).
   const language = body.language;
@@ -201,7 +204,7 @@ export async function planAndStartAiCallRun(
         create: plan.targets.map((t, i) => ({
           position: i,
           customerName: t.customerName,
-          gender: t.gender,
+          gender: opts?.neutralGenderRows?.has(t.rowIndex) ? "unknown" : t.gender,
           followUpDetail: t.followUpDetail,
           phone: t.phone,
         })),

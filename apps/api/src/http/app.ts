@@ -33,6 +33,7 @@ import { aiCallsRouter } from "./routes/aiCalls.js";
 import { aiCallRecordingsRouter } from "./routes/aiCallRecordings.js";
 import { aiCallWebhookRouter } from "./routes/aiCallWebhook.js";
 import { callFlowsRouter } from "./routes/callFlows.js";
+import { aiAgentsRouter } from "./routes/aiAgents.js";
 import { voicesRouter } from "./routes/voices.js";
 import { aiProvidersRouter } from "./routes/aiProviders.js";
 import { aiCallCustomersRouter } from "./routes/aiCallCustomers.js";
@@ -102,6 +103,7 @@ export function createApp() {
   app.use("/api/settings", settingsRouter);
   app.use("/api/ai-calls", aiCallRecordingsRouter); // recordings: ADMIN only, own paths
   app.use("/api/ai-calls", aiCallsRouter);
+  app.use("/api/ai-agents", aiAgentsRouter);
   app.use("/api/call-flows", callFlowsRouter);
   app.use("/api/voices", voicesRouter); // "Listen" voice previews (text-to-speech only, never a call)
   app.use("/api/ai-providers", aiProvidersRouter); // admin only; per-language voice backend provider settings

@@ -133,7 +133,7 @@ const testCallHourlyLimiter = rateLimit({
 });
 
 /** Voice backend problems become 503 (unreachable) or 502 (it rejected us), never a crash. */
-function voiceError(err: unknown): never {
+export function voiceError(err: unknown): never {
   if (err instanceof VoiceBackendError) {
     throw new AppError(err.status === null || err.retryable ? 503 : 502, err.message, "unavailable");
   }
@@ -149,7 +149,7 @@ function flowError(err: unknown): never {
 
 const builtinCache = new Map<AiCallLanguage, { at: number; data: VoiceFlowCatalog }>();
 /** The language's built-in flows, from its own voice backend (cached a minute per language). */
-async function builtins(language: AiCallLanguage = DEFAULT_AI_CALL_LANGUAGE): Promise<VoiceFlowCatalog> {
+export async function builtins(language: AiCallLanguage = DEFAULT_AI_CALL_LANGUAGE): Promise<VoiceFlowCatalog> {
   const hit = builtinCache.get(language);
   if (hit && Date.now() - hit.at < 60_000) return hit.data;
   const data = await getBuiltinFlows(language).catch(voiceError);

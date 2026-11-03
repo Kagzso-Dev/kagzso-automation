@@ -164,6 +164,16 @@ class FlowPauses(_Strict):
     long_ms: int = Field(1200, ge=0, le=3000)
 
 
+class FlowAutonomous(_Strict):
+    """An Autonomous AI Agent's flow (Dispatch "AI Agents", compiled into a base "executive" flow). None = a
+    normal flow, exactly as before. With it, the call (only this call):
+      - is told each turn how long it has been running, and to start closing once target_duration_sec has
+        passed (the hard stop stays limits.max_duration_sec, the Plivo / Twilio time limit);
+      - enforces do-not-call in the backend (as DNC_ENFORCE does) whatever DNC_ENFORCE is set to."""
+    target_duration_sec: int = Field(60, ge=20, le=600)
+    dnc_enforce: Literal[True] = True
+
+
 class FlowTransfer(_Strict):
     # Stored only: live transfer is not implemented, so it cannot be switched on yet.
     enabled: Literal[False] = False
@@ -193,6 +203,8 @@ class CallFlow(_Strict):
     # Training tab: tone and knowledge notes compiled into a prompt block (app/flows/training.py).
     # None = no training: the prompt is exactly what it was before training existed.
     training: Optional[FlowTraining] = None
+    # Autonomous AI Agent settings (FlowAutonomous). None = a normal flow: nothing about the call changes.
+    autonomous: Optional[FlowAutonomous] = None
 
     @field_validator("language")
     @classmethod
@@ -213,6 +225,15 @@ class CallFlow(_Strict):
     def _style(self) -> "CallFlow":
         if self.language_style is not None and self.language == "en":
             raise ValueError("an English flow has no language style")
+        return self
+
+    @model_validator(mode="after")
+    def _autonomous(self) -> "CallFlow":
+        if self.autonomous is not None:
+            if self.base != "executive":
+                raise ValueError("autonomous settings need base 'executive'")
+            if self.autonomous.target_duration_sec > self.limits.max_duration_sec:
+                raise ValueError("autonomous.target_duration_sec must not exceed limits.max_duration_sec")
         return self
 
     @model_validator(mode="after")

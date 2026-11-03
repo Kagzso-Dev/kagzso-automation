@@ -643,8 +643,13 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
                     flow_vars["flow_identity_reask"] = resolved.flow.identity.reask
             if cfg.KEY_LINES_SCRIPTED:  # else the AI says them, as before
                 flow_vars.update({f"flow_key_{k}": v for k, v in rs.flow_key_lines(resolved.flow).items()})
-            if cfg.DNC_ENFORCE and (dnc_line := rs.flow_dnc_line(resolved.flow)):
+            autonomous = resolved.flow.autonomous  # Autonomous AI Agent (Dispatch "AI Agents"); None = as before
+            if (cfg.DNC_ENFORCE or autonomous is not None) and (dnc_line := rs.flow_dnc_line(resolved.flow)):
                 flow_vars["flow_dnc_line"] = dnc_line  # spoken word for word on a do-not-call request
+            if autonomous is not None:
+                # This call only: backend do-not-call whatever DNC_ENFORCE says, and the time hint every turn.
+                flow_vars["flow_dnc_force"] = "true"
+                flow_vars["flow_target_sec"] = str(autonomous.target_duration_sec)
             if resolved.flow.pauses is not None:  # else the default pause lengths
                 flow_vars.update({f"flow_pause_{k}": str(v) for k, v in resolved.flow.pauses.model_dump().items()})
             # Training switched on with Active entries: compiled into each reply's prompt (llm_service.training_block).
@@ -983,6 +988,8 @@ class CallContextData:
     key_intro: Optional[str] = None
     # DNC_ENFORCE: the flow's do-not-call line (rendered); None = the AI says its closing line.
     dnc_line: Optional[str] = None
+    # An Autonomous AI Agent's call: do-not-call is enforced by the backend whatever DNC_ENFORCE says.
+    dnc_forced: bool = False
 
 
 @dataclass
@@ -1181,6 +1188,7 @@ class CallSession:
         self._end_locked = False  # DNC_ENFORCE: the call ends after the do-not-call line, whatever is said next
         self._dnc_recorded = False
         self._closed = False
+        self._session_started = time.monotonic()  # call time for an Autonomous AI Agent's timing hint
         self._agent_audio_end = 0.0  # when the agent's audio last stopped (echo tail)
         self._speaking_turn: Optional[_TurnState] = None  # the line the agent is / was last saying
         self._speech_near_agent = False  # current utterance started over / right after the agent
@@ -1344,9 +1352,22 @@ class CallSession:
             lines += list(self.key_lines())
         if self.cfg.THINKING_ACK:
             lines += self.ack_lines()
-        if self.cfg.DNC_ENFORCE and self.ctx.dnc_line:
+        if self.dnc_enforced and self.ctx.dnc_line:
             lines.append(self.ctx.dnc_line)
         return list(dict.fromkeys(line for line in lines if line))
+
+    @property
+    def dnc_enforced(self) -> bool:
+        """Backend do-not-call handling: DNC_ENFORCE, or this call is an Autonomous AI Agent's (always on)."""
+        return self.cfg.DNC_ENFORCE or self.ctx.dnc_forced
+
+    def turn_variables(self) -> Mapping[str, Optional[str]]:
+        """The variables for one LLM reply. An Autonomous AI Agent's call (flow_target_sec) also gets the
+        seconds since the call connected (llm_service adds the timing line); every other call: unchanged."""
+        if not self.ctx.variables.get("flow_target_sec"):
+            return self.ctx.variables
+        elapsed = int(time.monotonic() - self._session_started)
+        return {**self.ctx.variables, "call_elapsed_sec": str(max(0, elapsed))}
 
     def ack_lines(self) -> List[str]:
         """THINKING_ACK: the acknowledgement pool as spoken in this call (title from title_to_use)."""
@@ -1699,7 +1720,7 @@ class CallSession:
             # discarded, never talked over) - except do-not-call / AI questions, which interrupt.
             held_ok = is_filler(result["text"]) or (identity_after_greeting(self.ctx.first_message)
                                                      and not needs_script_at_opening(result["text"])
-                                                     and not (self.cfg.DNC_ENFORCE and is_do_not_call(result["text"])))
+                                                     and not (self.dnc_enforced and is_do_not_call(result["text"])))
             if self.ai_busy and held_ok and self._identity_question_playing():
                 # "Yes" said over "Hi, is this <name>?" is the answer, not a backchannel: keep it
                 # and answer once the question has finished playing.
@@ -2057,7 +2078,7 @@ class CallSession:
             self._customer_texts.append(text)
             log.info("Customer said (before the greeting): %s", text[:200])
             self._persist(lambda db, t=text, c=result.get("confidence"): repo.add_transcript(db, self.call_id, "customer", t, confidence=c))
-            if not (needs_script_at_opening(text) or (self.cfg.DNC_ENFORCE and is_do_not_call(text))):
+            if not (needs_script_at_opening(text) or (self.dnc_enforced and is_do_not_call(text))):
                 return
             log.info("First words need the script - answering them instead of the greeting")
             self._event("greeting_skipped", {"reason": "script"})
@@ -2290,7 +2311,7 @@ class CallSession:
                     st.user_text = f"{self._pending_user_text} {text}".strip()
                     st.record_user = True
                     self._pending_user_text = st.user_text  # cleared once a reply is delivered
-                    if self.cfg.DNC_ENFORCE and is_do_not_call(text):
+                    if self.dnc_enforced and is_do_not_call(text):
                         self._do_not_call(st)  # any stage: highest priority, before every scripted line
                     elif not self._greeted and self._first_speech_mode and needs_script_at_opening(text):
                         # Do-not-call / "are you a bot?" before the greeting: the script answers it
@@ -2584,7 +2605,7 @@ class CallSession:
                 raw_parts: List[str] = []  # REPLY_GUARD: the model's text as sent, only read afterwards
                 try:
                     async for delta in self.providers.llm.stream_response(
-                        self.ctx.agent_prompt, self.history, st.user_text, self.ctx.variables
+                        self.ctx.agent_prompt, self.history, st.user_text, self.turn_variables()
                     ):
                         if guard:
                             raw_parts.append(delta)
@@ -2735,7 +2756,8 @@ class CallSession:
                 text = " ".join(st.spoken)
             else:
                 raw = await asyncio.wait_for(
-                    self.providers.llm.generate_response(self.ctx.agent_prompt, self.history, st.user_text, self.ctx.variables),
+                    self.providers.llm.generate_response(self.ctx.agent_prompt, self.history, st.user_text,
+                                                         self.turn_variables()),
                     timeout=10,
                 )
                 raw, end = extract_end_call(raw)
@@ -2916,4 +2938,5 @@ async def load_call_context(call_id: str) -> Optional[CallContextData]:
             if variables.get("flow_key_intro") else None,
             dnc_line=render_first_message(variables["flow_dnc_line"], variables) or None
             if variables.get("flow_dnc_line") else None,
+            dnc_forced=variables.get("flow_dnc_force") == "true",
         )

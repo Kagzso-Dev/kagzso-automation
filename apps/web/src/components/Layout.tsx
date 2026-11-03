@@ -53,6 +53,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/ai-call-customers", label: "Voicecall Contact", icon: "phone" },
       { to: "/call-flows", label: "Voice Call Flows", icon: "phone" },
+      { to: "/ai-agents", label: "AI Agents", icon: "phone" }, // admins only (lib/navAccess)
     ],
   },
   {
@@ -115,6 +116,7 @@ export function Layout({ children }: { children: ReactNode }) {
         const page = splitAiCallLanguagePath(n.to).path; // "/ta/call-flows" follows "/call-flows"
         return (
           (page !== "/call-flows" || showCallFlows) &&
+          (page !== "/ai-agents" || showCallFlows) &&
           (page !== "/ai-call-customers" || showAiCustomers) &&
           (n.to !== "/whatsapp-inbox" || user?.role === "ADMIN") && // customer messages: admins only
           // Settings hidden "for editors" never hides from admins (they must be able to turn it back on).

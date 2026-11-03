@@ -14,14 +14,15 @@ const BEFORE = [
 ];
 const shape = (groups: typeof NAV_GROUPS) => groups.map((g) => [g.label, g.items.map((i) => [i.to, i.label, i.icon])]);
 
-// Admin-only additions: Data Quality (Main) and AI Providers (System, before Settings).
-const ADMIN_ADDED = ["/data-quality", "/admin/ai-providers"];
+// Admin-only additions: Data Quality (Main), AI Agents (Calls, last) and AI Providers (System, before Settings).
+const ADMIN_ADDED = ["/data-quality", "/ai-agents", "/admin/ai-providers"];
 
 describe("sidebar", () => {
   it("admin: Main is Dashboard, Data Quality, then the items that were there; System has AI Providers", () => {
     const admin = shape(navForRole(NAV_GROUPS, "ADMIN"));
     expect(admin[0]).toEqual(["Main", [["/", "Dashboard", "dashboard"], ["/data-quality", "Data Quality", "quality"], ["/insights", "Insights", "insights"], ["/lists", "Lists", "lists"]]]);
-    expect(admin.slice(1, 4)).toEqual(BEFORE.slice(1, 4));
+    expect(admin.slice(1, 3)).toEqual(BEFORE.slice(1, 3));
+    expect(admin[3]).toEqual(["Calls", [...(BEFORE[3]![1] as string[][]), ["/ai-agents", "AI Agents", "phone"]]]);
     expect(admin[4]).toEqual(["System", [["/send-queue", "Send Queue", "activity"], ["/admin/ai-providers", "AI Providers", "settings"], ["/settings", "Settings", "settings"]]]);
   });
 

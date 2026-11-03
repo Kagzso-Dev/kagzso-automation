@@ -542,6 +542,35 @@ port 8010 (`VOICE_GATEWAY_PORT`; `scripts/voice-gateway.mjs`): `/ta/…` → Tam
 `.env` and redeploy; `pm2 delete kagzso_orchestrator_voice_ta` stops just that backend. The migration
 `0029_ai_call_languages` only adds two `language` columns (default `en`); its `down.sql` removes them.
 
+### AI Agents (autonomous business executive, e.g. Thaara)
+
+**Calls → AI Agents** (admins; each language section has its own, `/ta/ai-agents`, …). An agent is set up once
+per business: category and industry (one shared library: **Settings → AI agent industries**), business name,
+calling objective, contact (name, gender Male / Female / Not specified, mobile), AI executive name (default
+Thaara), company (default Kagzso Technology Services), callback number, personality, the **AI Conversation
+Instructions** box, a target length (default 1 min) and a hard maximum (default 1 min 45 s).
+
+- **Autonomous** agents are compiled (`apps/api/src/domain/aiAgentCompile.ts`) into an ordinary `executive`
+  Call Flow version with an `autonomous` block, and published through the same path as the Call Flows page (the
+  language's voice backend validates it first). Calls then use the normal run, queue, voice backend, STT / TTS,
+  recordings and history: no separate LLM pipeline. The LLM leads the conversation; the system still speaks the
+  opening, the identity question and the do-not-call line word for word, and every fixed safety rule comes after
+  the admin's instructions. For these calls only, the voice backend enforces do-not-call even with
+  `DNC_ENFORCE` off, and each reply is told the call's running time (wrap up after the target; the provider's
+  time limit is the hard stop).
+- **Guided** agents just call with an existing published Call Flow (Nila, Follow-up, Executive or a copy),
+  unchanged.
+- **Knowledge**: upload CSV, XLSX, PDF, DOCX or TXT; rows / paragraphs become fact and Q&A items, each **Draft**
+  until an admin approves it. Items with personal data, links, prices, promises etc. (the voice backend's training
+  rules, mirrored in `knowledgeTextIssues`) can't be approved until fixed. Only approved items of that agent are
+  compiled into that agent's flow (at most 120), and picked per reply by the existing training retrieval.
+- Opening lines exist for English, Tamil, Hindi and Kannada (`AI_AGENT_OPENINGS`; Tamil, Hindi and Kannada need a
+  native-speaker review before release). Other languages offer guided agents only.
+
+**Deploy:** `npm run prisma:deploy` applies `0031_ai_agents` (five new tables plus a starter library; nothing
+existing changes; `down.sql` drops them), then restart the API and the voice backends (they read the new optional
+`autonomous` flow field; flows without it hash and behave exactly as before). No `.env` change.
+
 ### WhatsApp media (header media, received files, Inbox)
 
 WhatsApp only, following Meta's Cloud API media rules:

@@ -24,6 +24,7 @@ import { TriggersPage } from "./pages/Triggers";
 import { SettingsPage } from "./pages/Settings";
 import { DataQualityPage } from "./pages/DataQuality";
 import { AiProvidersPage } from "./pages/AiProviders";
+import { AiAgentsPage } from "./pages/AiAgents";
 import { canSeePath } from "./lib/navAccess";
 import type { ReactNode } from "react";
 
@@ -86,6 +87,8 @@ export function App() {
         <Route path="/call-flows" element={<RoleRoute path="/call-flows"><CallFlowsPage /></RoleRoute>} />
         <Route path="/:lang/ai-call-customers" element={<LanguageRoute><AiCallCustomersPage /></LanguageRoute>} />
         <Route path="/:lang/call-flows" element={<LanguageRoute><RoleRoute path="/call-flows"><CallFlowsPage /></RoleRoute></LanguageRoute>} />
+        <Route path="/ai-agents" element={<RoleRoute path="/ai-agents"><AiAgentsPage /></RoleRoute>} />
+        <Route path="/:lang/ai-agents" element={<LanguageRoute><RoleRoute path="/ai-agents"><AiAgentsPage /></RoleRoute></LanguageRoute>} />
         <Route path="/campaigns" element={<CampaignsPage />} />
         <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
         <Route path="/send-queue" element={<SendQueuePage />} />

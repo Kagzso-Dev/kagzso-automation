@@ -582,6 +582,9 @@ model CallFlow {
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
   versions       CallFlowVersion[]
+  // AI Agents that use this flow: generated (autonomous) or picked (guided). Relations only: no column here.
+  aiAgentsGenerated AiAgent[] @relation("AiAgentFlow")
+  aiAgentsGuided    AiAgent[] @relation("AiAgentGuidedFlow")
 
   @@index([language])
   @@map("call_flows")
@@ -977,4 +980,139 @@ model DataQualityExportLog {
 
   @@index([createdAt])
   @@map("data_quality_export_logs")
+}
+
+// ------------------------------------------------------------------ AI Agents (packages/shared/src/aiAgents.ts)
+// One shared category / industry library for every language (no language column).
+model AiBusinessCategory {
+  id         String       @id @default(cuid())
+  name       String       @unique @db.VarChar(80)
+  archivedAt DateTime?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  industries AiIndustry[]
+  agents     AiAgent[]
+
+  @@map("ai_business_categories")
+}
+
+model AiIndustry {
+  id              String             @id @default(cuid())
+  categoryId      String
+  name            String             @db.VarChar(80)
+  // Discovery topics (one per line): what to explore with such a business, never product claims.
+  discoveryTopics String?            @db.Text
+  archivedAt      DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  category        AiBusinessCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  agents          AiAgent[]
+
+  @@unique([categoryId, name])
+  @@map("ai_industries")
+}
+
+enum AiAgentMode {
+  GUIDED
+  AUTONOMOUS
+}
+
+model AiAgent {
+  id                String                 @id @default(cuid())
+  // The language section it was created in (en, ta, hi, kn, …): its voice backend. Never changes.
+  language          String                 @db.VarChar(8)
+  mode              AiAgentMode            @default(AUTONOMOUS)
+  name              String                 @db.VarChar(100)
+  categoryId        String?
+  industryId        String?
+  businessName      String                 @default("") @db.VarChar(160)
+  objective         String?                @db.Text
+  contactName       String?                @db.VarChar(100)
+  contactGender     String                 @default("male") @db.VarChar(16) // male | female | unspecified (CHECK in 0031)
+  contactPhone      String?                @db.VarChar(20) // E.164
+  executiveName     String                 @default("Thaara") @db.VarChar(40)
+  companyName       String                 @default("Kagzso Technology Services") @db.VarChar(100)
+  callbackNumber    String?                @db.VarChar(20) // E.164
+  personality       String                 @default("professional") @db.VarChar(20)
+  instructions      String?                @db.Text
+  targetDurationSec Int                    @default(60)
+  maxDurationSec    Int                    @default(105)
+  // Autonomous: the Call Flow the agent is compiled into (created on first publish).
+  callFlowId        String?                @unique
+  // Guided: the existing published Call Flow it calls with.
+  guidedFlowId      String?
+  // sha-256 of the definition last published from this agent (autonomous): differs = unpublished changes.
+  publishedHash     String?                @db.VarChar(64)
+  createdById       String?
+  createdByEmail    String?
+  archivedAt        DateTime?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+  category          AiBusinessCategory?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  industry          AiIndustry?            @relation(fields: [industryId], references: [id], onDelete: SetNull)
+  callFlow          CallFlow?              @relation("AiAgentFlow", fields: [callFlowId], references: [id], onDelete: SetNull)
+  guidedFlow        CallFlow?              @relation("AiAgentGuidedFlow", fields: [guidedFlowId], references: [id], onDelete: SetNull)
+  knowledgeFiles    AiAgentKnowledgeFile[]
+  knowledgeItems    AiAgentKnowledgeItem[]
+
+  @@index([language, archivedAt])
+  @@map("ai_agents")
+}
+
+enum AiKnowledgeFileStatus {
+  EXTRACTED
+  FAILED
+  REPLACED
+}
+
+model AiAgentKnowledgeFile {
+  id              String                 @id @default(cuid())
+  agentId         String
+  fileName        String                 @db.VarChar(200)
+  format          String                 @db.VarChar(8) // csv | xlsx | pdf | docx | txt
+  sizeBytes       Int
+  sha256          String                 @db.VarChar(64)
+  status          AiKnowledgeFileStatus  @default(EXTRACTED)
+  error           String?                @db.Text
+  itemCount       Int                    @default(0)
+  replacedById    String?                @db.VarChar(191)
+  uploadedByEmail String?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  agent           AiAgent                @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  items           AiAgentKnowledgeItem[]
+
+  @@index([agentId])
+  @@map("ai_agent_knowledge_files")
+}
+
+enum AiKnowledgeStatus {
+  DRAFT
+  APPROVED
+  REJECTED
+}
+
+model AiAgentKnowledgeItem {
+  id             String                @id @default(cuid())
+  agentId        String
+  fileId         String?
+  kind           String                @db.VarChar(8) // fact | qa
+  topic          String                @db.VarChar(40)
+  text           String                @db.Text // at most 500 characters (the voice backend's limit)
+  questions      Json? // qa: the ways a customer asks it
+  always         Boolean               @default(false) // fact: in every reply's prompt (else picked when relevant)
+  status         AiKnowledgeStatus     @default(DRAFT)
+  issues         Json? // string[]: why it can't be approved as it is
+  source         String?               @db.VarChar(80) // "row 4", "page 2", …
+  industryHint   String?               @db.VarChar(80)
+  decidedByEmail String?
+  decidedAt      DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  agent          AiAgent               @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  file           AiAgentKnowledgeFile? @relation(fields: [fileId], references: [id], onDelete: SetNull)
+
+  @@index([agentId, status])
+  @@index([fileId])
+  @@map("ai_agent_knowledge_items")
 }

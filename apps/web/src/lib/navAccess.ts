@@ -5,7 +5,7 @@
 import { splitAiCallLanguagePath } from "@dispatch/shared";
 
 /** Paths hidden from the EDITOR role (menu item and the page itself). */
-export const EDITOR_HIDDEN_PATHS: readonly string[] = ["/templates", "/whatsapp-templates", "/call-flows"];
+export const EDITOR_HIDDEN_PATHS: readonly string[] = ["/templates", "/whatsapp-templates", "/call-flows", "/ai-agents"];
 
 /** Paths only ADMIN may see (menu item and the page itself). */
 export const ADMIN_ONLY_PATHS: readonly string[] = ["/data-quality", "/admin/ai-providers"];

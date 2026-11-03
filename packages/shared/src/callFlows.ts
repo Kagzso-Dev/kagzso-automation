@@ -199,6 +199,15 @@ export const callFlowDefinition = z
     language_style: z.enum(["mixed", "pure"]).optional(),
     /** Training tab (callFlowTraining.ts). Absent = no training: prompts exactly as before. */
     training: callFlowTraining.optional(),
+    /**
+     * An Autonomous AI Agent's flow (aiAgents.ts, compiled into an "executive" flow). Absent = a normal flow.
+     * With it, each reply is told the call's running time (wrap up after target_duration_sec; the hard stop
+     * stays limits.max_duration_sec) and the voice backend enforces do-not-call whatever DNC_ENFORCE says.
+     */
+    autonomous: z
+      .object({ target_duration_sec: z.number().int().min(20).max(600), dnc_enforce: z.literal(true).default(true) })
+      .strict()
+      .optional(),
     transfer: z
       .object({
         // Live transfer is not implemented yet: the number is stored only.
@@ -214,6 +223,14 @@ export const callFlowDefinition = z
   .superRefine((flow, ctx) => {
     if (flow.language_style && flow.language === DEFAULT_AI_CALL_LANGUAGE) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["language_style"], message: "An English flow has no language style" });
+    }
+    if (flow.autonomous) {
+      if (flow.base !== "executive") {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["autonomous"], message: "Autonomous settings need base 'executive'" });
+      }
+      if (flow.autonomous.target_duration_sec > flow.limits.max_duration_sec) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["autonomous"], message: "The target duration must not exceed the maximum" });
+      }
     }
     const ids = flow.blocks.map((b) => b.id);
     const dupes = [...new Set(ids.filter((id, i) => ids.indexOf(id) !== i))];

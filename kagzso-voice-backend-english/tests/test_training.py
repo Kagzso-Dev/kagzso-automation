@@ -133,7 +133,7 @@ def test_a_flow_without_training_renders_the_same_prompt(agent):
 
 
 def _old_flow_hash(flow: CallFlow) -> str:
-    data = flow.model_dump(mode="json", exclude={"training"})  # what flow_hash did before training existed
+    data = flow.model_dump(mode="json", exclude={"training", "autonomous"})  # what flow_hash did before training existed
     for optional in ("pauses", "recording_notice", "identity"):
         if data.get(optional) is None:
             data.pop(optional, None)

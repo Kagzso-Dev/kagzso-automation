@@ -14,3 +14,4 @@ export * from "./users.js";
 export * from "./branding.js";
 export * from "./whatsappReplies.js";
 export * from "./aiProviders.js";
+export * from "./aiAgents.js";

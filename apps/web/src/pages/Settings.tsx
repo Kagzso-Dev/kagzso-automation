@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { useAiCallsConfig } from "../lib/aiCalls";
 import { PageHeader } from "../components/Layout";
 import { ErrorNote, Spinner, Table } from "../components/ui";
 import { Icon } from "../components/icons";
@@ -14,6 +15,7 @@ import { ChangePasswordSection, UsersSection } from "../components/UserAdminSect
 import { BrandingSection } from "../components/BrandingSection";
 import { CallRecordingsSection } from "../components/CallRecordingsSection";
 import { AiCallLanguagesSection } from "../components/AiCallLanguagesSection";
+import { IndustryLibrarySection } from "../components/IndustryLibrarySection";
 import { Switch } from "../components/Switch";
 
 interface ApiKey {
@@ -34,6 +36,8 @@ export function SettingsPage() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const isAdmin = user?.role === "ADMIN";
+  // AI agent industries: only while AI calls and call flows are on (the AI Agents pages exist).
+  const aiAgentsOn = !!useAiCallsConfig().data?.flowEditor;
 
   const keys = useQuery({
     queryKey: ["api-keys"],
@@ -187,6 +191,8 @@ export function SettingsPage() {
       {isAdmin && <AiProvidersLink />}
 
       {isAdmin && <AiCallLanguagesSection />}
+
+      {isAdmin && aiAgentsOn && <IndustryLibrarySection />}
 
       {isAdmin && <CallRecordingsSection />}
 

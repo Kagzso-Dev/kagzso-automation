@@ -449,8 +449,29 @@ def build_system_prompt(
         # Below every rule above, above the customer data; "" for a flow without (Active) training.
         + training_block(variables, user_message, last_reply)
         + CUSTOMER_DATA_TITLE + json.dumps(data, ensure_ascii=False)
+        + call_timing(variables)
         + position
     )
+
+
+def call_timing(variables: Mapping[str, Optional[str]]) -> str:
+    """An Autonomous AI Agent's call (flow_target_sec set by call_service): how long the call has run and
+    whether to wrap up. Last in the prompt (it changes every turn). Every other call: "" (prompt unchanged)."""
+    try:
+        target = int(variables.get("flow_target_sec") or 0)
+        elapsed = int(variables.get("call_elapsed_sec") or 0)
+    except (TypeError, ValueError):
+        return ""
+    if target <= 0:
+        return ""
+    line = (f"\n\n--- Call timing (system) ---\nThe call has been running about {elapsed} seconds; the target "
+            f"length is about {target} seconds. ")
+    if elapsed < target:
+        return line + ("Keep replies short and focused on the most useful next step. Never rush or cut off the "
+                       "customer, and never mention the time.")
+    return line + ("The target has passed: if the customer is not in the middle of a question, move to a polite "
+                   "close now (thank them and end the call as in CLOSING). If they are asking something, answer "
+                   "it in one short sentence first. Never mention the time.")
 
 
 def turn_system_prompt(agent_prompt: str, history: List[Message], user_message: Optional[str],
