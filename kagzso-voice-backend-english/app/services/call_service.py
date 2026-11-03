@@ -36,7 +36,7 @@ from app.flows.loader import FlowError, resolve_flow_agent
 from app.flows.training import runtime_json
 from app.schemas.calls import OutboundCallRequest
 from app.services import audio_service as audio
-from app.services import provider_registry
+from app.services import guided_call, provider_registry
 from app.services import status_callback
 from app.services import recording
 from app.services.noise_suppression import InputCleaner
@@ -579,10 +579,11 @@ def greeting_pace(first_message: Optional[str], cfg: Settings = default_settings
 
 
 class CallError(Exception):
-    def __init__(self, status_code: int, message: str):
+    def __init__(self, status_code: int, message: str, code: Optional[str] = None):
         super().__init__(message)
         self.status_code = status_code
         self.message = message
+        self.code = code  # guided calls: why it was refused (the API then sends {"code", "message"})
 
 
 # ===========================================================================
@@ -593,7 +594,22 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
     if not cfg.telephony_configured() or not cfg.PUBLIC_BASE_URL:
         raise CallError(503, f"{cfg.telephony_provider.title()} is not configured on the server (credentials / PUBLIC_BASE_URL)")
 
-    if req.agent_id is not None:
+    flow_vars: Dict[str, Optional[str]] = {}
+    flow_event: Optional[Tuple[str, dict]] = None
+    time_limit: Optional[int] = None
+    flow_voice: Optional[str] = None  # the voice picked in the call flow (wins over SARVAM_TTS_SPEAKER)
+    guided = guided_call.guided_requested(req.flow, req.flow_schema)
+    if guided:
+        # A guided flow runs exactly the version sent, or the call is refused - never another flow or agent.
+        try:
+            start = await guided_call.resolve_guided_flow(db, req.flow, req.flow_id, req.flow_version, req.flow_draft, cfg)
+        except guided_call.GuidedCallError as exc:
+            log.warning("Guided call refused (%s): %s", exc.code, exc.message)
+            raise CallError(exc.status, exc.message, exc.code) from None
+        agent = start.agent
+        flow_voice = offered_voice(start.flow.voice_id)
+        flow_vars, flow_event, time_limit = start.variables, start.event, start.time_limit
+    elif req.agent_id is not None:
         agent = await repo.get_agent(db, req.agent_id)
     else:
         agent = await repo.get_agent_by_name(db, req.agent_name or "")
@@ -604,11 +620,7 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
 
     # A call flow from Dispatch replaces the agent; a missing / invalid flow falls back
     # to the agent requested above, so the call still goes out exactly as before.
-    flow_vars: Dict[str, Optional[str]] = {}
-    flow_event: Optional[Tuple[str, dict]] = None
-    time_limit: Optional[int] = None
-    flow_voice: Optional[str] = None  # the voice picked in the call flow (wins over SARVAM_TTS_SPEAKER)
-    if req.flow_id is not None:
+    if req.flow_id is not None and not guided:
         try:
             resolved = await resolve_flow_agent(db, req.flow_id, req.flow_version or 0, req.flow_draft, req.flow)
         except FlowError as exc:

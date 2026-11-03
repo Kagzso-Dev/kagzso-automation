@@ -1,7 +1,7 @@
 {
   "about": "A price question in the middle of discovery: answered from approved knowledge, then the pending question again.",
   "turns": [
-    {"customer": "Okay, tell me.", "decision": {"intent": "agreed", "captured": {}, "next": "discover", "asks": null}, "reply": "Thank you."},
+    {"customer": "Okay, tell me.", "decision": {"intent": "agreed", "captured": {"custom_permission": "yes"}, "next": "discover", "asks": null}, "reply": "Thank you."},
     {"customer": "First tell me, how much does it cost?",
      "decision": {"intent": "question", "captured": {}, "next": "stay", "asks": null},
      "reply": "The exact cost depends on your requirements and the automation scope. We can give an accurate price only after understanding your process."},

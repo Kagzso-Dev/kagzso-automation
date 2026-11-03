@@ -58,6 +58,9 @@ class OutboundCallRequest(BaseModel):
     flow_version: Optional[int] = Field(None, ge=1, le=100000)
     flow_draft: bool = False  # unpublished draft (test calls only)
     flow: Optional[Dict[str, Any]] = None
+    # 2 = a guided flow is requested (app/services/guided_call.py): run exactly that version or refuse the call,
+    # never another flow or agent. A definition with schema_version 2 counts as a request too. None = as before.
+    flow_schema: Optional[int] = Field(None, ge=1, le=2)
 
     @model_validator(mode="after")
     def _agent(self) -> "OutboundCallRequest":

@@ -8,7 +8,7 @@
      "decision": {"intent": "agreed", "captured": {"custom_permission": "yes"}, "next": "discover", "asks": null},
      "reply": "Thank you."},
     {"customer": "Sorry, the line broke. Go on.", "heard": 1,
-     "decision": {"intent": "agreed", "captured": {}, "next": "discover", "asks": null},
+     "decision": {"intent": "agreed", "captured": {"custom_permission": "yes"}, "next": "discover", "asks": null},
      "reply": "No problem."},
     {"customer": "We run a school.",
      "decision": {"intent": "answered", "captured": {"business_type": "school"}, "next": "stay", "asks": "current_process"},

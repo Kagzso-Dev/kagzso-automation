@@ -423,6 +423,17 @@ class Settings(BaseSettings):
     # Outcome classification of a Hindi / Kannada / Telugu ... call names that language in its prompt
     # (English and Tamil calls keep today's prompt). false = the same prompt for every language.
     OUTCOME_NAMES_CALL_LANGUAGE: bool = False
+    # --- Guided call flows (schema_version 2, app/flows/guided.py + app/services/guided_call.py) ---
+    # A call that sends a guided flow runs it with the flow runner: the flow decides the stages, exact lines and
+    # closings, the LLM understands and speaks within them. Off = such a call is refused (never run as another
+    # flow or agent). Version-1 flows are never affected by these settings.
+    FLOW_GUIDED_ENABLED: bool = False
+    # Languages whose guided wording is complete and reviewed (comma-separated). A guided flow in any other
+    # language is refused; it is never translated.
+    FLOW_GUIDED_LANGUAGES: str = "en"
+    # combined = one LLM call per turn (decision line, then the reply); separate = a decision-only call, then a
+    # reply-only call (for a provider that can't write both reliably; one more LLM call per turn).
+    FLOW_GUIDED_DECISION_MODE: str = "combined"
     # Model a NEW Anthropic entry on the admin page starts with (shown before it is saved, stored when it
     # is created). Entries already saved keep their model; one saved without a model keeps resolving to
     # claude-opus-5-5 as before.
@@ -474,6 +485,16 @@ class Settings(BaseSettings):
     def _voice_focus_mode(cls, v: str) -> str:
         v = (v or "").strip().lower()
         return v if v in ("log", "enforce") else "log"
+
+    @field_validator("FLOW_GUIDED_DECISION_MODE")
+    @classmethod
+    def _guided_mode(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        return v if v in ("combined", "separate") else "combined"
+
+    @property
+    def guided_languages(self) -> List[str]:
+        return [code.strip().lower() for code in self.FLOW_GUIDED_LANGUAGES.split(",") if code.strip()]
 
     @field_validator("REPLY_GUARD")
     @classmethod

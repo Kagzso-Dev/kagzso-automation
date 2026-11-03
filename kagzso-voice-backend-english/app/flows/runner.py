@@ -19,12 +19,15 @@ Order of checks in plan():
   5. Unclear: the stage's clarification (retries.line, else the LLM's reply if it stays, else clarify_line) up
      to retries.unclear times in a row, then retries.then (default close:no_response).
   6. The stage's rules, in order, on the intent and the answers collected so far (the LLM's proposal is never
-     a condition). A closing the rules don't reach, or a stage change they don't allow, is refused (recovery).
+     a condition). Another stage only once this one is complete: its mandatory statements heard and its
+     required fields collected. A closing the rules don't reach, or a stage change they don't allow, is refused
+     (recovery).
      A move the rules require that the LLM didn't propose still happens: its reply is kept only when it asks
      nothing, then the next stage's statements and first question follow.
-  7. Staying: the reply, then any unsaid mandatory statement, then - when the reply asks nothing (`asks` is
-     null) - the configured question of the first pending required field. A reply that asks something counts as
-     the turn's one question. Exact-wording questions are always asked by the runner, never by the LLM.
+  7. Staying: the reply (it may be empty when the system's own lines follow), then any unsaid mandatory
+     statement, then - when the reply asks nothing (`asks` is null) - the configured question of the first
+     pending required field. A reply that asks something counts as the turn's one question. Exact-wording
+     questions are always asked by the runner, never by the LLM.
 
 State only moves on what was heard: a statement counts as said, a question as asked, a stage as entered and a
 closing as reached only when that segment was heard in full. Answers the customer gave are kept whatever
@@ -80,8 +83,11 @@ def parse_model_output(output: Optional[str]) -> Tuple[Optional[Decision], str, 
     """(decision, reply, problem): the first line is the decision, the rest the reply. A problem = no decision."""
     if not output or not output.strip():
         return None, "", "missing_decision"
-    header, _, rest = output.strip().partition("\n")
-    reply = rest.strip()
+    # Some models wrap the JSON in a ``` block: fence lines are never part of the decision or the reply.
+    lines = [line for line in output.strip().splitlines() if not line.strip().startswith("```")]
+    if not lines:
+        return None, "", "missing_decision"
+    header, reply = lines[0], "\n".join(lines[1:]).strip()
     try:
         data = json.loads(_HEADER_PREFIX.sub("", header, count=1).strip())
     except ValueError:
@@ -218,6 +224,11 @@ class FlowRunner:
             return TurnPlan([segment], status, intent, captured, issues, retry_stage=stage.id)
 
         target = self._rule_target(stage, intent, known) or "stay"
+        if target != "stay" and not target.startswith("close:") and self._incomplete(state, stage, known):
+            # Another stage only once this one's mandatory statements were heard and its required fields
+            # collected, whatever a rule or the LLM says (closings - refusal, busy, do-not-call - stay open).
+            issues.append("stage_incomplete")
+            target = "stay"
         proposed = decision.next
         if target.startswith("close:"):
             if proposed != target:
@@ -293,8 +304,13 @@ class FlowRunner:
         """What the LLM is told about the call's position each turn (Phase 2 builds the prompt from it)."""
         stage = self.flow.stage(state.stage)
         pending = self._pending(stage, state.collected)
+        then = [s.text for s in self._statements(state, stage)]
+        if pending and pending[0].wording == "exact":
+            then.append(self.render(pending[0].question))
         return {
             "stage": stage.id, "objective": stage.objective, "guidance": stage.guidance,
+            # Said by the system right after the LLM's words when the call stays here (never repeat them).
+            "system_says_after_your_words": then,
             "pending_required": [{"field": c.field, "question": c.question, "wording": c.wording} for c in pending],
             "optional": [{"field": c.field, "question": c.question} for c in stage.collect
                          if not c.required and c.field not in state.collected],
@@ -307,6 +323,9 @@ class FlowRunner:
     # -------------------------------------------------------------- helpers
     def _pending(self, stage: Stage, known: Mapping[str, Any]) -> List[CollectField]:
         return [c for c in stage.collect if c.required and c.field not in known]
+
+    def _incomplete(self, state: RunnerState, stage: Stage, known: Mapping[str, Any]) -> bool:
+        return bool(self._pending(stage, known)) or any(f"{stage.id}.{st.id}" not in state.said for st in stage.mandatory)
 
     def _matches(self, when: When, intent: str, stage: Stage, known: Mapping[str, Any]) -> bool:
         if when.intent and intent not in when.intent:
@@ -351,13 +370,15 @@ class FlowRunner:
                 return self._recover(state, stage, decision.intent, captured, issues + ["asks_unknown_field"])
             if asked.wording == "exact":
                 return self._recover(state, stage, decision.intent, captured, issues + ["asked_exact_field"])
-        if not reply:
+        if not reply and decision.asks is not None:
             return self._recover(state, stage, decision.intent, captured, issues + ["empty_reply"])
         effects = (("asked", decision.asks),) if decision.asks else ()
-        segments = [Segment("reply", reply, None, effects)] + self._statements(state, stage)
+        segments = ([Segment("reply", reply, None, effects)] if reply else []) + self._statements(state, stage)
         pending = self._pending(stage, known)
         if pending and decision.asks is None:
             segments.append(self._question(pending[0]))  # back to the pending required question
+        if not segments:  # no words and nothing of the system's to say
+            return self._recover(state, stage, decision.intent, captured, issues + ["empty_reply"])
         # A reply that asks something (an optional field) is the turn's one question: the required field stays
         # pending - asked next turn, and the stage can't be left without it.
         return TurnPlan(segments, "accepted", decision.intent, captured, issues)

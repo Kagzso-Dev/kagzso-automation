@@ -1,7 +1,7 @@
 {
   "about": "Two unclear answers in a row: one clarification (the stage allows 1), then the no_response closing.",
   "turns": [
-    {"customer": "Yes.", "decision": {"intent": "agreed", "captured": {}, "next": "discover", "asks": null}, "reply": "Thank you."},
+    {"customer": "Yes.", "decision": {"intent": "agreed", "captured": {"custom_permission": "yes"}, "next": "discover", "asks": null}, "reply": "Thank you."},
     {"customer": "Hmm... the...", "decision": {"intent": "unclear", "captured": {}, "next": "stay", "asks": null}, "reply": "Sorry, could you say that again?"},
     {"customer": "...", "decision": {"intent": "unclear", "captured": {}, "next": "stay", "asks": null}, "reply": "Sorry?"}
   ]

@@ -248,9 +248,37 @@ def test_the_decision_line_may_carry_a_label():
     assert problem is None and decision.intent == "agreed" and reply == "Thank you." and "First line" in DECISION_FORMAT
 
 
-def test_a_decision_without_any_words_to_say_falls_back_safely():
-    plan = runner().plan(at("discover"), "Hmm.", json.dumps({"intent": "answered", "next": "stay"}))
+def test_no_words_is_fine_when_the_systems_own_lines_follow():
+    plan = runner().plan(at("discover"), "Yes, speaking.", json.dumps({"intent": "answered", "next": "stay"}))
+    assert plan.status == "accepted" and kinds(plan) == [("question", BUSINESS_Q)]
+
+
+def test_no_words_and_nothing_to_say_falls_back_safely():
+    state = at("relate", {"interest_level": "maybe"})  # nothing pending, no statement left
+    plan = runner().plan(state, "Hmm.", json.dumps({"intent": "answered", "next": "stay"}))
     assert plan.status == "recovered" and "empty_reply" in plan.issues
+    assert runner().plan(at("discover"), "Hmm.", json.dumps({"intent": "answered", "asks": "current_process"})).status == "recovered"
+
+
+def test_another_stage_only_once_this_one_is_complete():
+    r = runner()
+    unsaid = at("intro", {"custom_permission": "yes"}, said=[])  # the intro statement was never heard
+    plan = r.plan(unsaid, "Yes.", out("agreed", next_="discover"))
+    assert plan.status == "recovered" and "stage_incomplete" in plan.issues
+    assert kinds(plan) == [("statement", WHO)]
+    no_answer = r.plan(at("intro"), "Sure.", out("agreed", next_="discover"))  # permission not captured
+    assert "stage_incomplete" in no_answer.issues and kinds(no_answer) == [("question", PERMISSION)]
+    assert r.plan(at("intro"), "Busy.", out("busy")).closing == "busy"  # closings stay open
+
+
+def test_a_decision_in_a_code_block_is_read():
+    decision, reply, problem = parse_model_output('```json\n{"intent": "agreed", "next": "stay"}\n```\nThank you.')
+    assert problem is None and decision.intent == "agreed" and reply == "Thank you."
+
+
+def test_the_prompt_state_lists_what_the_system_says_next():
+    p = runner().prompt_state(at("intro", said=[]))
+    assert p["system_says_after_your_words"] == [WHO, PERMISSION]
 
 
 # ------------------------------------------------------------------ retries

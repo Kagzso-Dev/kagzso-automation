@@ -20,7 +20,8 @@ async def create_outbound_call(req: OutboundCallRequest, db: AsyncSession = Depe
     try:
         call = await call_service.start_outbound_call(db, req)
     except call_service.CallError as exc:
-        raise HTTPException(exc.status_code, exc.message) from None
+        detail = {"code": exc.code, "message": exc.message} if exc.code else exc.message
+        raise HTTPException(exc.status_code, detail) from None
     return OutboundCallResponse(success=True, call_id=call.id, provider_call_id=call.provider_call_id)
 
 
