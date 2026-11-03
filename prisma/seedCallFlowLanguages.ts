@@ -1,5 +1,5 @@
 // Seed another language's starter call flows (Voice Call Flows → that language's page) as
-// UNPUBLISHED DRAFTS, copied from its own voice backend's built-in scripts (Nila screening and
+// UNPUBLISHED DRAFTS, copied from its own voice backend's built-in scripts (Nila screening, Business executive and
 // Customer follow-up, with that language's spoken lines).
 //
 //   npm run callflow:seed:plan -- ta       show what would be added, write nothing
@@ -101,6 +101,11 @@ async function seedLanguage(lang: AiCallLanguage): Promise<number> {
   console.log(`\n${name} (${backend ? backend.url : "its voice backend isn't answering — built-in files from the repo"})`);
   let problems = 0;
   for (const base of CALL_FLOW_BASES) {
+    if (catalog && !catalog.flows[base]) {
+      // A base newer than that running backend (e.g. "executive"): not an error, it just isn't there yet.
+      console.log(`  - ${base}: not in this voice backend yet — update it, then re-run to add this starter`);
+      continue;
+    }
     const source = catalog ? (catalog.flows[base] as object) : builtinFromRepo(lang, base);
     const parsed = callFlowDefinition.safeParse({ ...source, language: lang });
     if (!parsed.success) {

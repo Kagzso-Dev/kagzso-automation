@@ -24,6 +24,14 @@
 //   POST   /api/call-flows/test-numbers              save a trial number (max 5)
 //   DELETE /api/call-flows/test-numbers/:numberId    remove a saved trial number
 //   POST   /api/call-flows/:id/test-call             one call to a trial number, picked by id (never a typed-in number)
+//
+// Training tab (admin only). Training lives in the definition (`training`), so it is saved, published,
+// restored and imported with the flow; a save that carries training is checked by the voice backend first.
+//   POST   /api/call-flows/:id/training/test         one customer message, one enabled LLM: reply without vs with training
+//   GET    /api/call-flows/training/calls/:logId     a call's Agent turns (personal details removed) and its flow
+//   POST   /api/call-flows/training/calls/:logId     save one turn + the better reply into that flow's training as a Draft
+//   POST   /api/call-flows/:id/copy                  a new flow (Draft v1) from this flow's newest version, training kept or not
+// Training is admin-only: for editors, GET responses leave `training` out of every definition.
 
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { rateLimit } from "express-rate-limit";
@@ -42,6 +50,7 @@ import {
   callFlowImportApplyInput,
   callFlowImportInput,
   callFlowVersionParam,
+  copyCallFlowInput,
   createCallFlowInput,
   idParam,
   maskPhone,
@@ -50,9 +59,12 @@ import {
   previewCallFlowInput,
   saveCallFlowDraftInput,
   testCallFlowInput,
+  trainingFromCallInput,
+  trainingTestInput,
   type CallFlowDefinition,
   type CallFlowImportPreview,
   type CallFlowImportResult,
+  type TrainingCallTurns,
 } from "@dispatch/shared";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../../prisma.js";
@@ -62,9 +74,24 @@ import { callsCountedTowardDailyCap, loadDoNotCallPhones } from "../../domain/ai
 import { aiCallLanguageBlockedReason, asAiCallLanguage, runInProgressReason } from "../../domain/aiCallLanguages.js";
 import { CallFlowError, definitionHash, deleteVersion, latestPublished, publishDraft, removeFlow, saveDraft } from "../../domain/callFlows.js";
 import { analyzeImport, changedBlockIds } from "../../domain/callFlowImport.js";
+import {
+  agentSummary,
+  copyDefinition,
+  correctionFromTurn,
+  transcriptTurns,
+  withExample,
+  withoutTraining,
+} from "../../domain/callFlowTraining.js";
 import { addTestNumber, listTestNumbers, removeTestNumber, resolveTestNumber, TestNumberError } from "../../domain/callFlowTestNumbers.js";
 import { enqueueAiCallRun } from "../../queue/queues.js";
-import { getBuiltinFlows, previewFlow, voiceCallsBlockedReason, VoiceBackendError, type VoiceFlowCatalog } from "../../services/voiceBackend.js";
+import {
+  getBuiltinFlows,
+  previewFlow,
+  trainingTestReply,
+  voiceCallsBlockedReason,
+  VoiceBackendError,
+  type VoiceFlowCatalog,
+} from "../../services/voiceBackend.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
 import { AppError, badRequest, conflict, forbidden, notFound, wrap } from "../errors.js";
 
@@ -93,6 +120,8 @@ const writeLimiter = limiter(60);
 const adminOnly = requireRole("ADMIN");
 const previewLimiter = limiter(120);
 const testCallLimiter = limiter(3);
+/** Training test replies spend provider tokens (two requests each). */
+const trainingTestLimiter = limiter(5);
 /** 3 placed test calls per hour per user. Refused requests (4xx/5xx) don't use up the hour. */
 const testCallHourlyLimiter = rateLimit({
   windowMs: 60 * 60_000,
@@ -157,6 +186,8 @@ const asJson = (d: unknown) => d as Prisma.InputJsonValue;
 /** DELETE /api/call-flows/:id body: a live flow needs { confirm: "DELETE" }. */
 const removeFlowBody = z.object({ confirm: z.string().max(32).optional() });
 
+const isAdmin = (req: Request) => req.user?.role === "ADMIN";
+
 async function liveFlow(id: string) {
   const flow = await prisma.callFlow.findUnique({ where: { id } });
   if (!flow || flow.archivedAt) throw notFound("Call flow");
@@ -185,13 +216,29 @@ callFlowsRouter.get(
         },
       },
     });
+    // The live version's agent profile (Simple AI Call shows who calls and why) - never the rest of the training.
+    // Best effort: the list never fails because of it (no summary = the flow shows without one).
+    const liveIds = flows.flatMap((f) => f.versions.find((v) => v.status === "PUBLISHED")?.id ?? []);
+    let live: { id: string; definition: Prisma.JsonValue }[] = [];
+    try {
+      if (liveIds.length) {
+        live = await prisma.callFlowVersion.findMany({ where: { id: { in: liveIds } }, select: { id: true, definition: true } });
+      }
+    } catch (err) {
+      logger.warn({ err }, "call flow list: agent profiles not loaded");
+    }
+    const agents = new Map(live.map((v) => [v.id, agentSummary(v.definition)]));
     res.json({
-      items: flows.map(({ versions, ...f }) => ({
-        ...f,
-        published: versions.find((v) => v.status === "PUBLISHED") ?? null,
-        draft: versions.find((v) => v.status === "DRAFT") ?? null,
-        versionCount: versions.length,
-      })),
+      items: flows.map(({ versions, ...f }) => {
+        const published = versions.find((v) => v.status === "PUBLISHED") ?? null;
+        return {
+          ...f,
+          published,
+          draft: versions.find((v) => v.status === "DRAFT") ?? null,
+          versionCount: versions.length,
+          agent: published ? (agents.get(published.id) ?? null) : null,
+        };
+      }),
     });
   }),
 );
@@ -203,6 +250,9 @@ callFlowsRouter.post(
   wrap(async (req, res) => {
     const body = createCallFlowInput.parse(req.body);
     const catalog = await builtins(body.language);
+    if (!catalog.flows[body.base]) {
+      throw new AppError(502, `This language's voice backend has no '${body.base}' script yet — update that voice backend first`, "unavailable");
+    }
     const parsed = callFlowDefinition.safeParse({ ...catalog.flows[body.base], name: body.name, language: body.language });
     if (!parsed.success) throw new AppError(502, "The voice backend's built-in flow failed validation", "unavailable");
     const definition = parsed.data;
@@ -235,8 +285,81 @@ callFlowsRouter.post(
   previewLimiter,
   wrap(async (req, res) => {
     const body = previewCallFlowInput.parse(req.body);
+    if (!isAdmin(req)) {
+      // Training is admin-only: an editor's preview never compiles training.
+      if (body.trainingMessage) throw forbidden("Training is for admins");
+      body.definition = withoutTraining(body.definition);
+    }
     // Rendered by the voice backend of the flow's own language.
-    res.json(await previewFlow(body.definition, body.sample, definitionLanguage(body.definition)).catch(voiceError));
+    res.json(
+      await previewFlow(body.definition, body.sample, definitionLanguage(body.definition), body.trainingMessage).catch(voiceError),
+    );
+  }),
+);
+
+/**
+ * A definition that carries training is checked by its voice backend before it is saved: the content
+ * rules (personal data, override / false-promise wording) and the token cap live there. Each problem
+ * names the entry, e.g. "training.phrases.3.text: … contains a phone number". Without training: no check
+ * (saving works exactly as before).
+ */
+async function checkTraining(definition: CallFlowDefinition, language: AiCallLanguage): Promise<void> {
+  if (!definition.training) return;
+  const check = await previewFlow(definition, {}, language).catch(voiceError);
+  if (!check.valid) throw badRequest("Fix the training entries first", { errors: check.errors });
+}
+
+/** The call a transcript turn comes from, with the flow version it used (admins pick it in the call detail). */
+async function callForTraining(logId: string) {
+  const log = await prisma.aiCallLog.findUnique({
+    where: { id: logId },
+    select: {
+      transcript: true,
+      customerName: true,
+      followUpDetail: true,
+      run: { select: { flow: { select: { flowVersion: { select: { version: true, flowId: true, flow: true } } } } } },
+    },
+  });
+  if (!log) throw notFound("Call");
+  const used = log.run.flow?.flowVersion;
+  if (!used) throw badRequest("This call didn't use a call flow, so there is no flow to train");
+  if (used.flow.archivedAt) throw notFound("Call flow");
+  const turns = transcriptTurns(log.transcript, { name: log.customerName, detail: log.followUpDetail });
+  return { log, flow: used.flow, version: used.version, turns };
+}
+
+callFlowsRouter.get(
+  "/training/calls/:logId",
+  adminOnly,
+  wrap(async (req, res) => {
+    const { flow, version, turns } = await callForTraining(String(req.params.logId ?? ""));
+    res.json({ flowId: flow.id, flowName: flow.name, version, turns } satisfies TrainingCallTurns);
+  }),
+);
+
+callFlowsRouter.post(
+  "/training/calls/:logId",
+  adminOnly,
+  writeLimiter,
+  wrap(async (req, res) => {
+    const logId = String(req.params.logId ?? "");
+    const body = trainingFromCallInput.parse(req.body);
+    const { flow, turns } = await callForTraining(logId);
+    const turn = turns.find((t) => t.turn === body.turn);
+    if (!turn) throw badRequest("Pick an Agent turn of this call");
+    const language = asAiCallLanguage(flow.language);
+    // Into the open draft, else a new draft from the newest version (a published version is never changed).
+    const working = await prisma.callFlowVersion.findFirst({ where: { flowId: flow.id }, orderBy: { version: "desc" } });
+    const parsed = callFlowDefinition.safeParse(working?.definition);
+    if (!parsed.success) throw badRequest("The flow's current version is not valid — fix and save it first");
+    const example = correctionFromTurn(turn, body.better, body.reason, { situation: body.situation, topic: body.topic, style: body.style });
+    const next = callFlowDefinition.safeParse(withExample(parsed.data, example));
+    if (!next.success) throw badRequest("The training is full or the correction is not valid", next.error.flatten());
+    await checkTraining(next.data, language);
+    const draft = await saveDraft(flow.id, next.data, req.user!.email).catch(flowError);
+    // Never the transcript or the reply: who, which call and flow, and where it went.
+    logger.info({ flowId: flow.id, version: draft.version, logId, entryId: example.id, by: req.user!.email }, "call flow training: correction from a call");
+    res.status(201).json({ flowId: flow.id, version: draft.version, entryId: example.id });
   }),
 );
 
@@ -279,7 +402,11 @@ callFlowsRouter.get(
       include: { versions: { orderBy: { version: "desc" } } },
     });
     if (!flow || flow.archivedAt) throw notFound("Call flow");
-    res.json(flow);
+    if (isAdmin(req)) {
+      res.json(flow);
+      return;
+    }
+    res.json({ ...flow, versions: flow.versions.map((v) => ({ ...v, definition: withoutTraining(v.definition) })) });
   }),
 );
 
@@ -298,6 +425,7 @@ callFlowsRouter.put(
     if (body.description !== undefined) {
       await prisma.callFlow.update({ where: { id }, data: { description: body.description } });
     }
+    await checkTraining(body.definition, asAiCallLanguage(flow.language));
     const before = await prisma.callFlowVersion.findFirst({ where: { flowId: id }, orderBy: { version: "desc" } });
     const draft = await saveDraft(id, body.definition, req.user!.email).catch(flowError);
     logger.info(
@@ -348,11 +476,12 @@ callFlowsRouter.post(
   writeLimiter,
   wrap(async (req, res) => {
     const { id, version } = callFlowVersionParam.parse(req.params);
-    await liveFlow(id);
+    const flow = await liveFlow(id);
     const old = await prisma.callFlowVersion.findUnique({ where: { flowId_version: { flowId: id, version } } });
     if (!old) throw notFound("Version");
     const parsed = callFlowDefinition.safeParse(old.definition);
     if (!parsed.success) throw badRequest("That version no longer passes validation and can't be restored");
+    await checkTraining(parsed.data, asAiCallLanguage(flow.language));
     res.json(await saveDraft(id, parsed.data, req.user!.email).catch(flowError));
   }),
 );
@@ -442,6 +571,71 @@ callFlowsRouter.post(
       // Live version next to it: Undo discards the new draft. Never published: Undo saves the old text back.
       undo: base.published ? { kind: "discard" } : { kind: "restore", definition: base.working },
     } satisfies CallFlowImportResult);
+  }),
+);
+
+callFlowsRouter.post(
+  "/:id/training/test",
+  adminOnly,
+  trainingTestLimiter,
+  wrap(async (req, res) => {
+    const { id } = idParam.parse(req.params);
+    const body = trainingTestInput.parse(req.body);
+    const language = asAiCallLanguage((await liveFlow(id)).language);
+    if (definitionLanguage(body.definition) !== language) throw badRequest("The definition is not this flow's language");
+    // Mock (default): nothing is sent to a provider. Real: confirmCost was required by the schema above.
+    const result = await trainingTestReply(body.definition, body.mode, body.providerId ?? null, body.message, language).catch((err: unknown) => {
+      // The backend's own refusals (provider not switched on, nothing Active, invalid flow) are the admin's to fix.
+      if (err instanceof VoiceBackendError && (err.status === 400 || err.status === 422)) throw badRequest(err.message);
+      return voiceError(err);
+    });
+    // Never the message or the replies (the customer message may be anything the admin typed).
+    logger.info({ flowId: id, mode: body.mode, providerId: body.providerId ?? null, by: req.user!.email }, "call flow training: test reply");
+    res.json(result);
+  }),
+);
+
+callFlowsRouter.post(
+  "/:id/copy",
+  adminOnly,
+  writeLimiter,
+  wrap(async (req, res) => {
+    const { id } = idParam.parse(req.params);
+    const body = copyCallFlowInput.parse(req.body);
+    const source = await liveFlow(id);
+    const language = asAiCallLanguage(source.language);
+    // The newest version (the open draft, else the live one): what the admin sees in the editor.
+    const working = await prisma.callFlowVersion.findFirst({ where: { flowId: id }, orderBy: { version: "desc" } });
+    if (!working) throw notFound("Version");
+    const parsed = callFlowDefinition.safeParse(working.definition);
+    if (!parsed.success) throw badRequest("This flow's current version is not valid — fix and save it first");
+    const definition = copyDefinition(parsed.data, body.name, body.includeTraining);
+    const check = await previewFlow(definition, {}, language).catch(voiceError);
+    if (!check.valid) throw badRequest("The voice backend rejected the copy", { errors: check.errors });
+    const flow = await prisma.callFlow.create({
+      data: {
+        name: body.name,
+        description: source.description,
+        base: source.base,
+        language: source.language,
+        createdById: req.user!.id,
+        createdByEmail: req.user!.email,
+        versions: {
+          create: {
+            version: 1,
+            status: "DRAFT",
+            definition: asJson(definition),
+            definitionHash: definitionHash(definition),
+            createdByEmail: req.user!.email,
+          },
+        },
+      },
+    });
+    logger.info(
+      { flowId: flow.id, from: id, fromVersion: working.version, training: !!definition.training, by: req.user!.email },
+      "call flow copied",
+    );
+    res.status(201).json(flow);
   }),
 );
 

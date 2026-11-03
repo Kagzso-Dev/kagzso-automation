@@ -4,7 +4,7 @@ Each language runs its own voice backend with its own database, so each language
 settings. Nothing changes for calls until an admin switches "Use for live calls" on: until then -
 and whenever the saved settings can't be read - every call uses the .env providers exactly as before.
 
-* LLM: Groq, Sarvam and Anthropic in the admin's fallback order (ChainLLMProvider). Only providers
+* LLM: Groq, Sarvam, Anthropic and Google Gemini in the admin's fallback order (ChainLLMProvider). Only providers
   that are enabled and have a key are used; a key is the one saved on the page (encrypted, see
   provider_secrets) or, for the provider .env already uses, the .env key. No usable provider = the
   .env LLM.
@@ -62,11 +62,15 @@ CATALOG: Dict[str, ProviderSpec] = {s.id: s for s in (
     ProviderSpec("sarvam_llm", "llm", "Sarvam AI", "sarvam", ("sarvam-105b-conversations", "sarvam-105b"), 2),
     ProviderSpec("anthropic_llm", "llm", "Anthropic Claude", "anthropic",
                  ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"), 3),
+    ProviderSpec("gemini_llm", "llm", "Google Gemini", "gemini",
+                 ("gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"), 4),
     ProviderSpec("sarvam_stt", "stt", "Sarvam speech-to-text", "sarvam", ("saaras:v3", "saaras:v4")),
     ProviderSpec("sarvam_tts", "tts", "Sarvam text-to-speech", "sarvam", ("bulbul:v3", "bulbul:v4-flash")),
 )}
 LLM_IDS = tuple(pid for pid, s in CATALOG.items() if s.kind == "llm")
-DEFAULT_LLM_MODELS = {"sarvam_llm": "sarvam-105b-conversations", "anthropic_llm": "claude-opus-5-5"}
+# The model of an LLM entry saved without one (entries saved before ANTHROPIC_DEFAULT_MODEL keep this).
+DEFAULT_LLM_MODELS = {"sarvam_llm": "sarvam-105b-conversations", "anthropic_llm": "claude-opus-5-5",
+                      "gemini_llm": "gemini-3.6-flash"}
 PROVEN_SPEECH_MODELS = frozenset({"saaras:v3", "bulbul:v3"})
 STT_MODES = ("transcribe", "codemix", "verbatim", "translit")  # saaras:v3 only; "translate" would change the language
 
@@ -131,6 +135,24 @@ def default_model(pid: str, cfg: Settings) -> Optional[str]:
     return DEFAULT_LLM_MODELS.get(pid)
 
 
+def new_entry_model(pid: str, cfg: Settings) -> Optional[str]:
+    """The model an LLM entry that is not saved yet starts with: as default_model, except that a new
+    Anthropic entry gets ANTHROPIC_DEFAULT_MODEL (stored when the entry is created, see _start_row)."""
+    if pid == "anthropic_llm" and cfg.LLM_PROVIDER.strip().lower() != "anthropic":
+        return cfg.ANTHROPIC_DEFAULT_MODEL.strip() or default_model(pid, cfg)
+    return default_model(pid, cfg)
+
+
+def _start_row(pid: str, cfg: Settings) -> AiProviderSetting:
+    """A new settings row. A new Anthropic entry stores its starting model, so a later change of the
+    default never changes it; other entries keep following .env / DEFAULT_LLM_MODELS as before."""
+    row = AiProviderSetting(id=pid, enabled=False, updated_at=utcnow())
+    model = new_entry_model(pid, cfg)
+    if pid == "anthropic_llm" and model and model != default_model(pid, cfg):
+        row.model = model
+    return row
+
+
 # ------------------------------------------------------------------ reading
 async def _rows(db: AsyncSession) -> Dict[str, AiProviderSetting]:
     return {r.id: r for r in (await db.execute(select(AiProviderSetting))).scalars().all() if r.id in CATALOG}
@@ -168,7 +190,8 @@ def _status(row: Optional[AiProviderSetting], has_key: bool) -> str:
 def _view(pid: str, row: Optional[AiProviderSetting], cfg: Settings) -> Dict[str, Any]:
     spec = CATALOG[pid]
     key, source = key_for(row, pid, cfg)
-    model = (row.model if row is not None and row.model else None) or default_model(pid, cfg)
+    model = (row.model if row is not None and row.model else None) or (
+        new_entry_model(pid, cfg) if row is None else default_model(pid, cfg))
     return {
         "id": pid, "kind": spec.kind, "label": spec.label, "provider": spec.provider,
         "enabled": bool(row is not None and row.enabled),
@@ -269,7 +292,7 @@ async def update_provider(db: AsyncSession, pid: str, change: Dict[str, Any], ac
         raise ProviderSettingsError(404, "Unknown provider", "not_found")
     rows = await _rows(db)
     usable_before = usable_llm(rows, cfg) if spec.kind == "llm" else []
-    row = rows.get(pid) or AiProviderSetting(id=pid, enabled=False, updated_at=utcnow())
+    row = rows.get(pid) or _start_row(pid, cfg)
     fields: List[str] = []
     detail: Dict[str, Any] = {}
 
@@ -315,6 +338,8 @@ async def update_provider(db: AsyncSession, pid: str, change: Dict[str, Any], ac
         return await settings_view(db, cfg)
     if pid not in rows:
         db.add(row)
+        if row.model and "model" not in fields:
+            fields.append("model")  # the new entry's starting model (ANTHROPIC_DEFAULT_MODEL), for the audit log
     row.updated_at = utcnow()
     if fields:
         detail["fields"] = fields
@@ -338,7 +363,7 @@ async def update_selection(db: AsyncSession, change: Dict[str, Any], actor: Opti
             for i, pid in enumerate(order, start=1):
                 row = rows.get(pid)
                 if row is None:
-                    row = rows[pid] = AiProviderSetting(id=pid, enabled=False, updated_at=utcnow())
+                    row = rows[pid] = _start_row(pid, cfg)
                     db.add(row)
                 row.priority, row.updated_at = i, utcnow()
             detail["llm_order"] = list(order)
@@ -565,6 +590,19 @@ async def _test_llm(pid: str, model: str, key: str, cfg: Settings) -> None:
     await stream.aclose()
 
 
+async def llm_for_test(db: AsyncSession, pid: str, cfg: Settings = default_settings) -> Tuple[LLMProvider, str]:
+    """(provider, model) of one LLM that is switched on with a key - for the Training tab's test reply.
+    Built like a link of the live chain; the key never leaves the server."""
+    rows = await _rows(db)
+    if pid not in usable_llm(rows, cfg):
+        raise ProviderSettingsError(400, "Pick an LLM provider that is switched on and has a key", "not_enabled")
+    key, _ = key_for(rows[pid], pid, cfg)
+    model = rows[pid].model or default_model(pid, cfg)
+    if not key or not model:
+        raise ProviderSettingsError(400, "Set a model ID for this provider first", "not_enabled")
+    return build_llm(pid, model, key, cfg), model
+
+
 async def test_provider(db: AsyncSession, pid: str, actor: Optional[str], cfg: Settings = default_settings) -> Dict[str, Any]:
     """One small real request to the provider (uses a little API credit; only on an admin's click)."""
     spec = CATALOG.get(pid)
@@ -573,7 +611,8 @@ async def test_provider(db: AsyncSession, pid: str, actor: Optional[str], cfg: S
     rows = await _rows(db)
     row = rows.get(pid)
     key, _ = key_for(row, pid, cfg)
-    model = (row.model if row is not None and row.model else None) or default_model(pid, cfg) or ""
+    model = (row.model if row is not None and row.model else None) or (
+        new_entry_model(pid, cfg) if row is None else default_model(pid, cfg)) or ""
     started = time.monotonic()
     status, message = "ok", "Connected"
     if not key:
@@ -611,7 +650,7 @@ async def test_provider(db: AsyncSession, pid: str, actor: Optional[str], cfg: S
     elapsed = int((time.monotonic() - started) * 1000)
     log.info("AI provider test %s (%s): %s in %dms", pid, model, status, elapsed)
     if row is None:
-        row = AiProviderSetting(id=pid, enabled=False, updated_at=utcnow())
+        row = _start_row(pid, cfg)
         db.add(row)
     row.last_test_status, row.last_test_message, row.last_test_at = status, message[:200], utcnow()
     _audit(db, actor, "provider_tested", pid, {"status": status, "ms": elapsed})

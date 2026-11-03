@@ -104,7 +104,9 @@ def _call(flow, variables):
 @pytest.mark.parametrize("lang", ["ta", "hi", "kn"])
 @pytest.mark.parametrize("style", [None, "mixed"])
 def test_existing_and_mixed_flows_call_exactly_as_before_the_setting(client, auth, sync_engine, monkeypatch, lang, style):
-    # BEFORE was recorded from the commit before Language style (5d2b6b8), same flow and customer.
+    # BEFORE was recorded from the commit before Language style (5d2b6b8), same flow and customer,
+    # when the phone number was still sent (LLM_OMIT_PHONE_NUMBER off = as then; on: tests/test_phone_privacy.py).
+    monkeypatch.setattr(settings, "LLM_OMIT_PHONE_NUMBER", False)
     monkeypatch.setattr(settings, "SARVAM_STT_MODE", "codemix")
     monkeypatch.setattr(settings, "SARVAM_STT_MODE_PURE", "transcribe")  # even with the switch on
     flow = CallFlow.model_validate(_flow_dict(monkeypatch, lang, **({"language_style": style} if style else {})))

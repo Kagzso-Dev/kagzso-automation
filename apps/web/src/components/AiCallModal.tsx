@@ -24,6 +24,7 @@ import { initialFlowChoice, rememberedFlowChoice, rememberFlowChoice, unpublishe
 import { isEnglish, titleFor, useAiCallLanguage, withLanguage } from "../lib/aiCallLanguage";
 import { AI_CALL_LANGUAGE_NAMES } from "@dispatch/shared";
 import { useToast } from "./toast";
+import { TrainingFromCallButton } from "./TrainingFromCall";
 import { Badge, ErrorNote, Modal, Spinner, type BadgeTone } from "./ui";
 
 /**
@@ -711,7 +712,8 @@ function useNow(active: boolean) {
   return now;
 }
 
-function RunStatus({ runId, onNewRun, onClose }: { runId: string; onNewRun: () => void; onClose: () => void }) {
+/** A run's live status (polls GET /api/ai-calls/runs/:id while it runs). Also shown by Simple AI Call. */
+export function RunStatus({ runId, onNewRun, onClose }: { runId: string; onNewRun: () => void; onClose: () => void }) {
   const qc = useQueryClient();
   const run = useQuery({
     queryKey: ["ai-call-run", runId],
@@ -822,6 +824,7 @@ function LogRow({ log: l, recording }: { log: AiCallLog; recording?: RecordingSt
           <details className="mt-1">
             <summary className="cursor-pointer text-accent-ink">Transcript</summary>
             <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap font-sans text-slate-550">{l.transcript}</pre>
+            <TrainingFromCallButton logId={l.id} />
           </details>
         )}
         <CallRecording logId={l.id} status={recording} />

@@ -329,6 +329,80 @@ Setup: `npm run prisma:deploy` (applies `0018_call_flows`: three new tables, `ca
 the tables, run `prisma/migrations/0018_call_flows/down.sql` against the database, then
 `npx prisma migrate resolve --rolled-back 0018_call_flows`.
 
+#### Training tab (agent, tone and knowledge per flow)
+
+Each flow's editor has a **Training** tab (admins only; editors never see a flow's training — the API
+leaves it out of what they get). It teaches that flow's agent who it is, its tone and its knowledge
+**through the prompt**: no model is fine-tuned and nothing is sent to a provider for training.
+
+> **Privacy:** Training text is included in prompts and sent to enabled LLM providers during calls.
+> Never enter secrets or personal information.
+
+- **Entries:** *Agent & tone* — the **agent profile** (agent name, company, business type, business
+  objective, why we call, who we call, approved company introduction, good outcome) plus role,
+  formality, warmth, energy, politeness, pace, sentence length, how often to say sir / madam, English
+  mix for mixed flows and what to avoid (defaults are read from the flow's script); *Expressions*
+  (short approved phrases per situation — greeting, acknowledge, agree, empathy, busy, unsure, clarification,
+  re-ask, transition, price question, objection, polite refusal, who is calling, AI disclosure, thanks,
+  closing — and language style, with a native-speaker *Reviewed* flag; an AI-disclosure phrase must say
+  it is an AI); *Knowledge* (facts, always-on or picked by topic, and approved Q&A: question variants
+  plus the exact answer); *Examples* (good and bad replies, optionally labelled with a situation, topic
+  and language style; a bad one needs the reason and the better reply). Each entry is **Draft**,
+  **Active** or **Archived**; only Active ones are used, and only while the flow's **Use training in
+  calls** switch is on.
+- **Business executive script:** *New call flow → Business executive* starts from a lean built-in
+  script (`builtin/executive.json`, about 9k characters instead of Nila's 20k). It keeps Nila's opening
+  (greeting and identity question spoken by the system) and the same locked safety blocks, then gives
+  the AI conversation *stages* rather than lines to read: it decides each reply from the customer's
+  latest words, answers the question actually asked, handles objections once and calmly, and closes
+  on busy / not interested / do-not-call. Who it is and why it calls come from the Training tab's agent
+  profile (without one: Thaara from Kagzso AI and Automation). Nila and Follow-up are unchanged.
+- **Simple AI Call:** the Call Flows page has *Simple AI Call* next to the *Advanced Call Flow editor*:
+  pick a published flow (its agent profile is shown), type one number (optional name, gender and
+  approved context), and start. It is a one-customer run of the normal AI call start (do-not-call
+  list, daily cap, one run at a time, voice backend checks, dry run, then a confirm before the phone
+  rings). The language is the page's language: one language per call.
+- **Copy flow:** *Copy flow* in the editor makes a new flow (Draft v1) from the newest version, with
+  or without its training. The source flow is not changed.
+- **Versions:** training is part of the flow definition, so it is saved with *Save draft*, made live by
+  *Publish*, frozen in published versions, copied by *Restore into draft* and kept by *Import full
+  prompt* and `npm run callflow:import`. A save that carries training is checked by the voice backend
+  first (each problem names the entry).
+- **How it reaches the model:** the voice backend compiles the Active entries into one block placed
+  after the script and every fixed safety rule, right before the customer data, under a header saying it
+  can never override them. Persona, always-on facts and usage notes go into every reply; phrases, Q&A
+  and examples are picked per reply for the customer's latest words (keyword / trigram matching, no
+  paid service), and the phrase used in the previous reply is never offered again; an approved answer
+  just given is not offered word for word again either. A do-not-call request is detected first (the
+  same detector as `DNC_ENFORCE`): such a reply gets only closing phrases, never a re-ask, Q&A or example.
+  Negated cues don't count ("not sure" is not agreement), a refusal outranks an objection, and a Q&A
+  needs more than one shared ordinary word in a longer message. A hard token cap (900 for a new English
+  training, 1200 for a new training in another language because Indic scripts cost more tokens per word;
+  a saved training keeps its cap; shown live with warnings near the cap) blocks saving Active entries
+  that could exceed it, and lines that don't fit a reply are left out, never cut. Every provider in the
+  chain gets the same text. A flow without training, switched off, or whose block fails to compile
+  gets exactly the prompt it got before.
+- **Validation:** single lines with length limits, only `{{title_to_use}}`, no phone numbers, emails,
+  links (except kagzso.com) or HTML, and no wording that overrides the rules, hides the AI, changes
+  do-not-call or outcomes, promises prices / savings / demos / meetings, asks for another person's
+  contact details or fakes human actions ("let me check", breathing, typing). The checks are keyword
+  based: a guard, not a guarantee.
+- **Corrections from calls:** under a call's transcript (AI Call run log and the customer's call
+  detail), *Create training from this turn* lets an admin pick an Agent turn and write the better
+  reply. It is saved into that flow's training as a **Draft** bad example. Only text is copied, never
+  audio; names (the call's own and any introduced in the call), phone numbers, emails, links and the
+  follow-up detail are removed first.
+- **Test:** type a customer message to compare the reply without and with the training. **Mock** (the
+  default) asks no provider and costs nothing: the reply is simulated from the picked entries, and the
+  picked lines, the lines the token cap left out and the prompt sizes are shown. **Real provider**
+  needs an "I understand this uses provider tokens" tick and a confirm; it sends two small requests to
+  one enabled LLM (the sample customer has no phone number; no call is placed).
+
+No database migration. Rollback: switch *Use training in calls* off and publish (calls get today's
+prompt at once), or revert the code. Before rolling a voice backend back to a version without
+training support, publish a version of each flow without training: an older backend rejects the
+`training` key, and its calls would fall back to the default agent.
+
 ### AI Call Customers and follow-ups
 
 With `ENABLE_AI_CALLS=true`, admins get an **AI Call Customers** page in the sidebar

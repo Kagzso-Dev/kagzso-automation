@@ -15,6 +15,7 @@ import {
   type AiProviderSelectionInput,
   type AiProviderSettingsView,
   type AiProviderUpdateInput,
+  type TrainingTestResult,
 } from "@dispatch/shared";
 import { aiCallsConfig, isAiCallsConfigured, voiceBackendFor, type VoiceBackendTarget } from "../config/aiCalls.js";
 
@@ -254,6 +255,15 @@ export interface VoiceFlowPreview {
   /** System-spoken after a time-of-day opening; null when skipped (opening names the customer, or no name). */
   identity_question?: string | null;
   identity_reask?: string | null;
+  /** Active training compiled for the preview's training message (null = no Active training). */
+  training_block?: string | null;
+  training_tokens?: number | null;
+  /** The most one reply's training block can cost, and the flow's cap. */
+  training_max_tokens?: number | null;
+  training_cap?: number | null;
+  /** The per-reply lines picked for the training message, and relevant ones left out by the cap. */
+  training_selected?: string[] | null;
+  training_dropped?: string[] | null;
 }
 
 /** Built-in flows (the defaults to copy) + locked block text, from the language's voice backend. */
@@ -266,8 +276,27 @@ export function previewFlow(
   definition: unknown,
   sample: Record<string, unknown> = {},
   language: AiCallLanguage = DEFAULT_AI_CALL_LANGUAGE,
+  trainingMessage?: string,
 ): Promise<VoiceFlowPreview> {
-  return request<VoiceFlowPreview>("POST", "/api/flows/preview", { flow: definition, sample }, language);
+  const body = { flow: definition, sample, ...(trainingMessage ? { training_message: trainingMessage } : {}) };
+  return request<VoiceFlowPreview>("POST", "/api/flows/preview", body, language);
+}
+
+/**
+ * Training tab test: one customer message, answered without and with the flow's Active training.
+ * "mock": no provider is asked (the voice backend simulates the reply from the picked entries, free).
+ * "real": one enabled LLM provider answers twice (the voice backend holds the keys). The sample
+ * customer never has a phone number.
+ */
+export function trainingTestReply(
+  definition: unknown,
+  mode: "mock" | "real",
+  providerId: string | null,
+  message: string,
+  language: AiCallLanguage = DEFAULT_AI_CALL_LANGUAGE,
+): Promise<TrainingTestResult> {
+  const body = { flow: definition, mode, message, ...(mode === "real" && providerId ? { provider_id: providerId } : {}) };
+  return request<TrainingTestResult>("POST", "/api/flows/training-test", body, language);
 }
 
 /** "Listen": a WAV of `voiceId` saying `text` ({{short_delay}} etc. as real silence). Text-to-speech only — the voice backend dials nothing. */

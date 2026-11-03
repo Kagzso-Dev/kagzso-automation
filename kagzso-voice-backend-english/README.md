@@ -533,6 +533,44 @@ duration. `app/flows/schema.py` validates it (unknown fields, unknown `{{variabl
 - `GET /api/flows/builtin` lists the built-in flows and locked text. `POST /api/flows/preview`
   validates a flow and renders the greeting, silence lines and full prompt for sample customer data.
   Both need `X-API-Key`. No database migration is needed on this side.
+- **Training** (`app/flows/training.py`, the Training tab): an optional `training` in the flow with a
+  persona, phrases, knowledge and examples, each `draft` / `active` / `archived`, an `enabled` switch
+  and a `token_cap` (default 900). **Training text is included in prompts and sent to the enabled LLM
+  providers during calls: never put secrets or personal data in it.** Nothing is fine-tuned.
+  - When the switch is on, the Active entries are stored on the call (`calls.variables.flow_training`,
+    no ids or review flags) and `build_system_prompt` compiles them for each reply into one block after
+    every fixed rule and before the customer data. The block's header says it never overrides the
+    rules above. Its core (persona, always-on facts, usage notes) is identical on every turn; the tail
+    (phrases, Q&A, examples) is picked for the customer's latest words, never re-offering the phrase of
+    the previous reply, and filled within the cap. Every provider gets the same text.
+  - No training, switched off, nothing Active, or a compile error: the block is `""` and the prompt is
+    byte for byte what it was (`tests/test_training.py`; `flow_hash` and the agent row are unchanged).
+  - Validation rejects personal data, links, HTML, any variable but `{{title_to_use}}`, and override /
+    false-promise / fake-human wording (keyword rules, each with its reason); activation over the cap
+    is refused.
+  - Each live reply logs `LLM prompt ~N tokens (training ~M)` next to `LLM first token: …ms`.
+  - The persona may carry an **agent profile** (`agent_name`, `company`, `business_type`, `objective`,
+    `call_purpose`, `target_customer`, `intro`, `desired_outcome`), compiled as "Agent profile:" lines
+    ahead of the tone; a persona without one compiles exactly as before. Examples may carry
+    `situation`, `topic` and `style` (style filters like phrases; a matching situation lifts the
+    example). Phrase situations: `training.SITUATIONS`; a `disclosure` phrase must say it is an AI.
+  - Picking (`matched_situations`, `tail_items`): a do-not-call request (`call_service.is_do_not_call`, the
+    `DNC_ENFORCE` detector, plus "number remove") is checked first and gets only `DNC_LINE` and closing
+    phrases; one-word cues are ignored when negated ("not sure", "சரி இல்ல"); `closing` ranks first and drops
+    objection / agree / clarify / price / re-ask / uncertain; `similarity` counts one shared word as strong
+    only in a short message; an approved answer found in the previous reply is replaced by a "don't repeat
+    it" note. `default_token_cap(language)`: 900 English, 1200 other languages (Dispatch's starting cap).
+  - `POST /api/flows/preview` also returns `training_block`, `training_tokens`,
+    `training_max_tokens`, `training_cap`, `training_selected` and `training_dropped` (optional
+    `training_message`). `POST /api/flows/training-test` (`flow`, `mode`, `provider_id`, `message`):
+    `mode: "mock"` (the default) asks no provider — the reply is the best approved answer or phrase
+    for the message; `mode: "real"` answers with one enabled LLM provider, without and with the Active
+    training (two small real requests). Both return the picked (`selected`) and capped (`dropped`)
+    lines; never a phone number; only sizes and timings logged.
+- **Business executive** (`builtin/executive.json`, base `executive`): a lean, objective-driven script
+  that uses nila's opening and nila's locked blocks (`schema.LOCKED_BASE`), takes who calls and why
+  from the training's agent profile, and has no legacy locked references. Other languages lay
+  `builtin/<lang>/executive.json` (nila's spoken lines) over it, like nila.
 
 ## Project layout
 

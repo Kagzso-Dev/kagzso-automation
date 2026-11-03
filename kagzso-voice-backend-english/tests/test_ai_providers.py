@@ -186,7 +186,7 @@ def _labels(providers) -> List[str]:
 
 
 def _build(monkeypatch, **seed):
-    monkeypatch.setattr(settings, "LLM_PROVIDER", "gemini")  # the test .env LLM: never a bootstrap key here
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "openai")  # not on the page: no .env bootstrap key for any entry
     monkeypatch.setattr(settings, "SARVAM_API_KEY", SecretStr(""))
 
     async def go(db):
@@ -251,7 +251,7 @@ def test_production_ignores_an_unverified_speech_model_already_saved(monkeypatch
 
 
 def test_each_call_keeps_its_snapshot(monkeypatch):
-    monkeypatch.setattr(settings, "LLM_PROVIDER", "gemini")
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "openai")
     monkeypatch.setattr(settings, "SARVAM_API_KEY", SecretStr(""))
 
     async def go(db):
@@ -443,3 +443,147 @@ async def test_a_new_voice_that_fails_before_audio_uses_the_working_one():
 
     tts = registry.FallbackTTS(Broken(settings, voice_id="kavya_ta_customer", exact_voice=True), Working(settings))
     assert await tts.open_stream() == "stream" and await tts.synthesize("Hello") == b"audio"
+
+
+# ------------------------------------------------------------------ ANTHROPIC_DEFAULT_MODEL (new entries only)
+def _anthropic_view(view):
+    return next(p for p in view["providers"] if p["id"] == "anthropic_llm")
+
+
+def _stored(sync_engine, pid):
+    with sync_engine.connect() as c:
+        return c.execute(text("select model, encrypted_key, enabled from ai_provider_settings where id = :id"),
+                         {"id": pid}).first()
+
+
+def test_a_new_anthropic_entry_starts_with_haiku(client, auth, sync_engine):
+    assert settings.ANTHROPIC_DEFAULT_MODEL == "claude-haiku-5-5"
+    assert _anthropic_view(client.get(BASE, headers=auth).json())["model"] == "claude-haiku-5-5"
+    r = put(client, auth, "anthropic_llm", {"api_key": ANTHROPIC_KEY})
+    assert r.status_code == 200 and _anthropic_view(r.json())["model"] == "claude-haiku-5-5"
+    assert _stored(sync_engine, "anthropic_llm")[0] == "claude-haiku-5-5"  # stored: a later default change can't move it
+    with sync_engine.connect() as c:
+        detail = c.execute(text("select detail from ai_provider_audit order by id desc")).scalar()
+    assert "model" in json.dumps(detail) and ANTHROPIC_KEY not in json.dumps(detail)
+
+
+def test_only_anthropic_changes_for_new_entries(client, auth, monkeypatch):
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "openai")  # no .env model for any entry on the page
+    view = client.get(BASE, headers=auth).json()
+    models = {p["id"]: p["model"] for p in view["providers"] if p["kind"] == "llm"}
+    assert models == {"groq_llm": None, "sarvam_llm": "sarvam-105b-conversations", "anthropic_llm": "claude-haiku-5-5",
+                      "gemini_llm": "gemini-3.6-flash"}
+
+
+def test_saved_anthropic_settings_are_never_touched(client, auth, sync_engine, monkeypatch):
+    def seed(db):
+        return _seed(db, live=False, anthropic_llm={"enabled": True, "model": "claude-sonnet-5-5", "priority": 3,
+                                                    "key": ANTHROPIC_KEY})
+
+    run(_with_db(seed))
+    before = _stored(sync_engine, "anthropic_llm")
+    view = client.get(BASE, headers=auth).json()
+    assert _anthropic_view(view)["model"] == "claude-sonnet-5-5" and _anthropic_view(view)["key_source"] == "saved"
+    select_(client, auth, {"llm_order": ["anthropic_llm", "groq_llm", "sarvam_llm", "gemini_llm"]})  # reorder; creates the other rows
+    put(client, auth, "groq_llm", {"enabled": False})
+    assert _stored(sync_engine, "anthropic_llm")[:2] == before[:2]  # model and encrypted key byte for byte
+    assert _stored(sync_engine, "groq_llm")[0] is None and _stored(sync_engine, "sarvam_llm")[0] is None
+
+
+def test_an_entry_saved_without_a_model_keeps_its_old_default(client, auth, monkeypatch):
+    """Saved before this change with no model: it stays on what it resolved to (claude-opus-5-5)."""
+    p = _build(monkeypatch, anthropic_llm={"enabled": True, "priority": 1, "key": ANTHROPIC_KEY})
+    assert _labels(p) == ["anthropic:claude-opus-5-5"]
+    assert _anthropic_view(client.get(BASE, headers=auth).json())["model"] == "claude-opus-5-5"
+
+
+# ------------------------------------------------------------------ Google Gemini on the page
+GEMINI_KEY = "AIza-test-gemini-key-0123456789"
+
+
+def _gemini_view(view):
+    return next(p for p in view["providers"] if p["id"] == "gemini_llm")
+
+
+def test_gemini_is_listed_last_and_off(client, auth, monkeypatch):
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "openai")
+    view = client.get(BASE, headers=auth).json()
+    gemini = _gemini_view(view)
+    assert gemini["label"] == "Google Gemini" and gemini["enabled"] is False and gemini["status"] == "disabled"
+    assert gemini["model"] == "gemini-3.6-flash" and gemini["priority"] == 4 and gemini["key_configured"] is False
+    assert view["llm_order"] == ["groq_llm", "sarvam_llm", "anthropic_llm", "gemini_llm"]
+
+
+def test_a_saved_order_keeps_its_places_with_gemini_added_last(monkeypatch):
+    """Orders saved before Gemini was on the page (priorities 1-3) are unchanged; Gemini comes after them."""
+    async def go(db):
+        await _seed(db, live=False, groq_llm={"enabled": False, "priority": 3}, sarvam_llm={"enabled": False, "priority": 1},
+                    anthropic_llm={"enabled": False, "priority": 2})
+        return registry.llm_order(await registry._rows(db))
+
+    assert run(_with_db(go)) == ["sarvam_llm", "anthropic_llm", "groq_llm", "gemini_llm"]
+
+
+def test_the_order_must_list_gemini_too(client, auth):
+    r = select_(client, auth, {"llm_order": ["sarvam_llm", "anthropic_llm", "groq_llm"]})
+    assert r.status_code == 422 and "gemini_llm" in r.json()["detail"]["message"]
+
+
+def test_gemini_switched_on_with_a_key_joins_the_live_chain(client, auth, monkeypatch):
+    r = put(client, auth, "gemini_llm", {"api_key": GEMINI_KEY, "model": "gemini-3.5-flash-lite", "enabled": True})
+    assert r.status_code == 200 and GEMINI_KEY not in r.text
+    assert _gemini_view(r.json())["key_source"] == "saved" and _gemini_view(r.json())["status"] == "configured"
+    p = _build(monkeypatch, groq_llm={"enabled": True, "model": "openai/gpt-oss-120b", "priority": 1, "key": GROQ_KEY},
+               gemini_llm={"enabled": True, "model": "gemini-3.5-flash-lite", "priority": 2, "key": GEMINI_KEY})
+    assert _labels(p) == ["groq:openai/gpt-oss-120b", "gemini:gemini-3.5-flash-lite"]
+    link = p.llm.links[1][1]
+    assert type(link).__name__ == "GeminiProvider" and link.cfg.LLM_API_KEY.get_secret_value() == GEMINI_KEY
+
+
+def test_gemini_test_button_sends_one_small_request(client, auth, monkeypatch):
+    sent = []
+
+    async def fake_test(pid, model, key, cfg):
+        sent.append((pid, model, key == GEMINI_KEY))
+
+    monkeypatch.setattr(registry, "_test_llm", fake_test)  # no request leaves the test
+    put(client, auth, "gemini_llm", {"api_key": GEMINI_KEY, "model": "gemini-3.6-flash"})
+    r = client.post(f"{BASE}/providers/gemini_llm/test", headers=auth)
+    assert r.json()["test"]["status"] == "ok" and sent == [("gemini_llm", "gemini-3.6-flash", True)]
+
+
+@pytest.mark.parametrize("model, level, sent", [
+    ("gemini-3.8-flash", "minimal", "low"), ("gemini-4-argon", "minimal", "low"), ("gemini-2.5-flash", "minimal", "low"),
+    ("gemini-3.1-pro-preview", "minimal", "low"),
+    ("gemini-3.6-flash", "minimal", "minimal"), ("gemini-3.5-flash-lite", "minimal", "minimal"),
+    ("gemini-3.8-flash", "high", "high"), ("test-model", "minimal", "minimal"),
+])
+async def test_gemini_thinking_level_suits_the_model(model, level, sent):
+    from app.services.llm_service import GeminiProvider
+
+    bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                              content=b'data: {"candidates": [{"content": {"parts": [{"text": "Okay."}]}}]}\n\n')
+
+    cfg = settings.model_copy(update={"LLM_PROVIDER": "gemini", "LLM_MODEL": model, "LLM_API_KEY": SecretStr(GEMINI_KEY),
+                                      "LLM_THINKING_LEVEL": level})
+    p = GeminiProvider(cfg, client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    assert "".join([d async for d in p._stream("S", [{"role": "user", "content": "Hi"}], model)]) == "Okay."
+    assert bodies[0]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": sent}
+
+
+def test_reordering_creates_a_new_anthropic_entry_with_haiku(client, auth, sync_engine):
+    assert select_(client, auth, {"llm_order": ["sarvam_llm", "anthropic_llm", "groq_llm", "gemini_llm"]}).status_code == 200
+    assert _stored(sync_engine, "anthropic_llm")[0] == "claude-haiku-5-5"
+
+
+def test_empty_default_or_an_env_anthropic_model_behave_as_before(client, auth, monkeypatch):
+    monkeypatch.setattr(settings, "ANTHROPIC_DEFAULT_MODEL", "")  # the easy way back
+    assert _anthropic_view(client.get(BASE, headers=auth).json())["model"] == "claude-opus-5-5"
+    monkeypatch.setattr(settings, "ANTHROPIC_DEFAULT_MODEL", "claude-haiku-5-5")
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "anthropic")
+    monkeypatch.setattr(settings, "LLM_MODEL", "claude-sonnet-5-5")  # .env's own Anthropic model still wins
+    assert _anthropic_view(client.get(BASE, headers=auth).json())["model"] == "claude-sonnet-5-5"

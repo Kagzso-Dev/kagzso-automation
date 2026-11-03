@@ -51,6 +51,10 @@ import { Icon } from "../components/icons";
 import { VoicePicker } from "../components/VoicePicker";
 import { PhoneInput, phoneError } from "../components/PhoneInput";
 import { ImportPromptModal } from "../components/ImportPromptModal";
+import { CallFlowTraining } from "../components/CallFlowTraining";
+import { SimpleAiCall } from "../components/SimpleAiCall";
+import { Switch } from "../components/Switch";
+import { useAuth } from "../lib/auth";
 
 /**
  * "Call Flows": edit what the AI voice agent says. A flow is a copy of a built-in
@@ -69,6 +73,8 @@ const TABS: { key: CallFlowGroup | "locked"; label: string }[] = [
   { key: "rules", label: "Rules" },
   { key: "locked", label: "Safety (locked)" },
 ];
+/** The editor's tabs: the script groups, then Training (built-in scripts have none). */
+const EDITOR_TABS: { key: (typeof TABS)[number]["key"] | "training"; label: string }[] = [...TABS, { key: "training", label: "Training" }];
 
 const SAMPLES = [
   { label: "Male, with name", customer_name: "Ragul", gender: "male", follow_up_detail: "" },
@@ -101,6 +107,8 @@ export function CallFlowsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [removing, setRemoving] = useState<CallFlowListItem | null>(null);
+  // "simple": one number + a published flow; "advanced": the editor (the page as it always was).
+  const [mode, setMode] = useState<"simple" | "advanced">("advanced");
 
   if (config.isLoading) return <Spinner />;
   if (!enabled) {
@@ -142,6 +150,42 @@ export function CallFlowsPage() {
       {/* Tamil / Hindi / Kannada before their voice backend is set up: say so instead of a raw error. */}
       {languageReady ? catalog.error && <ErrorNote error={catalog.error} /> : <AiCallLanguageNotice />}
       <RunningCallsNote />
+      <div className="mb-4 inline-flex gap-1 rounded-lg bg-surface-muted p-1" role="tablist">
+        {(
+          [
+            ["simple", "Simple AI Call"],
+            ["advanced", "Advanced Call Flow editor"],
+          ] as const
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={mode === key}
+            onClick={() => setMode(key)}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium ${mode === key ? "bg-surface text-ink shadow-sm" : "text-slate-550 hover:text-ink"}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {mode === "simple" &&
+        (flows.isLoading ? (
+          <Spinner />
+        ) : flows.error ? (
+          <ErrorNote error={flows.error} />
+        ) : (
+          <SimpleAiCall
+            language={language}
+            flows={flows.data!.items}
+            onOpenFlow={(id) => {
+              setSelectedId(id);
+              setMode("advanced");
+            }}
+          />
+        ))}
+      {mode === "advanced" && (
+        <>
       {catalog.data && <BuiltinScripts catalog={catalog.data} onCustomized={setSelectedId} />}
       <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.06em] text-slate-550">Your call flows</h2>
       <div className={selectedId ? "grid gap-6 min-[1600px]:grid-cols-[280px_minmax(0,1fr)]" : "flex flex-col gap-4"}>
@@ -200,11 +244,14 @@ export function CallFlowsPage() {
             flowId={selectedId}
             catalog={catalog.data}
             onClose={() => setSelectedId(null)}
+            onCopied={setSelectedId}
           />
         ) : (
           <EmptyState>Select a call flow or create a new one.</EmptyState>
         )}
       </div>
+        </>
+      )}
       <NewFlowModal
         open={creating}
         onClose={() => setCreating(false)}
@@ -517,6 +564,65 @@ function NewFlowModal({ open, onClose, onCreated }: { open: boolean; onClose: ()
   );
 }
 
+/** "Copy flow": a new flow (Draft v1) from this flow's newest version, with or without its training. */
+function CopyFlowModal({
+  open,
+  onClose,
+  flowId,
+  name: sourceName,
+  hasTraining,
+  onCopied,
+}: {
+  open: boolean;
+  onClose: () => void;
+  flowId: string;
+  name: string;
+  hasTraining: boolean;
+  onCopied: (id: string) => void;
+}) {
+  const qc = useQueryClient();
+  const [name, setName] = useState(`${sourceName} (copy)`.slice(0, 100));
+  const [includeTraining, setIncludeTraining] = useState(true);
+  const copy = useMutation({
+    mutationFn: () =>
+      api<{ id: string }>(`/api/call-flows/${flowId}/copy`, {
+        method: "POST",
+        json: { name: name.trim(), includeTraining },
+        notify: "Copy created as a draft",
+      }),
+    onSuccess: (f) => {
+      void qc.invalidateQueries({ queryKey: ["call-flows"] });
+      onClose();
+      onCopied(f.id);
+    },
+  });
+  return (
+    <Modal open={open} onClose={onClose} title="Copy call flow">
+      <label className="label">Name of the copy</label>
+      <input className="input mb-3" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} />
+      {hasTraining && (
+        <label className="mb-3 flex items-center gap-2 text-sm">
+          <Switch on={includeTraining} label="Copy the training too" onChange={setIncludeTraining} />
+          Copy the training too
+        </label>
+      )}
+      <p className="mb-3 text-xs text-slate-550">
+        Copies the newest version (the draft if there is one, else the live one). The copy starts as a draft (v1); nothing
+        changes in this flow.
+      </p>
+      {copy.error && <ErrorNote error={copy.error} />}
+      <div className="mt-3 flex justify-end gap-2">
+        <button className="btn-ghost" onClick={onClose}>
+          Cancel
+        </button>
+        <button className="btn-primary" disabled={!name.trim() || copy.isPending} onClick={() => copy.mutate()}>
+          {copy.isPending ? "Copying…" : "Create copy"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 /* ------------------------------------------------------------------ editor */
 
 type FieldKey = "greeting" | "silence.reprompt" | "silence.closing" | `block:${string}`;
@@ -525,13 +631,20 @@ function CallFlowEditor({
   flowId,
   catalog,
   onClose,
+  onCopied,
 }: {
   flowId: string;
   catalog: CallFlowCatalog;
   onClose: () => void;
+  /** A copy was made: open it. */
+  onCopied: (id: string) => void;
 }) {
   const qc = useQueryClient();
   const confirm = useConfirm();
+  // Training is admin-only (editors get flows without it from the API and never see the tab).
+  const isAdmin = useAuth().user?.role === "ADMIN";
+  const editorTabs = isAdmin ? EDITOR_TABS : EDITOR_TABS.filter((t) => t.key !== "training");
+  const [copying, setCopying] = useState(false);
   const detail = useQuery({
     queryKey: ["call-flow", flowId],
     queryFn: () => api<CallFlowDetail>(`/api/call-flows/${flowId}`),
@@ -542,7 +655,7 @@ function CallFlowEditor({
   const working = draft ?? published;
 
   const [form, setForm] = useState<CallFlowDefinition | null>(null);
-  const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("greeting");
+  const [tab, setTab] = useState<(typeof EDITOR_TABS)[number]["key"]>("greeting");
   const [testing, setTesting] = useState(false);
   const active = useRef<{ key: FieldKey; el: HTMLInputElement | HTMLTextAreaElement } | null>(null);
 
@@ -690,9 +803,11 @@ function CallFlowEditor({
   };
 
   const tabBlocks =
-    tab === "locked"
-      ? form.blocks.filter(isLockedBlock)
-      : form.blocks.filter((b): b is CallFlowTextBlock => !isLockedBlock(b) && b.group === tab);
+    tab === "training"
+      ? []
+      : tab === "locked"
+        ? form.blocks.filter(isLockedBlock)
+        : form.blocks.filter((b): b is CallFlowTextBlock => !isLockedBlock(b) && b.group === tab);
 
   return (
     <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -908,7 +1023,7 @@ function CallFlowEditor({
         </div>
 
         <div className="mb-4 flex flex-wrap gap-1 rounded-lg bg-surface-muted p-1">
-          {TABS.map((t) => (
+          {editorTabs.map((t) => (
             <button
               key={t.key}
               type="button"
@@ -921,7 +1036,12 @@ function CallFlowEditor({
             </button>
           ))}
         </div>
-        {tabBlocks.length === 0 && <p className="mb-3 text-sm text-slate-550">Nothing in this section for this script.</p>}
+        {tab === "training" && isAdmin && (
+          <div className="mb-4">
+            <CallFlowTraining form={form} update={update} flowId={flowId} />
+          </div>
+        )}
+        {tab !== "training" && tabBlocks.length === 0 && <p className="mb-3 text-sm text-slate-550">Nothing in this section for this script.</p>}
         {tabBlocks.map((b) =>
           isLockedBlock(b) ? (
             <div key={b.id} className="mb-3 rounded-lg border border-line bg-surface-muted p-3">
@@ -1042,6 +1162,11 @@ function CallFlowEditor({
               <Icon name="phone" size={16} /> Test call to my number
             </button>
           )}
+          {isAdmin && (
+            <button className="btn-ghost" disabled={dirty} title={dirty ? "Save or undo your changes first" : undefined} onClick={() => setCopying(true)}>
+              Copy flow
+            </button>
+          )}
           <button className="btn-ghost" disabled={!dirty} onClick={() => baseDefinition && setForm(structuredClone(baseDefinition))}>
             Undo changes
           </button>
@@ -1129,6 +1254,16 @@ function CallFlowEditor({
       <PreviewPanel definition={form} valid={!!check?.success} />
 
       <ImportPromptModal open={importing} onClose={() => setImporting(false)} flowId={flowId} onChanged={invalidate} />
+      {copying && (
+        <CopyFlowModal
+          open={copying}
+          onClose={() => setCopying(false)}
+          flowId={flowId}
+          name={form.name}
+          hasTraining={!!form.training}
+          onCopied={onCopied}
+        />
+      )}
 
 
       {working && (

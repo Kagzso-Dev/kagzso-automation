@@ -223,7 +223,7 @@ class AiProviderSetting(Base):
 
     __tablename__ = "ai_provider_settings"
 
-    id: Mapped[str] = mapped_column(String(32), primary_key=True)  # groq_llm | sarvam_llm | anthropic_llm | sarvam_stt | sarvam_tts
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)  # groq_llm | sarvam_llm | anthropic_llm | gemini_llm | sarvam_stt | sarvam_tts
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     options: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # e.g. {"speaker": ...} / {"mode": ...}

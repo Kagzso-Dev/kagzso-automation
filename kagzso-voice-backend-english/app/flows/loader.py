@@ -23,7 +23,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.db import repositories as repo
 from app.db.models import Agent
-from app.flows.schema import BUILTIN_DIR, CallFlow, render_blocks
+from app.flows.schema import BUILTIN_DIR, FLOW_BASES, CallFlow, render_blocks
 
 log = get_logger("flows")
 
@@ -42,7 +42,7 @@ def load_builtin(base: str) -> CallFlow:
     return CallFlow.model_validate(data)
 
 
-BUILTIN_FLOWS: Dict[str, CallFlow] = {base: load_builtin(base) for base in ("nila", "followup")}
+BUILTIN_FLOWS: Dict[str, CallFlow] = {base: load_builtin(base) for base in FLOW_BASES}
 
 
 class FlowError(Exception):
@@ -69,7 +69,7 @@ def parse_flow(raw: Mapping[str, Any]) -> CallFlow:
 
 def flow_hash(flow: CallFlow) -> str:
     data = flow.model_dump(mode="json")
-    for optional in ("pauses", "recording_notice", "identity"):  # flows without them keep the hash they always had
+    for optional in ("pauses", "recording_notice", "identity", "training"):  # flows without them keep the hash they always had
         if data.get(optional) is None:
             data.pop(optional, None)
     canonical = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)

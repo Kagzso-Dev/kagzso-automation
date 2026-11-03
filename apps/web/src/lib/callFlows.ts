@@ -1,5 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { DEFAULT_AI_CALL_LANGUAGE, type AiCallLanguage, type CallFlowBase, type CallFlowDefinition } from "@dispatch/shared";
+import {
+  DEFAULT_AI_CALL_LANGUAGE,
+  type AiCallLanguage,
+  type CallFlowAgentSummary,
+  type CallFlowBase,
+  type CallFlowDefinition,
+} from "@dispatch/shared";
 import { api } from "./api";
 import { isEnglish, withLanguage } from "./aiCallLanguage";
 
@@ -20,6 +26,8 @@ export interface CallFlowListItem {
   published: CallFlowVersionSummary | null;
   draft: CallFlowVersionSummary | null;
   versionCount: number;
+  /** The live version's agent profile from its training (absent on an older API). */
+  agent?: CallFlowAgentSummary | null;
 }
 
 export interface CallFlowVersion extends CallFlowVersionSummary {
@@ -71,11 +79,21 @@ export interface CallFlowPreview {
   /** System-spoken after a time-of-day opening; null when skipped (opening names the customer, or no name). */
   identity_question?: string | null;
   identity_reask?: string | null;
+  /** Active training compiled for the preview's training message; null = no Active training. */
+  training_block?: string | null;
+  training_tokens?: number | null;
+  /** The most one reply's training block can cost, and the flow's cap. */
+  training_max_tokens?: number | null;
+  training_cap?: number | null;
+  /** The per-reply lines picked for the training message, and relevant ones left out by the cap. */
+  training_selected?: string[] | null;
+  training_dropped?: string[] | null;
 }
 
 export const BASE_LABELS: Record<CallFlowBase, string> = {
   nila: "Nila screening (identity → permission → pitch)",
   followup: "Customer follow-up (discusses the follow-up detail)",
+  executive: "Business executive (objective-driven, decides each next step itself)",
 };
 
 /** One language's call flows (each language has its own; English = the original list). */

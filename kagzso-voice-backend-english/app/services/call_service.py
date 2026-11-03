@@ -33,6 +33,7 @@ from app.db import repositories as repo
 from app.db.database import session_factory
 from app.db.models import FINAL_CALL_STATUSES, LOCKED_OUTCOMES, Call, CallOutcome, CallStatus, utcnow
 from app.flows.loader import FlowError, resolve_flow_agent
+from app.flows.training import runtime_json
 from app.schemas.calls import OutboundCallRequest
 from app.services import audio_service as audio
 from app.services import provider_registry
@@ -55,9 +56,11 @@ from app.services.llm_service import (
     split_pauses,
     create_llm_provider,
     extract_end_call,
+    outcome_system,
     parse_outcome,
     parse_reached,
     render_first_message,
+    reply_issues,
     safe_variables,
 )
 from app.services.plivo_service import PlivoError, PlivoService, get_plivo_service
@@ -632,6 +635,9 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
                 flow_vars["flow_dnc_line"] = dnc_line  # spoken word for word on a do-not-call request
             if resolved.flow.pauses is not None:  # else the default pause lengths
                 flow_vars.update({f"flow_pause_{k}": str(v) for k, v in resolved.flow.pauses.model_dump().items()})
+            # Training switched on with Active entries: compiled into each reply's prompt (llm_service.training_block).
+            if training := runtime_json(resolved.flow.training, resolved.flow.language, resolved.flow.language_style):
+                flow_vars["flow_training"] = training
             time_limit = min(resolved.flow.limits.max_duration_sec, cfg.MAX_CALL_DURATION_SECONDS)
             flow_event = ("flow:selected", {**resolved.info, "agent_id": agent.id, "time_limit": time_limit})
 
@@ -2562,10 +2568,14 @@ class CallSession:
                             thinking_ack(index, lines[index], self._line_audio[lines[index]], long_answer))
                 info: Dict[str, Any] = {}
                 TURN_INFO.set(info)  # this task only: which model answered
+                guard = self.cfg.REPLY_GUARD == "log"
+                raw_parts: List[str] = []  # REPLY_GUARD: the model's text as sent, only read afterwards
                 try:
                     async for delta in self.providers.llm.stream_response(
                         self.ctx.agent_prompt, self.history, st.user_text, self.ctx.variables
                     ):
+                        if guard:
+                            raw_parts.append(delta)
                         if m.t3_first_token is None:
                             m.t3_first_token = time.monotonic()
                             log.info("LLM first token: %dms", _ms(m.t3, m.t3_first_token) or 0)
@@ -2576,6 +2586,8 @@ class CallSession:
                     m.t4 = time.monotonic()
                 finally:
                     m.model, m.failover = info.get("model"), bool(info.get("failover"))
+                if guard:
+                    self._log_reply_issues("".join(raw_parts))
                 if st.spoken:  # variety: the same opening word as the last AI reply is logged
                     words = vf.words(st.spoken[0])
                     opening = words[0] if words else None
@@ -2737,6 +2749,18 @@ class CallSession:
             log.error("TTS recovery failed (%s) - using fallback line", type(exc).__name__)
             await self._speak_fallback(st, "tts_recovery_failed")
 
+    def _log_reply_issues(self, raw: str) -> None:
+        """REPLY_GUARD=log: the names of the rules this AI reply broke (never its text). Nothing is changed:
+        the reply was already spoken as the model wrote it."""
+        try:
+            issues = reply_issues(raw, self.cfg.CALL_LANGUAGE)
+        except Exception as exc:  # a check must never affect the call
+            log.warning("Reply guard check failed (%s)", type(exc).__name__)
+            return
+        if issues:
+            log.warning("Reply guard: %s", ", ".join(issues))
+            self._event("reply_guard", {"turn": self.turn_index, "issues": issues})
+
     def _next_fallback_line(self, reason: str) -> Tuple[str, bool]:
         """The "couldn't hear you" line once; a second one in a row closes the call politely
         instead (script "UNCLEAR AUDIO": only one clarification attempt). Returns (text, close)."""
@@ -2791,7 +2815,7 @@ async def classify_outcome(llm: LLMProvider, transcript: str) -> Optional[str]:
     so the one retry on a transient failure never delays the live conversation."""
     for attempt in range(2):
         try:
-            return await asyncio.wait_for(llm.complete_raw(OUTCOME_SYSTEM, transcript), timeout=OUTCOME_TIMEOUT_SECONDS)
+            return await asyncio.wait_for(llm.complete_raw(outcome_system(), transcript), timeout=OUTCOME_TIMEOUT_SECONDS)
         except Exception as exc:
             kind = exc.kind if isinstance(exc, LLMError) else "timeout" if isinstance(exc, asyncio.TimeoutError) else "unknown"
             retryable = kind in LLMProvider.RETRYABLE

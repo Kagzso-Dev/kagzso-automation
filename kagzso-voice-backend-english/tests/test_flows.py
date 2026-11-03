@@ -63,7 +63,10 @@ def test_builtin_agents_match_the_frozen_agents(agent):
 
 @pytest.mark.parametrize("agent_name", ["Nila", "Follow-up"])
 @pytest.mark.parametrize("case", range(4))
-def test_default_prompt_is_unchanged_apart_from_the_safety_layer(agent_name, case):
+def test_default_prompt_is_unchanged_apart_from_the_safety_layer(agent_name, case, monkeypatch):
+    # The frozen prompts include the phone number: LLM_OMIT_PHONE_NUMBER off = byte for byte as before
+    # (on, the default, is tests/test_phone_privacy.py).
+    monkeypatch.setattr(settings, "LLM_OMIT_PHONE_NUMBER", False)
     agent = llm.NILA_AGENT if agent_name == "Nila" else llm.FOLLOWUP_AGENT
     golden = GOLDEN[agent_name]["cases"][case]
     prompt = llm.build_system_prompt(agent["system_prompt"], golden["variables"], "en")
@@ -302,7 +305,7 @@ def test_status_callback_carries_the_flow():
 def test_builtin_endpoint(client, auth):
     assert client.get("/api/flows/builtin").status_code == 401
     body = client.get("/api/flows/builtin", headers=auth).json()
-    assert set(body["flows"]) == {"nila", "followup"} and "name" in body["variables"]
+    assert set(body["flows"]) == {"nila", "followup", "executive"} and "name" in body["variables"]
     assert "phone_number" not in body["variables"] and body["locked_blocks"] == LOCKED_BLOCKS
     assert body["limits"]["max_duration_sec"] == settings.MAX_CALL_DURATION_SECONDS
 

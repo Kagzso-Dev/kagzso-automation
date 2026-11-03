@@ -21,11 +21,16 @@ from typing import Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.config import settings
+from app.flows.training import FlowTraining, cap_issue
 
 BUILTIN_DIR = Path(__file__).resolve().parent / "builtin"
 LOCKED_BLOCKS: Dict[str, str] = json.loads((BUILTIN_DIR / "locked_blocks.json").read_text(encoding="utf-8"))
 
-FLOW_BASES = ("nila", "followup")
+# "executive": a lean, objective-driven script (the AI decides each next step; who calls and why come from
+# the training's agent profile). It keeps nila's opening and nila's locked blocks (LOCKED_BASE).
+FLOW_BASES = ("nila", "followup", "executive")
+# Whose locked blocks a base uses (default: its own, "<base>_..." keys).
+LOCKED_BASE = {"executive": "nila"}
 # Variables a flow may use. phone_number is deliberately absent: it is never spoken.
 FLOW_VARIABLES = ("customer_name", "name", "honorific", "title", "gender", "addressed_name",
                   "follow_up_detail", "company_name", "business_type", "title_to_use", "time_greeting",
@@ -49,10 +54,13 @@ UNLOCKED_KEYS = ("nila_callback_request", "nila_do_not_call", "nila_outcome_rule
 
 
 def required_locked_keys(base: str) -> List[str]:
-    return sorted(k for k in LOCKED_BLOCKS if k.startswith(f"{base}_") and k not in UNLOCKED_KEYS)
+    prefix = LOCKED_BASE.get(base, base)
+    return sorted(k for k in LOCKED_BLOCKS if k.startswith(f"{prefix}_") and k not in UNLOCKED_KEYS)
 
 
 def optional_locked_keys(base: str) -> List[str]:
+    if base in LOCKED_BASE:  # a newer base: no legacy locked references to keep loading
+        return []
     return sorted(k for k in UNLOCKED_KEYS if k.startswith(f"{base}_"))
 
 
@@ -182,6 +190,9 @@ class CallFlow(_Strict):
     # How a non-English flow speaks: "mixed" (Tanglish / Hinglish / Kanglish, everyday English words kept
     # in English) or "pure". None = "mixed", what every flow did before this setting. English flows: None.
     language_style: Optional[Literal["mixed", "pure"]] = None
+    # Training tab: tone and knowledge notes compiled into a prompt block (app/flows/training.py).
+    # None = no training: the prompt is exactly what it was before training existed.
+    training: Optional[FlowTraining] = None
 
     @field_validator("language")
     @classmethod
@@ -202,6 +213,12 @@ class CallFlow(_Strict):
     def _style(self) -> "CallFlow":
         if self.language_style is not None and self.language == "en":
             raise ValueError("an English flow has no language style")
+        return self
+
+    @model_validator(mode="after")
+    def _training_cap(self) -> "CallFlow":
+        if self.training is not None and (issue := cap_issue(self.training, self.language, self.language_style)):
+            raise ValueError(f"training: {issue}")
         return self
 
     @model_validator(mode="after")

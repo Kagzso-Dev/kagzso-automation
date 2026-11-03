@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { aiCallLanguage, DEFAULT_AI_CALL_LANGUAGE } from "./aiCallLanguages.js";
+import { callFlowTraining } from "./callFlowTraining.js";
 
 /* ------------------------------------------------------------------ Call Flows (AI voice calls) */
 // The UI-editable form of a voice agent's script. Mirrors the voice backend's
@@ -7,7 +8,10 @@ import { aiCallLanguage, DEFAULT_AI_CALL_LANGUAGE } from "./aiCallLanguages.js";
 // authority: a flow is checked there again before it is published or dialled.
 // Keys are snake_case because the definition is sent to the voice backend as-is.
 
-export const CALL_FLOW_BASES = ["nila", "followup"] as const;
+// "executive": a lean, objective-driven script (the AI decides each next step from the customer's
+// words; who calls and why come from the Training tab's agent profile). Same opening and safety
+// blocks as nila.
+export const CALL_FLOW_BASES = ["nila", "followup", "executive"] as const;
 export type CallFlowBase = (typeof CALL_FLOW_BASES)[number];
 
 /** Variables a script may use. phone_number is deliberately absent: it is never spoken. */
@@ -48,6 +52,7 @@ export type CallFlowGroup = (typeof CALL_FLOW_GROUPS)[number];
 export const CALL_FLOW_LOCKED_KEYS: Record<CallFlowBase, readonly string[]> = {
   nila: ["nila_data_safety", "nila_runtime_data"],
   followup: ["followup_runtime_data", "followup_situations"],
+  executive: ["nila_data_safety", "nila_runtime_data"],
 };
 
 /**
@@ -192,6 +197,8 @@ export const callFlowDefinition = z
       .optional(),
     /** Non-English flows: "mixed" (Tanglish / Hinglish / Kanglish) or "pure". Absent = "mixed", as before. */
     language_style: z.enum(["mixed", "pure"]).optional(),
+    /** Training tab (callFlowTraining.ts). Absent = no training: prompts exactly as before. */
+    training: callFlowTraining.optional(),
     transfer: z
       .object({
         // Live transfer is not implemented yet: the number is stored only.
@@ -268,7 +275,12 @@ export const callFlowSample = z
 
 /** Preview takes any JSON object: the voice backend reports validation errors in the response. */
 export const previewCallFlowInput = z
-  .object({ definition: z.record(z.unknown()), sample: callFlowSample.default({}) })
+  .object({
+    definition: z.record(z.unknown()),
+    sample: callFlowSample.default({}),
+    /** Training tab: the customer words the per-reply part of the training block is picked for. */
+    trainingMessage: z.string().trim().max(300).optional(),
+  })
   .strict();
 
 export const callFlowVersionParam = z.object({ id: z.string().min(1), version: z.coerce.number().int().min(1) });

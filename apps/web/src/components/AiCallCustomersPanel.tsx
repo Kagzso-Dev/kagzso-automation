@@ -41,6 +41,7 @@ import { Icon } from "./icons";
 import { PhoneInput, phoneInputOk } from "./PhoneInput";
 import { useConfirm } from "./confirm";
 import { useToast } from "./toast";
+import { TrainingFromCallButton } from "./TrainingFromCall";
 import { Badge, EmptyState, ErrorNote, Modal, Spinner, Table, type BadgeTone } from "./ui";
 
 /**
@@ -1100,6 +1101,7 @@ function DetailBody({ id, onClose }: { id: string; onClose: () => void }) {
                   <details className="mt-1">
                     <summary className="cursor-pointer text-xs text-accent-ink">Transcript</summary>
                     <pre className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap font-sans text-xs text-slate-550">{l.transcript}</pre>
+                    <TrainingFromCallButton logId={l.id} />
                   </details>
                 )}
                 <CallRecording logId={l.id} status={recordings[l.id]} />

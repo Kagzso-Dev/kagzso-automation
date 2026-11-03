@@ -401,6 +401,32 @@ class Settings(BaseSettings):
     LLM_FALLBACK2_MODEL: str = ""
     LLM_FALLBACK2_API_KEY: SecretStr = SecretStr("")
     LLM_FALLBACK2_BASE_URL: str = ""
+    # Admin-page LLM order (ChainLLMProvider): a provider that fails with quota / overload / auth, or
+    # LLM_CHAIN_BREAKER_TIMEOUTS first-token timeouts within LLM_BREAKER_WINDOW_SECONDS, goes to the end
+    # of the order for this long (still tried last, never dropped). Kept per provider:model across chain
+    # rebuilds. Failover stays before speech only. 0 = off (every reply tries the saved order).
+    LLM_CHAIN_COOLDOWN_SECONDS: float = 0.0
+    LLM_CHAIN_BREAKER_TIMEOUTS: int = 2
+
+    # --- What the LLM is sent ---
+    # The customer's phone number is telephony data only: never put into the prompt sent to any LLM
+    # provider (the "Customer details" data, {{phone_number}} in an agent prompt or opening line).
+    # false = sent as before.
+    LLM_OMIT_PHONE_NUMBER: bool = True
+    # Conversation messages sent to the LLM per reply: the opening greeting plus the last this many.
+    # The whole history is still kept and stored. 0 = off (all messages, as before).
+    LLM_HISTORY_MAX_MESSAGES: int = 0
+    # Checks each AI reply after it is spoken: wrong script for CALL_LANGUAGE, more than two sentences or
+    # one question, a mistyped end-of-call marker, an outcome label or markdown. "log" = log + call event
+    # (issue names only, never the text); the reply is never changed. "off" = no check.
+    REPLY_GUARD: str = "off"
+    # Outcome classification of a Hindi / Kannada / Telugu ... call names that language in its prompt
+    # (English and Tamil calls keep today's prompt). false = the same prompt for every language.
+    OUTCOME_NAMES_CALL_LANGUAGE: bool = False
+    # Model a NEW Anthropic entry on the admin page starts with (shown before it is saved, stored when it
+    # is created). Entries already saved keep their model; one saved without a model keeps resolving to
+    # claude-opus-5-5 as before.
+    ANTHROPIC_DEFAULT_MODEL: str = "claude-haiku-5-5"
 
     # --- Conversation reliability (each off by default = today's behaviour) ---
     # Do-not-call is enforced by the backend at every stage, not only by the AI: a request not to be
@@ -448,6 +474,12 @@ class Settings(BaseSettings):
     def _voice_focus_mode(cls, v: str) -> str:
         v = (v or "").strip().lower()
         return v if v in ("log", "enforce") else "log"
+
+    @field_validator("REPLY_GUARD")
+    @classmethod
+    def _reply_guard(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        return v if v in ("off", "log") else "off"  # log-only for now: anything else = off
 
     @field_validator("VOICE_FOCUS_MIN_VOICED_MS", "VOICE_FOCUS_MIN_SNR_DB", "VOICE_FOCUS_SHORT_VOICED_MS",
                      "VOICE_FOCUS_SHORT_SNR_DB", "VOICE_FOCUS_BARGE_VOICED_MS", "VOICE_FOCUS_BARGE_SNR_DB",

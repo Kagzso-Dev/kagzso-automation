@@ -4,9 +4,9 @@ import { z } from "zod";
 // Per language: each language's voice backend keeps its own provider settings and encrypted keys.
 // Dispatch only proxies (admins only); no API key is ever returned - only key_configured / key_source.
 
-export const AI_PROVIDER_IDS = ["groq_llm", "sarvam_llm", "anthropic_llm", "sarvam_stt", "sarvam_tts"] as const;
+export const AI_PROVIDER_IDS = ["groq_llm", "sarvam_llm", "anthropic_llm", "gemini_llm", "sarvam_stt", "sarvam_tts"] as const;
 export type AiProviderId = (typeof AI_PROVIDER_IDS)[number];
-export const AI_LLM_PROVIDER_IDS = ["groq_llm", "sarvam_llm", "anthropic_llm"] as const;
+export const AI_LLM_PROVIDER_IDS = ["groq_llm", "sarvam_llm", "anthropic_llm", "gemini_llm"] as const;
 export type AiLlmProviderId = (typeof AI_LLM_PROVIDER_IDS)[number];
 
 export type AiProviderStatus = "configured" | "missing_key" | "disabled" | "error";
