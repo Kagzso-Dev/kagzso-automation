@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AI_CALL_LANGUAGE_NAMES, aiAgentLanguageSupported, type AiAgentView } from "@dispatch/shared";
 import { PageHeader } from "../components/Layout";
 import { AiAgentForm } from "../components/AiAgentForm";
@@ -6,10 +7,12 @@ import { AiAgentKnowledge } from "../components/AiAgentKnowledge";
 import { AiAgentPublish } from "../components/AiAgentPublish";
 import { AiAgentCall } from "../components/AiAgentCall";
 import { AiCallLanguageNotice } from "../components/AiCallLanguageNotice";
+import { useConfirm } from "../components/confirm";
 import { Badge, EmptyState, ErrorNote, Spinner, Tabs } from "../components/ui";
 import { useAiCallsConfig } from "../lib/aiCalls";
 import { titleFor, useAiCallLanguage } from "../lib/aiCallLanguage";
-import { useAiAgent, useAiAgents } from "../lib/aiAgents";
+import { api } from "../lib/api";
+import { AGENT_QUERY_KEYS, useAiAgent, useAiAgents } from "../lib/aiAgents";
 
 type Tab = "settings" | "knowledge" | "publish" | "call";
 
@@ -99,6 +102,13 @@ export function AiAgentsPage() {
 }
 
 function AgentCard({ agent: a, onOpen }: { agent: AiAgentView; onOpen: (tab: Tab) => void }) {
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  // Archives the agent only (hidden from this list): its published Call Flow, knowledge and call history stay.
+  const remove = useMutation({
+    mutationFn: () => api(`/api/ai-agents/${a.id}`, { method: "DELETE" }),
+    onSuccess: () => AGENT_QUERY_KEYS.forEach((key) => void qc.invalidateQueries({ queryKey: [...key] })),
+  });
   return (
     <div className="card flex h-full flex-col gap-2 p-4 text-sm">
       <div className="flex flex-wrap items-center gap-2">
@@ -130,6 +140,24 @@ function AgentCard({ agent: a, onOpen }: { agent: AiAgentView; onOpen: (tab: Tab
         )}
         <button type="button" className="btn btn-ghost" onClick={() => onOpen("call")}>
           Call
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost ml-auto text-crit"
+          disabled={remove.isPending}
+          onClick={async () => {
+            if (
+              await confirm({
+                title: `Delete ${a.name}?`,
+                body: "It is removed from this list. Its published Call Flow and past calls are kept.",
+                confirmText: "Delete",
+                tone: "danger",
+              })
+            )
+              remove.mutate();
+          }}
+        >
+          Delete
         </button>
       </div>
     </div>
