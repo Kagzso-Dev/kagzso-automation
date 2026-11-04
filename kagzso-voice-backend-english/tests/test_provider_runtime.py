@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Kagzso Technology Services. All rights reserved.
+# Proprietary and confidential. See LICENSE.md in the repository root.
+# SPDX-License-Identifier: LicenseRef-Kagzso-Proprietary
 """AI Providers page as the runtime source of a call (this voice backend's language), end to end with mocked HTTP:
 
 * the four LLM adapters (Groq, Sarvam, Anthropic, Gemini): endpoint, model, auth header, streamed text, and every

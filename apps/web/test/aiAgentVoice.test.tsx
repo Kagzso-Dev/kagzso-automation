@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kagzso Technology Services. All rights reserved.
+// Proprietary and confidential. See LICENSE.md in the repository root.
+// SPDX-License-Identifier: LicenseRef-Kagzso-Proprietary
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

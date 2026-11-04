@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Kagzso Technology Services. All rights reserved.
+# Proprietary and confidential. See LICENSE.md in the repository root.
+# SPDX-License-Identifier: LicenseRef-Kagzso-Proprietary
 """AI Agent voice picked in Dispatch (Settings → AI Voice): the flow's voice_id speaks every line of an Autonomous
 AI Agent call, whoever the customer is.
 

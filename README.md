@@ -6,6 +6,12 @@ suppression enforcement. See [`docs/technical-design.html`](docs/technical-desig
 
 **MySQL is the only infrastructure.** No Redis, no Docker — the job queue is a table.
 
+**Ownership and licence.** Copyright © 2026 Kagzso Technology Services. All rights reserved. This is proprietary,
+confidential software: its first-party code, documentation, workflows, AI agent configurations and branding may
+not be copied, redistributed or used without written authorization (see [`LICENSE.md`](LICENSE.md)).
+Third-party libraries, frameworks, models and services keep their own licences and terms
+([`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)), and customer-supplied data remains the customer's.
+
 ## Stack
 
 | Area | Choice |

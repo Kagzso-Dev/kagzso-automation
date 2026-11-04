@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kagzso Technology Services. All rights reserved.
+// Proprietary and confidential. See LICENSE.md in the repository root.
+// SPDX-License-Identifier: LicenseRef-Kagzso-Proprietary
 import { useState } from "react";
 import {
   AI_AGENT_DEFAULT_VOICE,
