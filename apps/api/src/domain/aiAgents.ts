@@ -21,7 +21,7 @@ import {
 import { prisma } from "../prisma.js";
 import { compileAgentFlow, type CompileKnowledgeItem } from "./aiAgentCompile.js";
 import { itemIssues, type Extraction } from "./aiAgentKnowledge.js";
-import { definitionHash, latestPublished } from "./callFlows.js";
+import { definitionHash, latestPublished, schemaIssues } from "./callFlows.js";
 
 export class AiAgentError extends Error {
   constructor(
@@ -401,7 +401,9 @@ export async function agentInputsHash(a: AiAgent): Promise<string> {
 export async function compileAgent(a: AiAgent, builtinExecutive: unknown): Promise<CallFlowDefinition> {
   const language = aiCallLanguage.parse(a.language);
   const base = callFlowDefinition.safeParse({ ...(builtinExecutive as object), language });
-  if (!base.success) throw new AiAgentError("The voice backend's built-in Business executive flow failed validation", 409);
+  if (!base.success) {
+    throw new AiAgentError(`The voice backend's built-in Business executive flow failed validation (${schemaIssues(base.error)})`, 409);
+  }
   const [knowledge, industry, category] = await Promise.all([
     approvedKnowledge(a.id),
     a.industryId ? prisma.aiIndustry.findUnique({ where: { id: a.industryId } }) : null,

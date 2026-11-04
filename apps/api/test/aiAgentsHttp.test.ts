@@ -11,7 +11,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 const root = new URL("../../../", import.meta.url);
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, root)), "utf8");
-const EXECUTIVE = JSON.parse(read("kagzso-voice-backend-english/app/flows/builtin/executive.json"));
+// The built-in flows exactly as each language's voice backend serves them (unset optional settings as null),
+// from the voice backend's contract test (tests/test_flow_catalog_contract.py).
+const CATALOGS: Record<string, { language: string; flows: Record<string, Record<string, unknown>> }> = Object.fromEntries(
+  ["en", "ta", "hi", "kn"].map((l) => [l, JSON.parse(read(`kagzso-voice-backend-english/tests/fixtures/catalog/${l}.json`))]),
+);
 
 /* ------------------------------------------------------------------ in-memory Prisma */
 type Row = Record<string, unknown> & { id: string };
@@ -136,7 +140,10 @@ let server: Server;
 let voice: Server;
 let base = "";
 const previews: Record<string, unknown>[] = [];
-const token = (role: "ADMIN" | "EDITOR") => jwt.sign({ sub: `u-${role}`, email: `${role.toLowerCase()}@test`, role }, process.env.JWT_ACCESS_SECRET!);
+// The rate limits are per user: tests that make many requests act as an admin of their own (adminSub).
+let adminSub = "u-ADMIN";
+const token = (role: "ADMIN" | "EDITOR") =>
+  jwt.sign({ sub: role === "ADMIN" ? adminSub : `u-${role}`, email: `${role.toLowerCase()}@test`, role }, process.env.JWT_ACCESS_SECRET!);
 const req = (method: string, path: string, body?: unknown, role: "ADMIN" | "EDITOR" = "ADMIN") =>
   fetch(base + path, {
     method,
@@ -156,11 +163,13 @@ beforeAll(async () => {
     r.on("data", (c) => (raw += c));
     r.on("end", () => {
       res.setHeader("Content-Type", "application/json");
-      if (r.url === "/api/flows/builtin") {
-        res.end(JSON.stringify({ flows: { executive: EXECUTIVE }, locked_blocks: {}, variables: [], groups: [], language: "en" }));
-      } else if (r.url === "/api/flows/preview") {
+      // One fake backend for every language: Tamil / Hindi / Kannada are served under /ta, /hi, /kn.
+      const [, lang = "en", path = r.url] = r.url!.match(/^\/(ta|hi|kn)(\/.*)$/) ?? [];
+      if (path === "/api/flows/builtin") {
+        res.end(JSON.stringify({ ...CATALOGS[lang], locked_blocks: {}, variables: [], groups: [] }));
+      } else if (path === "/api/flows/preview") {
         const body = JSON.parse(raw);
-        previews.push(body);
+        previews.push({ ...body, backend: lang });
         const bad = JSON.stringify(body.flow).includes("REJECT-ME");
         res.end(JSON.stringify(bad ? { valid: false, errors: ["training.knowledge.0.text: Value error, not allowed"] } : { valid: true, errors: [], greeting: "Hello" }));
       } else {
@@ -173,6 +182,7 @@ beforeAll(async () => {
   process.env.ENABLE_CALL_FLOW_EDITOR = "true";
   process.env.VOICE_BACKEND_URL = `http://127.0.0.1:${(voice.address() as AddressInfo).port}`;
   process.env.VOICE_BACKEND_API_KEY = "voice-key-0123456789";
+  for (const l of ["ta", "hi", "kn"]) process.env[`VOICE_BACKEND_URL_${l.toUpperCase()}`] = `${process.env.VOICE_BACKEND_URL}/${l}`;
   const { createApp } = await import("../src/http/app.js");
   server = createApp().listen(0);
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -540,5 +550,75 @@ describe("Kannada Autonomous AI calls are paused (until native-speaker review)",
     expect((await req("POST", `/api/ai-agents/${g.id}/call`, { dryRun: true })).status).toBe(200);
     expect(runCalls).toHaveLength(4);
     expect(runCalls[3]![0]).toMatchObject({ flowId: "kn_nila" });
+  });
+});
+
+describe("Preview and Publish with the built-in flows a real voice backend serves (unset settings as null)", () => {
+  let n = 0;
+  beforeEach(() => void (adminSub = `u-admin-catalog-${++n}`));
+  afterAll(() => void (adminSub = "u-ADMIN"));
+  const GREETING = { en: "This is Thaara calling from", ta: "நான் Thaara", hi: "मेरा नाम Thaara", kn: "ನಾನು Thaara" } as const;
+
+  it.each(["en", "ta", "hi", "kn"] as const)("%s: Raagul, male, one approved item - preview and publish succeed", async (lang) => {
+    expect(JSON.stringify(CATALOGS[lang]!.flows.executive)).toMatch(/"language_style":null.*"autonomous":null|"autonomous":null.*"language_style":null/);
+    const a = await createAgent(lang, { ...AGENT, name: `Thaara ${lang}`, contactName: "Raagul", contactGender: "male" });
+    await upload(a.id, [{ name: "k.csv", text: "Topic,Answer,Question\nIntegration,It works alongside your software.,Will it replace our software?\n" }]);
+    const item = T("aiAgentKnowledgeItem").find((i) => i.agentId === a.id)!;
+    expect((await req("POST", `/api/ai-agents/${a.id}/knowledge/decide`, { ids: [item.id], status: "approved" })).status).toBe(200);
+
+    const preview = await req("POST", `/api/ai-agents/${a.id}/preview`, { customerName: "Raagul", gender: "male" });
+    expect(preview.status, await preview.clone().text()).toBe(200);
+    const sent = previews.at(-1)! as { backend: string; sample: unknown; flow: Record<string, unknown> & { training: { knowledge: { status: string; topic: string; text: string }[] } } };
+    expect(sent.backend).toBe(lang); // asked the agent's own language's voice backend
+    expect(sent.sample).toEqual({ customer_name: "Raagul", gender: "male" });
+    expect(sent.flow.language).toBe(lang);
+    expect(sent.flow).not.toHaveProperty("language_style");
+    expect(sent.flow.autonomous).toEqual({ target_duration_sec: 60, dnc_enforce: true });
+    expect(String((sent.flow.greeting as { text: string }).text)).toContain(GREETING[lang]);
+    expect(sent.flow.training.knowledge.map((k) => [k.status, k.topic, k.text])).toEqual([
+      ["active", "Integration", "It works alongside your software."],
+    ]);
+
+    const pub = await req("POST", `/api/ai-agents/${a.id}/publish`, {});
+    expect(pub.status, await pub.clone().text()).toBe(200);
+    const { flowId, version } = (await pub.json()) as { flowId: string; version: number };
+    expect(version).toBe(1);
+    const live = T("callFlowVersion").find((v) => v.flowId === flowId && v.status === "PUBLISHED")!;
+    const def = live.definition as Record<string, unknown> & { training: { knowledge: { topic: string }[] } };
+    expect(def.language).toBe(lang);
+    expect(def.training.knowledge.map((k) => k.topic)).toEqual(["Integration"]);
+    expect(T("callFlow").find((f) => f.id === flowId)!.language).toBe(lang);
+  });
+
+  it("a built-in that is really invalid is named in the error (field: message)", async () => {
+    const { compileAgent } = await import("../src/domain/aiAgents.js");
+    const a = await createAgent("ta");
+    const row = T("aiAgent").find((r) => r.id === a.id)!;
+    const broken = { ...CATALOGS.ta!.flows.executive, language_style: null, autonomous: null, greeting: null };
+    await expect(compileAgent(row as never, broken)).rejects.toThrow(
+      /^The voice backend's built-in Business executive flow failed validation \(greeting: .+; language_style: .+; autonomous: .+\)$/,
+    );
+  });
+});
+
+describe("Voice Call Flows: New flow from a built-in (unset settings as null)", () => {
+  let n = 0;
+  beforeEach(() => void (adminSub = `u-admin-newflow-${++n}`));
+  afterAll(() => void (adminSub = "u-ADMIN"));
+  it.each(["en", "ta", "hi", "kn"] as const)("%s: every base can be copied into a new draft", async (lang) => {
+    for (const b of ["executive", "nila", "followup"] as const) {
+      const r = await req("POST", "/api/call-flows", { name: `My ${b} (${lang})`, base: b, language: lang });
+      expect(r.status, `${lang} ${b}: ${await r.clone().text()}`).toBe(201);
+      const { id } = (await r.json()) as { id: string };
+      const draft = T("callFlowVersion").find((v) => v.flowId === id)!;
+      expect(draft).toMatchObject({ version: 1, status: "DRAFT" });
+      const def = draft.definition as Record<string, unknown>;
+      expect(def).toMatchObject({ base: b, language: lang, name: `My ${b} (${lang})` });
+      expect(def).not.toHaveProperty("language_style");
+      expect(def).not.toHaveProperty("autonomous");
+      // The draft is the served built-in with only the unset settings left out (plus its new name).
+      const { language_style: _ls, autonomous: _au, ...rest } = CATALOGS[lang]!.flows[b]!;
+      expect(def).toEqual({ ...rest, name: `My ${b} (${lang})`, language: lang });
+    }
   });
 });

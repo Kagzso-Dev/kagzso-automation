@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
@@ -13,10 +13,11 @@ import {
   type CallFlowTextBlock,
 } from "@dispatch/shared";
 import { AgentCompileError, compileAgentFlow, INSTRUCTIONS_HEADER, type CompileInput } from "../src/domain/aiAgentCompile.js";
+import { withoutNullOptionalSettings } from "../src/http/routes/callFlows.js";
 
-// AI Agents → Call Flow compiler. The base is the voice backend's own built-in "executive" flow per language
-// (builtin/executive.json with builtin/<lang>/executive.json laid over it, as app/flows/loader.load_builtin
-// does). The compiled flows are written to the voice backend's tests/fixtures/autonomous/ (UPDATE_FIXTURES=1)
+// AI Agents → Call Flow compiler. The base is the built-in "executive" flow exactly as each language's voice
+// backend serves it (tests/fixtures/catalog, unset settings as null), read as builtins() reads it. The compiled
+// flows are written to the voice backend's tests/fixtures/autonomous/ (UPDATE_FIXTURES=1)
 // and compared here, so tests/test_autonomous_agent.py proves the voice backend accepts exactly these.
 
 const root = new URL("../../../", import.meta.url);
@@ -25,11 +26,11 @@ const read = (rel: string) => readFileSync(path(rel), "utf8");
 const BUILTIN = "kagzso-voice-backend-english/app/flows/builtin/";
 const FIXTURES = "kagzso-voice-backend-english/tests/fixtures/autonomous/";
 
+/** The executive flow exactly as that language's voice backend serves it (tests/fixtures/catalog, written by the
+ *  voice backend's contract test), read the way builtins() reads it. */
 function builtinExecutive(language: AiCallLanguage): CallFlowDefinition {
-  const data = JSON.parse(read(BUILTIN + "executive.json"));
-  const own = BUILTIN + `${language}/executive.json`;
-  if (language !== "en" && existsSync(path(own))) Object.assign(data, JSON.parse(read(own)));
-  return callFlowDefinition.parse({ ...data, language });
+  const served = JSON.parse(read(`kagzso-voice-backend-english/tests/fixtures/catalog/${language}.json`)).flows.executive;
+  return callFlowDefinition.parse({ ...withoutNullOptionalSettings(served), language });
 }
 
 const agent = (over: Partial<AiAgentConfig> = {}): AiAgentConfig =>

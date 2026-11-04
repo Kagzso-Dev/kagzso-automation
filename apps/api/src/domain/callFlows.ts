@@ -19,6 +19,13 @@ import { prisma } from "../prisma.js";
 import type { PinnedFlow } from "../services/voiceBackend.js";
 import { asAiCallLanguage } from "./aiCallLanguages.js";
 
+/** The first schema problems as "field: message; …" - for an error an admin (or a log) can act on. */
+export function schemaIssues(error: { issues: { path: (string | number)[]; message: string }[] }, max = 3): string {
+  const shown = error.issues.slice(0, max).map((i) => `${i.path.join(".") || "flow"}: ${i.message}`);
+  const more = error.issues.length - shown.length;
+  return shown.join("; ") + (more > 0 ? `; and ${more} more` : "");
+}
+
 export function definitionHash(definition: unknown): string {
   return createHash("sha256").update(JSON.stringify(definition)).digest("hex");
 }

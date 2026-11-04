@@ -73,7 +73,16 @@ import { logger } from "../../logger.js";
 import { aiCallsConfig, configuredAiCallLanguages, isAiCallsConfigured, isCallFlowEditorEnabled } from "../../config/aiCalls.js";
 import { callsCountedTowardDailyCap, loadDoNotCallPhones } from "../../domain/aiCalls.js";
 import { aiCallLanguageBlockedReason, asAiCallLanguage, runInProgressReason } from "../../domain/aiCallLanguages.js";
-import { CallFlowError, definitionHash, deleteVersion, latestPublished, publishDraft, removeFlow, saveDraft } from "../../domain/callFlows.js";
+import {
+  CallFlowError,
+  definitionHash,
+  deleteVersion,
+  latestPublished,
+  publishDraft,
+  removeFlow,
+  saveDraft,
+  schemaIssues,
+} from "../../domain/callFlows.js";
 import { managingAgent } from "../../domain/aiAgents.js";
 import { analyzeImport, changedBlockIds } from "../../domain/callFlowImport.js";
 import {
@@ -149,8 +158,24 @@ function flowError(err: unknown): never {
   throw err;
 }
 
+/**
+ * Optional flow settings a voice backend sends as null when unset (a Python Optional = None). Dispatch's flow
+ * schema treats an unset setting as absent and refuses null, so a built-in is read without them.
+ */
+const OPTIONAL_FLOW_SETTINGS = ["language_style", "autonomous", "pauses", "recording_notice", "identity", "training"] as const;
+
+/** A built-in flow as Dispatch's schema expects it: unset (null) optional settings left out; real values kept. */
+export function withoutNullOptionalSettings(flow: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...flow };
+  for (const key of OPTIONAL_FLOW_SETTINGS) if (out[key] === null) delete out[key];
+  return out;
+}
+
 const builtinCache = new Map<AiCallLanguage, { at: number; data: VoiceFlowCatalog }>();
-/** The language's built-in flows, from its own voice backend (cached a minute per language). */
+/**
+ * The language's built-in flows, from its own voice backend (cached a minute per language), with unset optional
+ * settings left out (withoutNullOptionalSettings) - for AI Agents, "New flow" and the editor alike.
+ */
 export async function builtins(language: AiCallLanguage = DEFAULT_AI_CALL_LANGUAGE): Promise<VoiceFlowCatalog> {
   const hit = builtinCache.get(language);
   if (hit && Date.now() - hit.at < 60_000) return hit.data;
@@ -165,8 +190,12 @@ export async function builtins(language: AiCallLanguage = DEFAULT_AI_CALL_LANGUA
       "unavailable",
     );
   }
-  builtinCache.set(language, { at: Date.now(), data });
-  return data;
+  const flows = Object.fromEntries(
+    Object.entries(data.flows ?? {}).map(([base, flow]) => [base, flow && typeof flow === "object" ? withoutNullOptionalSettings(flow) : flow]),
+  );
+  const catalog: VoiceFlowCatalog = { ...data, flows };
+  builtinCache.set(language, { at: Date.now(), data: catalog });
+  return catalog;
 }
 
 /** The language a definition is for (a definition that isn't valid yet is English). */
@@ -293,7 +322,9 @@ callFlowsRouter.post(
       throw new AppError(502, `This language's voice backend has no '${body.base}' script yet — update that voice backend first`, "unavailable");
     }
     const parsed = callFlowDefinition.safeParse({ ...catalog.flows[body.base], name: body.name, language: body.language });
-    if (!parsed.success) throw new AppError(502, "The voice backend's built-in flow failed validation", "unavailable");
+    if (!parsed.success) {
+      throw new AppError(502, `The voice backend's built-in flow failed validation (${schemaIssues(parsed.error)})`, "unavailable");
+    }
     const definition = parsed.data;
     const flow = await prisma.callFlow.create({
       data: {
