@@ -120,25 +120,36 @@ function openingBlock(greeting: string): string {
     "morning, good afternoon or good evening yourself.\n\n" +
     "Whatever the customer says next, respond to it. After they confirm who they are, thank them briefly and say in one short " +
     "sentence why you are calling, relevant to their industry (see THE CUSTOMER'S BUSINESS). Confirming their name never ends the call. " +
-    "If they say they are not the person you asked for, do not assume anything: politely continue with them as the identity rules say.\n\n---\n\n"
+    "If they say they are not the person you asked for, or it is unclear who answered, do not assume anything: politely ask " +
+    "whether the person you are calling is available, as the identity rules say, and explain nothing about the call before " +
+    "that person is on the line.\n\n---\n\n"
   );
 }
 
 function industryBlock(input: CompileInput): string {
   const company = oneLine(input.agent.companyName);
   const industry = input.industry ? oneLine(input.industry.name) : null;
+  const category = input.categoryName ? oneLine(input.categoryName) : null;
   const list = topics(input.industry?.discoveryTopics);
   const callback = input.agent.callbackNumber ? spacedNumber(input.agent.callbackNumber) : null;
   return (
     "# THE CUSTOMER'S BUSINESS\n\n" +
     (industry ? `Industry: **${industry}**. Speak in terms that make sense for a ${industry} business.\n\n` : "") +
+    (industry || category
+      ? "The category and industry only say what kind of business this is in general. Never assume which products or " +
+        "services this business offers, how it works or what it needs because of them: find out from the customer, and " +
+        "go by what they say.\n\n"
+      : "") +
     (list.length
       ? "Topics worth exploring with this kind of business. These are DISCOVERY topics to ask about - they are NOT claims " +
         `about what ${company} offers:\n` +
         list.map((t) => `* ${t}`).join("\n") +
         "\n\nPick at most one or two that fit what the customer says. Ask about how they handle it today and what takes their " +
         "team the most time; never list them all.\n\n"
-      : "") +
+      : industry || category
+        ? "Ask one or two short, open questions about how they run their day-to-day work today and what takes their team the " +
+          "most time, in terms that fit this kind of business. Never list several questions at once.\n\n"
+        : "") +
     `**Only describe products and services that the approved company facts or the training's approved knowledge confirm.** ` +
     "Never say that a product or feature exists, works in a certain way or suits them unless an approved note says so.\n\n" +
     "**A question the approved information doesn't answer:** never guess or invent. Say honestly that you don't have that detail " +

@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  AI_AGENT_CUSTOM_NAME_MAX,
   AI_AGENT_DEFAULT_VOICE,
   AI_AGENT_DEFAULTS,
   AI_AGENT_DURATION_LIMITS,
@@ -13,6 +14,7 @@ import {
   AI_CALL_LANGUAGE_NAMES,
   aiAgentInput,
   aiAgentLanguageSupported,
+  matchLibraryName,
   type AiAgentInput,
   type AiAgentView,
   type AiCallLanguage,
@@ -27,11 +29,20 @@ import { useConfirm } from "./confirm";
 import { useToast } from "./toast";
 import { ErrorNote } from "./ui";
 
-type Form = Required<Omit<AiAgentInput, "categoryId" | "industryId" | "contactName" | "contactPhone" | "callbackNumber" | "guidedFlowId" | "voiceId">> & {
+/** The "Other – Enter manually" choice of the Category / Industry lists (never sent: the typed name is). */
+const OTHER = "__other__";
+const OTHER_LABEL = "Other – Enter manually";
+
+type Form = Required<
+  Omit<AiAgentInput, "categoryId" | "customCategory" | "industryId" | "customIndustry" | "contactName" | "contactPhone" | "callbackNumber" | "guidedFlowId" | "voiceId">
+> & {
   /** "" = no voice picked (the voice backend's default voice). */
   voiceId: string;
+  /** A library id, OTHER (typed by hand, in customCategory / customIndustry) or "" (none). */
   categoryId: string;
+  customCategory: string;
   industryId: string;
+  customIndustry: string;
   contactName: string;
   contactPhone: string;
   callbackNumber: string;
@@ -42,8 +53,11 @@ function initial(a: AiAgentView | null, autonomousOk: boolean, language: AiCallL
   return {
     name: a?.name ?? "",
     mode: a?.mode ?? (autonomousOk ? "autonomous" : "guided"),
-    categoryId: a?.categoryId ?? "",
-    industryId: a?.industryId ?? "",
+    // A name typed for this agent comes back as "Other – Enter manually" with the name filled in.
+    categoryId: a?.categoryId ?? (a?.customCategory ? OTHER : ""),
+    customCategory: a?.customCategory ?? "",
+    industryId: a?.industryId ?? (a?.customIndustry ? OTHER : ""),
+    customIndustry: a?.customIndustry ?? "",
     businessName: a?.businessName ?? "",
     objective: a?.objective ?? "",
     contactName: a?.contactName ?? "",
@@ -77,16 +91,28 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setF((p) => ({ ...p, [k]: v }));
 
   const categories = library.data ?? [];
+  const typedCategory = f.categoryId === OTHER;
+  const typedIndustry = f.industryId === OTHER;
+  // The selected category's industries (all of them while no category is picked; none for a typed category:
+  // library industries belong to library categories).
   const industries = useMemo(
-    () => categories.flatMap((c) => c.industries.map((i) => ({ ...i, categoryName: c.name }))).filter((i) => !f.categoryId || i.categoryId === f.categoryId),
-    [categories, f.categoryId],
+    () =>
+      typedCategory
+        ? []
+        : categories.flatMap((c) => c.industries.map((i) => ({ ...i, categoryName: c.name }))).filter((i) => !f.categoryId || i.categoryId === f.categoryId),
+    [categories, f.categoryId, typedCategory],
   );
+  // A typed name that is already in the list: offered as the list entry (the API saves it as that entry anyway).
+  const categoryMatch = typedCategory ? matchLibraryName(f.customCategory, categories) : undefined;
+  const industryMatch = typedIndustry && f.categoryId && !typedCategory ? matchLibraryName(f.customIndustry, industries) : undefined;
   const published = (flows.data?.items ?? []).filter((x) => x.published);
 
   const body: AiAgentInput = {
     ...f,
-    categoryId: f.categoryId || null,
-    industryId: f.industryId || null,
+    categoryId: typedCategory ? null : f.categoryId || null,
+    customCategory: typedCategory ? f.customCategory : null,
+    industryId: typedIndustry ? null : f.industryId || null,
+    customIndustry: typedIndustry ? f.customIndustry : null,
     contactName: f.contactName.trim() || null,
     contactPhone: f.contactPhone || null,
     callbackNumber: f.callbackNumber || null,
@@ -167,33 +193,72 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
         <>
           <Section title="Business">
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Category">
-                <select className="input" value={f.categoryId} onChange={(e) => setF((p) => ({ ...p, categoryId: e.target.value, industryId: "" }))}>
-                  <option value="">—</option>
+              <Field label="Category" error={fieldError("categoryId")}>
+                <select
+                  className="input"
+                  value={f.categoryId}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    // Typed category → the industry is typed too; another category → pick its industry again.
+                    setF((p) => ({ ...p, categoryId: v, industryId: v === OTHER ? OTHER : p.industryId === OTHER ? OTHER : "" }));
+                  }}
+                >
+                  <option value="">Pick a category…</option>
                   {categories.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
                     </option>
                   ))}
+                  <option value={OTHER}>{OTHER_LABEL}</option>
                 </select>
               </Field>
-              <Field label="Industry">
+              <Field label="Industry" error={fieldError("industryId")}>
                 <select
                   className="input"
                   value={f.industryId}
+                  disabled={typedCategory}
                   onChange={(e) => {
                     const ind = industries.find((i) => i.id === e.target.value);
                     setF((p) => ({ ...p, industryId: e.target.value, categoryId: ind?.categoryId ?? p.categoryId }));
                   }}
                 >
-                  <option value="">—</option>
+                  {!typedCategory && <option value="">Pick an industry…</option>}
                   {industries.map((i) => (
                     <option key={i.id} value={i.id}>
                       {i.name}
                     </option>
                   ))}
+                  <option value={OTHER}>{OTHER_LABEL}</option>
                 </select>
               </Field>
+              {typedCategory && (
+                <Field label="Category name" error={fieldError("customCategory")}>
+                  <input
+                    className="input"
+                    maxLength={AI_AGENT_CUSTOM_NAME_MAX}
+                    value={f.customCategory}
+                    onChange={(e) => set("customCategory", e.target.value)}
+                    placeholder="e.g. Manufacturing"
+                  />
+                  {categoryMatch && (
+                    <MatchNote name={categoryMatch.name} kind="category" onUse={() => setF((p) => ({ ...p, categoryId: categoryMatch.id, industryId: OTHER }))} />
+                  )}
+                </Field>
+              )}
+              {typedIndustry && (
+                <Field label="Industry name" error={fieldError("customIndustry")}>
+                  <input
+                    className="input"
+                    maxLength={AI_AGENT_CUSTOM_NAME_MAX}
+                    value={f.customIndustry}
+                    onChange={(e) => set("customIndustry", e.target.value)}
+                    placeholder="e.g. Textile mill"
+                  />
+                  {industryMatch && (
+                    <MatchNote name={industryMatch.name} kind="industry" onUse={() => setF((p) => ({ ...p, industryId: industryMatch.id }))} />
+                  )}
+                </Field>
+              )}
               <Field label="Business / company name" error={fieldError("businessName")}>
                 <input className="input" maxLength={160} value={f.businessName} onChange={(e) => set("businessName", e.target.value)} placeholder="e.g. ABC Hospital" />
               </Field>
@@ -207,7 +272,10 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
                 placeholder="e.g. Introduce our AI and automation solutions for hospitals and find out whether they'd like a follow-up from our team."
               />
             </Field>
-            <p className="text-xs text-slate-550">Industries and their discovery topics are managed in Settings → AI agent industries (shared by every language).</p>
+            <p className="text-xs text-slate-550">
+              Industries and their discovery topics are managed in Settings → AI agent industries (shared by every language). Not in the list? Pick
+              “{OTHER_LABEL}”: the name is saved for this agent only and the shared list doesn't change.
+            </p>
           </Section>
 
           <Section title="Contact">
@@ -347,6 +415,18 @@ function ContactFields({ f, set }: { f: Form; set: <K extends keyof Form>(k: K, 
         <PhoneInput value={f.contactPhone} onChange={(v) => set("contactPhone", v)} />
       </Field>
     </div>
+  );
+}
+
+/** A typed category / industry that is already in the shared list. */
+function MatchNote({ name, kind, onUse }: { name: string; kind: "category" | "industry"; onUse: () => void }) {
+  return (
+    <p className="mt-1 text-xs text-slate-550">
+      “{name}” is already in the list, so it will be saved as that {kind}.{" "}
+      <button type="button" className="font-semibold text-accent underline" onClick={onUse}>
+        Select it
+      </button>
+    </p>
   );
 }
 

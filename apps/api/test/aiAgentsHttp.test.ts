@@ -278,6 +278,57 @@ describe("agents", () => {
   });
 });
 
+describe("Business section: category / industry typed by hand (Other – Enter manually)", () => {
+  const { categoryId: _c, industryId: _i, ...NO_LIBRARY } = AGENT;
+  const libraryBefore = () => JSON.stringify([T("aiBusinessCategory"), T("aiIndustry")]);
+  let n = 0;
+  beforeEach(() => void (adminSub = `u-admin-business-${++n}`));
+  afterAll(() => void (adminSub = "u-ADMIN"));
+
+  it("saved on that agent only, restored on read, compiled into its flow; the shared library never changes", async () => {
+    const before = libraryBefore();
+    const a = await createAgent("en", { ...NO_LIBRARY, customCategory: "  Manufacturing ", customIndustry: "Textile   mill", businessName: " ABC  Mills " });
+    expect(a).toMatchObject({ categoryId: null, customCategory: "Manufacturing", industryId: null, customIndustry: "Textile mill", businessName: "ABC Mills" });
+    expect(await (await req("GET", `/api/ai-agents/${a.id}`)).json()).toMatchObject({ customCategory: "Manufacturing", customIndustry: "Textile mill" });
+    expect(libraryBefore()).toBe(before);
+    expect(((await (await req("GET", "/api/ai-agents/library")).json()) as { name: string }[]).map((c) => c.name)).toEqual(["Healthcare"]);
+
+    expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
+    const sent = JSON.stringify(previews.at(-1)!.flow);
+    expect(sent).toContain("**ABC Mills**, a business in the **Textile mill** industry, (Manufacturing)");
+    expect(sent).toContain("Never assume which products or services this business offers");
+    expect(sent).toContain('"business_type":"Textile mill"');
+  });
+
+  it("a typed industry under a library category; switching back to the list clears the typed names", async () => {
+    const a = await createAgent("en", { ...AGENT, industryId: null, customIndustry: "Dental clinic" });
+    expect(a).toMatchObject({ categoryId: "cat_h", industryId: null, customIndustry: "Dental clinic" });
+    const r = await req("PUT", `/api/ai-agents/${a.id}`, { agent: AGENT });
+    expect(await r.json()).toMatchObject({ categoryId: "cat_h", industryId: "ind_h", customCategory: null, customIndustry: null });
+    expect(T("aiAgent").find((x) => x.id === a.id)).toMatchObject({ customCategory: null, customIndustry: null });
+  });
+
+  it("a typed name that is already in the library is saved as that entry (no near-duplicates)", async () => {
+    const before = libraryBefore();
+    const a = await createAgent("en", { ...NO_LIBRARY, customCategory: "health-care", customIndustry: " HOSPITAL " });
+    expect(a).toMatchObject({ categoryId: "cat_h", customCategory: null, industryId: "ind_h", customIndustry: null });
+    expect(libraryBefore()).toBe(before);
+    // An archived entry is never matched: the typed name is kept.
+    T("aiIndustry").push({ id: "ind_old", categoryId: "cat_h", name: "Clinic", discoveryTopics: null, archivedAt: new Date() });
+    const b = await createAgent("en", { ...AGENT, industryId: null, customIndustry: "clinic" });
+    expect(b).toMatchObject({ industryId: null, customIndustry: "clinic" });
+  });
+
+  it("refused: nothing picked, an empty typed name, both a library entry and a typed name", async () => {
+    const post = (agent: Record<string, unknown>) => req("POST", "/api/ai-agents", { language: "en", agent });
+    expect((await post(NO_LIBRARY)).status).toBe(400);
+    expect((await post({ ...NO_LIBRARY, customCategory: "  ", customIndustry: "X" })).status).toBe(400);
+    expect((await post({ ...AGENT, customCategory: "Manufacturing" })).status).toBe(400);
+    expect((await post({ ...NO_LIBRARY, customCategory: "Manufacturing", industryId: "ind_h" })).status).toBe(400);
+    expect(T("aiAgent")).toHaveLength(0);
+  });
+});
+
 describe("knowledge", () => {
   it("upload → Draft items with issues; only clean items can be approved", async () => {
     const a = await createAgent();

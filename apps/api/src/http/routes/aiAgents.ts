@@ -44,7 +44,6 @@ import {
   knowledgeFormatFromFilename,
   startAiCallsInput,
 } from "@dispatch/shared";
-import { prisma } from "../../prisma.js";
 import { logger } from "../../logger.js";
 import { aiCallsConfig, isCallFlowEditorEnabled } from "../../config/aiCalls.js";
 import {
@@ -52,6 +51,7 @@ import {
   addKnowledgeFile,
   addKnowledgeItem,
   archiveAgent,
+  businessContext,
   callFlowIdFor,
   compileAgent,
   createAgent,
@@ -283,7 +283,7 @@ aiAgentsRouter.post(
     const replacesFileId = z.string().min(1).max(64).optional().parse(req.body?.replacesFileId || undefined);
     if (replacesFileId && files.length !== 1) throw badRequest("Replace one file at a time");
     const agent = await guard(getAgentRow(id));
-    const industry = agent.industryId ? await prisma.aiIndustry.findUnique({ where: { id: agent.industryId } }) : null;
+    const { industry } = await businessContext(agent);
     const results = [];
     for (const f of files) {
       const format = knowledgeFormatFromFilename(f.originalname);

@@ -10,7 +10,8 @@
 //
 // Knowledge: uploaded files (CSV, XLSX, PDF, DOCX, TXT) are turned into fact / Q&A items, each Draft until an
 // admin approves it. Only approved items of that agent are compiled into that agent's flow, so one business's
-// knowledge never reaches another agent's calls. The category / industry library is shared by every language.
+// knowledge never reaches another agent's calls. The category / industry library is shared by every language;
+// a category or industry typed by hand ("Other – Enter manually") is stored on that one agent only.
 
 import { z } from "zod";
 import { aiCallLanguage, type AiCallLanguage } from "./aiCallLanguages.js";
@@ -76,14 +77,42 @@ const line = (max: number) => z.string().trim().max(max).regex(SINGLE_LINE_RE, "
 // eslint-disable-next-line no-control-regex
 const multiline = (max: number) => z.string().max(max).refine((v) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(v), "Contains control characters");
 
+/** Collapses runs of spaces inside a typed name ("  IT   company " → "IT company"). */
+export const collapseSpaces = (v: string) => v.replace(/\s+/g, " ").trim();
+
+/**
+ * How two category / industry names are compared: case, spaces and punctuation ignored, so "IT company",
+ * "it-company" and "IT  Company" are the same entry, as are "Hotel / Restaurant" and "hotel restaurant".
+ */
+export function businessNameKey(v: string): string {
+  return v.toLowerCase().normalize("NFKC").replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+/**
+ * The library entry a typed name matches (businessNameKey), or undefined. Used when an admin picks
+ * "Other – Enter manually" and types a name that is already in the shared library: the agent is then saved with
+ * that entry's id instead of a duplicate custom value (the library itself never changes).
+ */
+export function matchLibraryName<T extends { name: string; archivedAt?: string | Date | null }>(typed: string, entries: readonly T[]): T | undefined {
+  const key = businessNameKey(typed);
+  return key ? entries.find((e) => !e.archivedAt && businessNameKey(e.name) === key) : undefined;
+}
+
+export const AI_AGENT_CUSTOM_NAME_MAX = 80;
+/** A category / industry typed by hand for one agent (never added to the shared library). "" = Other picked, nothing typed yet. */
+const customName = line(AI_AGENT_CUSTOM_NAME_MAX).transform(collapseSpaces).nullable().optional();
+
 export const aiAgentInput = z
   .object({
     name: line(100).min(1, "Give the agent a name"),
     mode: z.enum(AI_AGENT_MODES).default("autonomous"),
-    // Business
+    // Business. Each of category and industry is EITHER a library entry (…Id) OR typed by hand for this agent
+    // (custom…), never both. A typed industry can sit under a library category or under a typed category.
     categoryId: z.string().min(1).max(64).nullable().optional(),
+    customCategory: customName,
     industryId: z.string().min(1).max(64).nullable().optional(),
-    businessName: line(160).default(""),
+    customIndustry: customName,
+    businessName: line(160).transform(collapseSpaces).default(""),
     objective: multiline(AI_AGENT_OBJECTIVE_MAX).default(""),
     // Contact
     contactName: line(100).nullable().optional(),
@@ -122,8 +151,21 @@ export const aiAgentInput = z
     if (a.mode === "guided" && !a.guidedFlowId) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["guidedFlowId"], message: "Pick the Call Flow a guided agent uses" });
     }
+    const issue = (path: string, message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
+    // Never both a library entry and a typed name (any mode: what is stored must be unambiguous).
+    if (a.categoryId && a.customCategory != null) issue("customCategory", "Pick a category from the list or enter one, not both");
+    if (a.industryId && a.customIndustry != null) issue("customIndustry", "Pick an industry from the list or enter one, not both");
+    // A library industry belongs to a library category, so a typed category needs a typed industry.
+    if (a.customCategory != null && a.industryId) issue("industryId", "Enter the industry for a category you typed in");
+    if (a.mode === "autonomous") {
+      // The Business section is required for autonomous agents (guided ones call with their Call Flow as it is).
+      if (a.customCategory === "") issue("customCategory", "Enter the category");
+      else if (!a.categoryId && a.customCategory == null) issue("categoryId", "Pick a category");
+      if (a.customIndustry === "") issue("customIndustry", "Enter the industry");
+      else if (!a.industryId && a.customIndustry == null) issue("industryId", "Pick an industry");
+    }
     if (a.mode === "autonomous" && !a.businessName.trim()) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["businessName"], message: "Enter the business name" });
+      issue("businessName", "Enter the business name");
     }
     if (a.mode === "autonomous" && !a.objective.trim()) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["objective"], message: "Enter the calling objective" });
@@ -279,6 +321,11 @@ export function knowledgeTextIssues(text: string, { policy = true }: { policy?: 
 // dnc: the do-not-call line, spoken word for word when the backend detects a do-not-call request (autonomous
 // agents always enforce it), in the call's language. Hindi lines avoid gendered verbs (रहा / रही): the executive
 // name is editable, so the line must fit any name.
+// Identity lines address the customer by name with the title for the contact's GIVEN gender, after the name
+// as the language does it: "Ragul sir" / "Priya madam" / "Ragul" (en), "Ragul sir-கிட்ட" / "Ragul-கிட்ட" (ta: the
+// voice backend joins the ending to the name when there is no title), "Ragul जी" (hi: ji is respectful and
+// gender-neutral, so it is the same for every gender), "Ragul sir ಅವರ" / "Ragul ಅವರ" (kn). The AI voice's gender
+// plays no part. In the conversation itself the voice backend gives the AI the same form (address_as).
 // Reviewed 2026-11-03 (grammar, respectful address, gender handling) - STILL NEEDS a native speaker to listen
 // to the TTS before release: ta, hi, kn.
 export interface AiAgentOpening {
@@ -290,14 +337,14 @@ export interface AiAgentOpening {
 export const AI_AGENT_OPENINGS: Partial<Record<AiCallLanguage, AiAgentOpening>> = {
   en: {
     greeting: "Hello, {{time_greeting}} {{title}}. This is {agent} calling from {company}.",
-    identity: "Am I speaking with {{customer_name}}?",
-    reask: "Sorry, am I speaking with {{customer_name}}?",
+    identity: "Am I speaking with {{customer_name}} {{title}}?",
+    reask: "Sorry, am I speaking with {{customer_name}} {{title}}?",
     dnc: "Understood. I respect your request. Thank you.",
   },
   ta: {
     greeting: "வணக்கம் {{title}}, {{time_greeting}}. நான் {agent}, {company}-ல இருந்து பேசறேன்.",
-    identity: "{{customer_name}}-கிட்ட தான் பேசறேனா?",
-    reask: "Sorry, {{customer_name}}-கிட்ட தான் பேசறேனா?",
+    identity: "{{customer_name}} {{title}}-கிட்ட தான் பேசறேனா?",
+    reask: "Sorry, {{customer_name}} {{title}}-கிட்ட தான் பேசறேனா?",
     dnc: "சரி, புரியுது. உங்க request-ஐ மதிக்கிறோம். நன்றி.",
   },
   hi: {
@@ -308,8 +355,8 @@ export const AI_AGENT_OPENINGS: Partial<Record<AiCallLanguage, AiAgentOpening>> 
   },
   kn: {
     greeting: "ನಮಸ್ಕಾರ {{title}}, {{time_greeting}}. ನಾನು {agent}, {company} ಕಡೆಯಿಂದ ಕರೆ ಮಾಡುತ್ತಿದ್ದೇನೆ.",
-    identity: "ನಾನು {{customer_name}} ಅವರ ಜೊತೆ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆಯೇ?",
-    reask: "Sorry, ನಾನು {{customer_name}} ಅವರ ಜೊತೆ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆಯೇ?",
+    identity: "ನಾನು {{customer_name}} {{title}} ಅವರ ಜೊತೆ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆಯೇ?",
+    reask: "Sorry, ನಾನು {{customer_name}} {{title}} ಅವರ ಜೊತೆ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆಯೇ?",
     dnc: "ಸರಿ, ಅರ್ಥ ಆಯ್ತು. ನಿಮ್ಮ request-ಅನ್ನು ಗೌರವಿಸುತ್ತೇವೆ. ಧನ್ಯವಾದಗಳು.",
   },
 };

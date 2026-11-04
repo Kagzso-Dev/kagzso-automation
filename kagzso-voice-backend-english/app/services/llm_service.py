@@ -251,6 +251,25 @@ def spoken_name(name: Optional[str]) -> str:
     return " ".join(kept) if kept else clean
 
 
+# Languages whose respectful way to address someone by name is "<name> ji" whatever the gender (ji is itself
+# gender-neutral). Every other language: "<name> sir" / "<name> madam" from a GIVEN gender, as people say it on
+# a phone call in India, else the name alone.
+_JI_LANGUAGES = frozenset({"hi"})
+
+
+def address_as_for(name: Optional[str], gender: Optional[str], language: Optional[str]) -> str:
+    """How an Autonomous AI Agent addresses the customer by name, in the call's language: "Ragul sir",
+    "Priya madam", "Ragul ji" (Hindi), or the name alone when no gender was given. Never guessed from the
+    name, never the AI voice's gender. "" without a name."""
+    clean = spoken_name(name)
+    if not clean:
+        return ""
+    code = (language or "en").split("-")[0].strip().lower()
+    if code in _JI_LANGUAGES:
+        return f"{clean} ji"
+    return f"{clean} {title_for(gender)}".strip()
+
+
 def honorific_for(gender: Optional[str]) -> str:
     """Mr. / Ms. only from an explicit gender field; unknown -> no honorific (neutral)."""
     return {"male": "Mr.", "female": "Ms."}.get((gender or "").strip().lower(), "")
@@ -318,10 +337,17 @@ def render_prompt(template: str, variables: Mapping[str, Optional[str]]) -> str:
     return _VAR_RE.sub(repl, template)
 
 
+_EMPTY_BEFORE_SUFFIX_RE = re.compile(r"\s+\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}(?=-)")
+
+
 def render_first_message(template: str, variables: Mapping[str, Optional[str]]) -> str:
     """Deterministic opening line. Missing values are left out, never invented:
     'Hi {{customer_name}} {{title}}, ...' -> 'Hi Ragul sir, ...' / 'Hi Ragul, ...' / 'Hi, ...'"""
     safe = safe_variables(variables)
+    # An empty value right before a word ending ("{{customer_name}} {{title}}-கிட்ட" without a gender) takes
+    # its space with it, so the ending joins the word before it ("Ragul-கிட்ட", never "Ragul -கிட்ட").
+    template = _EMPTY_BEFORE_SUFFIX_RE.sub(
+        lambda m: m.group(0) if (m.group(1) in ALLOWED_VARIABLES and safe.get(m.group(1))) else "", template)
     # Pause markers stay in the line: they are turned into silence when it is spoken.
     text = _VAR_RE.sub(
         lambda m: "{{" + m.group(1) + "}}" if m.group(1) in PAUSE_MARKERS
@@ -385,6 +411,27 @@ def identity_rules(customer_name: Optional[str]) -> str:
     return IDENTITY_RULES + ("" if customer_name else NO_NAME_RULE)
 
 
+# Autonomous AI Agent calls only (agent_call): how the customer is addressed, and what happens when someone
+# else answers. Every other call (Nila, Follow-up, Executive, guided) keeps IDENTITY_RULES and its prompt
+# exactly as before.
+AGENT_IDENTITY_RULES = """
+- Never assume that whoever answered is the customer: only a clear confirmation (a yes to the identity question, or saying their name) makes them the customer.
+- If the person says they are not the customer, or it is unclear who answered: politely ask whether the customer (by `address_as`) is available to speak. Until the customer has confirmed who they are, say only your name, the company and that the call is for the customer: never explain the products or the reason for the call, and never mention anything about the customer or their business.
+- If the customer comes to the phone, greet them briefly and confirm you are now speaking with them before continuing.
+- If the customer is not available, thank the person politely and end the call. Never pitch to them, never leave a message and never promise a callback.
+- A request not to be called again always ends the call. This replaces any wrong-person instruction above."""
+AGENT_ADDRESS_RULES = """
+- `address_as` in the customer details is how to address the customer by name: the name, then the respectful title for their GIVEN gender (sir or madam; ji in Hindi). Without a given gender it is the name alone (ji in Hindi): then never add sir or madam. The gender is never guessed from the name, and your own voice has nothing to do with it.
+- Put the title after the name as the call's language does it: the word ending goes on the title (Tamil: "Ragul sir-கிட்ட", "Priya madam-க்கு"; Hindi: "Ragul ji से"). Never translate sir or madam word for word.
+- Use the name with the title only now and then: when you first speak to them after they confirm who they are, when you ask whether they have a minute, and when you thank them at the close. Most replies use neither, and never one in every sentence.
+- If the customer asks to be addressed differently (for example only by name, or as Doctor), use that for the rest of the call. Their request takes priority over `address_as` and title_to_use."""
+
+
+def agent_call(variables: Mapping[str, Optional[str]]) -> bool:
+    """An Autonomous AI Agent's call (call_service sets flow_target_sec only for those)."""
+    return bool(variables.get("flow_target_sec"))
+
+
 def training_block(variables: Mapping[str, Optional[str]], user_message: Optional[str] = None,
                    last_reply: Optional[str] = None) -> str:
     """The flow's training notes for this reply (app/flows/training.py), or "" (no training, switched
@@ -429,6 +476,9 @@ def build_system_prompt(
     if default_settings.LLM_OMIT_PHONE_NUMBER:
         del data["phone_number"]
     lang = language if language is not None else default_settings.CALL_LANGUAGE
+    agent = agent_call(variables) and not guided
+    if agent:  # structured, every turn: the name with the title for the GIVEN gender, in the call's language
+        data["address_as"] = address_as_for(safe["customer_name"], safe["gender"], lang) or None
     brand = (
         f"\n- Our company name is spelled Kagzso but pronounced \"Kexo\". "
         f"Whenever you say it, write it exactly as {brand_spoken(lang)}."
@@ -444,7 +494,9 @@ def build_system_prompt(
     return (
         rendered + (VOICE_RULES_GUIDED if guided else VOICE_RULES) + SAFETY_RULES
         + (INTERNALS_RULES if default_settings.SAFETY_NO_INTERNALS else "")
-        + identity_rules(safe["customer_name"]) + brand + followup
+        + ((AGENT_IDENTITY_RULES + AGENT_ADDRESS_RULES) if agent and safe["customer_name"]
+           else identity_rules(safe["customer_name"]))
+        + brand + followup
         + language_instruction(lang, variables.get("flow_language_style"))
         # Below every rule above, above the customer data; "" for a flow without (Active) training.
         + training_block(variables, user_message, last_reply)

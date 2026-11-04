@@ -10,6 +10,7 @@ import {
   AI_KNOWLEDGE_MAX_APPROVED,
   aiCallLanguage,
   callFlowDefinition,
+  matchLibraryName,
   type AiAgentConfig,
   type AiAgentView,
   type AiAgentVoiceGender,
@@ -43,7 +44,9 @@ function configFromRow(a: AiAgent): AiAgentConfig {
     name: a.name,
     mode: a.mode === "GUIDED" ? "guided" : "autonomous",
     categoryId: a.categoryId,
+    customCategory: a.customCategory ?? null,
     industryId: a.industryId,
+    customIndustry: a.customIndustry ?? null,
     businessName: a.businessName,
     objective: a.objective ?? "",
     contactName: a.contactName,
@@ -91,8 +94,11 @@ function rowData(c: AiAgentConfig) {
   return {
     name: c.name,
     mode: c.mode === "guided" ? ("GUIDED" as const) : ("AUTONOMOUS" as const),
+    // One or the other (aiAgentInput refuses both): a library entry's id, or a name typed for this agent only.
     categoryId: c.categoryId ?? null,
+    customCategory: c.categoryId ? null : c.customCategory || null,
     industryId: c.industryId ?? null,
+    customIndustry: c.industryId ? null : c.customIndustry || null,
     businessName: c.businessName,
     objective: c.objective || null,
     contactName: c.contactName || null,
@@ -107,6 +113,26 @@ function rowData(c: AiAgentConfig) {
     maxDurationSec: c.maxDurationSec,
     guidedFlowId: c.mode === "guided" ? (c.guidedFlowId ?? null) : null,
   };
+}
+
+/**
+ * A category / industry typed by hand that is already in the shared library (same name ignoring case, spaces and
+ * punctuation, not archived) is saved as that library entry instead, so the agent gets its discovery topics and
+ * no near-duplicate is stored. A typed industry is only matched within a library category. Nothing is ever
+ * added to the library.
+ */
+async function resolveTypedBusiness(c: AiAgentConfig): Promise<AiAgentConfig> {
+  if (!c.customCategory && !c.customIndustry) return c;
+  const out = { ...c };
+  if (out.customCategory && !out.categoryId) {
+    const hit = matchLibraryName(out.customCategory, await prisma.aiBusinessCategory.findMany({ where: { archivedAt: null } }));
+    if (hit) Object.assign(out, { categoryId: hit.id, customCategory: null });
+  }
+  if (out.customIndustry && !out.industryId && out.categoryId) {
+    const hit = matchLibraryName(out.customIndustry, await prisma.aiIndustry.findMany({ where: { categoryId: out.categoryId, archivedAt: null } }));
+    if (hit) Object.assign(out, { industryId: hit.id, customIndustry: null });
+  }
+  return out;
 }
 
 /** The category / industry exist (not archived) and belong together; a guided flow is a published flow of the language. */
@@ -178,6 +204,7 @@ export async function createAgent(
   user: { id: string; email: string },
   lookupVoice: AgentVoiceLookup,
 ): Promise<AiAgentView> {
+  c = await resolveTypedBusiness(c);
   await checkRefs(c, language);
   const voice = await voiceData(c.voiceId, null, language, lookupVoice);
   const a = await prisma.aiAgent.create({ data: { ...rowData(c), ...voice, language, createdById: user.id, createdByEmail: user.email } });
@@ -187,6 +214,7 @@ export async function createAgent(
 export async function updateAgent(id: string, c: AiAgentConfig, lookupVoice: AgentVoiceLookup): Promise<AiAgentView> {
   const before = await getAgentRow(id);
   const language = aiCallLanguage.parse(before.language);
+  c = await resolveTypedBusiness(c);
   await checkRefs(c, language);
   // The backend is asked only when the voice changed: saving other settings never needs it.
   const voice = await voiceData(c.voiceId, before.voiceId ?? null, language, lookupVoice);
@@ -422,6 +450,25 @@ async function approvedKnowledge(agentId: string): Promise<CompileKnowledgeItem[
   }));
 }
 
+/**
+ * The agent's business context for the compiler: the library category / industry (with its discovery topics),
+ * else the names typed for this agent (no discovery topics - the AI asks open questions instead).
+ */
+export async function businessContext(a: AiAgent): Promise<{ categoryName: string | null; industry: { name: string; discoveryTopics: string } | null }> {
+  const [industry, category] = await Promise.all([
+    a.industryId ? prisma.aiIndustry.findUnique({ where: { id: a.industryId } }) : null,
+    a.categoryId ? prisma.aiBusinessCategory.findUnique({ where: { id: a.categoryId } }) : null,
+  ]);
+  return {
+    categoryName: category?.name ?? (a.categoryId ? null : a.customCategory || null),
+    industry: industry
+      ? { name: industry.name, discoveryTopics: industry.discoveryTopics ?? "" }
+      : !a.industryId && a.customIndustry
+        ? { name: a.customIndustry, discoveryTopics: "" }
+        : null,
+  };
+}
+
 /** Hash of everything a publish compiles from (settings, industry, approved knowledge): differs = unpublished changes. */
 export async function agentInputsHash(a: AiAgent): Promise<string> {
   const [knowledge, industry, category] = await Promise.all([
@@ -429,10 +476,16 @@ export async function agentInputsHash(a: AiAgent): Promise<string> {
     a.industryId ? prisma.aiIndustry.findUnique({ where: { id: a.industryId } }) : null,
     a.categoryId ? prisma.aiBusinessCategory.findUnique({ where: { id: a.categoryId } }) : null,
   ]);
-  // No voice picked: hashed exactly as before voices existed, so such agents don't show "unpublished changes".
-  const { voiceId, ...config } = configFromRow(a);
+  // No voice picked / nothing typed by hand: hashed exactly as before those settings existed, so such agents
+  // don't show "unpublished changes".
+  const { voiceId, customCategory, customIndustry, ...config } = configFromRow(a);
   return definitionHash({
-    config: voiceId ? { ...config, voiceId } : config,
+    config: {
+      ...config,
+      ...(voiceId ? { voiceId } : {}),
+      ...(customCategory ? { customCategory } : {}),
+      ...(customIndustry ? { customIndustry } : {}),
+    },
     industry: industry ? [industry.name, industry.discoveryTopics] : null,
     category: category?.name ?? null,
     knowledge: knowledge.map((k) => [k.kind, k.topic, k.text, k.questions, k.always]),
@@ -446,16 +499,11 @@ export async function compileAgent(a: AiAgent, builtinExecutive: unknown): Promi
   if (!base.success) {
     throw new AiAgentError(`The voice backend's built-in Business executive flow failed validation (${schemaIssues(base.error)})`, 409);
   }
-  const [knowledge, industry, category] = await Promise.all([
-    approvedKnowledge(a.id),
-    a.industryId ? prisma.aiIndustry.findUnique({ where: { id: a.industryId } }) : null,
-    a.categoryId ? prisma.aiBusinessCategory.findUnique({ where: { id: a.categoryId } }) : null,
-  ]);
+  const [knowledge, business] = await Promise.all([approvedKnowledge(a.id), businessContext(a)]);
   const compiled = compileAgentFlow({
     language,
     agent: configFromRow(a),
-    categoryName: category?.name ?? null,
-    industry: industry ? { name: industry.name, discoveryTopics: industry.discoveryTopics ?? "" } : null,
+    ...business,
     knowledge,
     base: base.data,
     voice: a.voiceId ? { id: a.voiceId, gender: a.voiceGender === "female" || a.voiceGender === "male" ? a.voiceGender : null } : null,

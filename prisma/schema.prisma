@@ -1025,6 +1025,10 @@ model AiAgent {
   name              String                 @db.VarChar(100)
   categoryId        String?
   industryId        String?
+  // Typed by hand for this agent ("Other – Enter manually"), never added to the shared library. Each is used
+  // instead of categoryId / industryId (the API stores one or the other, never both).
+  customCategory    String?                @db.VarChar(80)
+  customIndustry    String?                @db.VarChar(80)
   businessName      String                 @default("") @db.VarChar(160)
   objective         String?                @db.Text
   contactName       String?                @db.VarChar(100)

@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AiCallLanguage } from "@dispatch/shared";
 import { AiAgentsPage } from "../src/pages/AiAgents";
+import { AiAgentForm } from "../src/components/AiAgentForm";
 import { ConfirmProvider } from "../src/components/confirm";
 import { ToastProvider } from "../src/components/toast";
 import { AiCallLanguageProvider } from "../src/lib/aiCallLanguage";
@@ -65,6 +66,9 @@ const field = (label: string) =>
     "input, select, textarea",
   ) as HTMLInputElement;
 
+/** The option texts of the select under a label. */
+const options = (label: string) => [...(field(label) as unknown as HTMLSelectElement).options].map((o) => o.textContent);
+
 describe("AI Agents page", () => {
   it("new agent: defaults, then created in the section's language", async () => {
     page("ta");
@@ -77,8 +81,12 @@ describe("AI Agents page", () => {
     expect(screen.getByText("AI Conversation Instructions")).toBeTruthy();
 
     const create = screen.getByRole("button", { name: "Create AI agent" }) as HTMLButtonElement;
-    expect(create.disabled).toBe(true); // name, business and objective are required
+    expect(create.disabled).toBe(true); // name, category, industry, business and objective are required
     fireEvent.change(field("Agent name"), { target: { value: "ABC Hospital - Thaara" } });
+    await waitFor(() => expect(options("Category")).toContain("Healthcare"));
+    fireEvent.change(field("Category"), { target: { value: "cat_h" } });
+    expect(options("Industry")).toEqual(["Pick an industry…", "Hospital", "Other – Enter manually"]);
+    fireEvent.change(field("Industry"), { target: { value: "ind_h" } });
     fireEvent.change(field("Business / company name"), { target: { value: "ABC Hospital" } });
     fireEvent.change(field("Calling objective"), { target: { value: "Introduce AI and automation for hospitals." } });
     fireEvent.change(field("Contact person's name"), { target: { value: "Ragul" } });
@@ -92,6 +100,10 @@ describe("AI Agents page", () => {
       agent: {
         mode: "autonomous",
         name: "ABC Hospital - Thaara",
+        categoryId: "cat_h",
+        customCategory: null,
+        industryId: "ind_h",
+        customIndustry: null,
         businessName: "ABC Hospital",
         contactName: "Ragul",
         contactGender: "unspecified",
@@ -102,6 +114,73 @@ describe("AI Agents page", () => {
         maxDurationSec: 105,
       },
     });
+  });
+
+  it("Other – Enter manually: typed category and industry; a typed name already in the list is offered as that entry", async () => {
+    page("en");
+    fireEvent.click(await screen.findByRole("button", { name: "New AI agent" }));
+    await waitFor(() => expect(options("Category")).toEqual(["Pick a category…", "Healthcare", "Other – Enter manually"]));
+    expect(screen.queryByText("Category name")).toBeNull();
+
+    // A typed category: the industry is typed too (library industries belong to library categories).
+    fireEvent.change(field("Category"), { target: { value: "__other__" } });
+    expect(field("Industry").disabled).toBe(true);
+    expect(options("Industry")).toEqual(["Other – Enter manually"]);
+    fireEvent.change(field("Category name"), { target: { value: "  healthcare " } });
+    expect(screen.getByText(/“Healthcare” is already in the list, so it will be saved as that category/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Select it" }));
+    expect(field("Category").value).toBe("cat_h");
+    expect(screen.queryByText("Category name")).toBeNull();
+    expect(field("Industry").value).toBe("__other__"); // still typed, now under Healthcare
+
+    fireEvent.change(field("Industry name"), { target: { value: "Dental   clinic" } });
+    fireEvent.change(field("Agent name"), { target: { value: "Smile Dental" } });
+    fireEvent.change(field("Business / company name"), { target: { value: "Smile Dental" } });
+    fireEvent.change(field("Calling objective"), { target: { value: "Introduce AI for clinics." } });
+    const create = screen.getByRole("button", { name: "Create AI agent" }) as HTMLButtonElement;
+    await waitFor(() => expect(create.disabled).toBe(false));
+    fireEvent.click(create);
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]!.body.agent).toMatchObject({ categoryId: "cat_h", customCategory: null, industryId: null, customIndustry: "Dental   clinic" });
+  });
+
+  it("Other chosen but nothing typed: the agent can't be created and says what is missing", async () => {
+    page("en");
+    fireEvent.click(await screen.findByRole("button", { name: "New AI agent" }));
+    await waitFor(() => expect(options("Category")).toContain("Healthcare"));
+    fireEvent.change(field("Category"), { target: { value: "__other__" } });
+    fireEvent.change(field("Category name"), { target: { value: "   " } });
+    expect(screen.getByText("Enter the category")).toBeTruthy();
+    expect(screen.getByText("Enter the industry")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Create AI agent" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("editing restores typed names as “Other – Enter manually” with the name filled in", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const agent = {
+      id: "ag9", language: "en", name: "ABC Mills", mode: "autonomous", categoryId: null, customCategory: "Manufacturing", industryId: null,
+      customIndustry: "Textile mill", businessName: "ABC Mills", objective: "o", contactName: null, contactGender: "male", contactPhone: null,
+      executiveName: "Thaara", companyName: "Kagzso Technology Services", callbackNumber: null, personality: "professional", instructions: "",
+      targetDurationSec: 60, maxDurationSec: 105, guidedFlowId: null, voiceId: null, callFlowId: null, liveVersion: null, unpublishedChanges: true,
+      knowledge: { draft: 0, approved: 0, rejected: 0, files: 0 }, voiceGender: null, voiceDisplayName: null, voiceLanguage: null,
+      createdByEmail: null, createdAt: "", updatedAt: "",
+    } as const;
+    render(
+      <QueryClientProvider client={qc}>
+        <ToastProvider>
+          <ConfirmProvider>
+            <AiCallLanguageProvider language="en">
+              <AiAgentForm agent={agent} onCreated={() => {}} />
+            </AiCallLanguageProvider>
+          </ConfirmProvider>
+        </ToastProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(options("Category")).toContain("Healthcare"));
+    expect(field("Category").value).toBe("__other__");
+    expect(field("Category name").value).toBe("Manufacturing");
+    expect(field("Industry").value).toBe("__other__");
+    expect(field("Industry name").value).toBe("Textile mill");
   });
 
   it("a language without reviewed opening lines offers guided agents only", async () => {

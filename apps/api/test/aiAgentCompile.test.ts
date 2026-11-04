@@ -7,6 +7,7 @@ import {
   aiAgentInput,
   callFlowDefinition,
   knowledgeTextIssues,
+  matchLibraryName,
   type AiAgentConfig,
   type AiCallLanguage,
   type CallFlowDefinition,
@@ -42,6 +43,8 @@ function builtinExecutive(language: AiCallLanguage): CallFlowDefinition {
 const agent = (over: Partial<AiAgentConfig> = {}): AiAgentConfig =>
   aiAgentInput.parse({
     name: "ABC Hospital - Thaara",
+    categoryId: "aicat_healthcare",
+    industryId: "aiind_hospital",
     businessName: "ABC Hospital",
     objective: "Introduce AI and automation for hospitals and find out whether they want a follow-up from our team.",
     contactName: "Ragul",
@@ -88,6 +91,17 @@ describe.each(["en", "ta", "hi", "kn"] as const)("compiled agent flow (%s)", (la
     expect(out.greeting.text).not.toContain("customer_name"); // the system asks the identity question after it
     expect(out.identity?.question).toContain("{{customer_name}}");
     expect(allText(out)).not.toMatch(/\{\{\s*title_to_use\s*\}\}/);
+  });
+
+  it("the identity lines address the customer by name with the title after it, as the language does", () => {
+    // {{title}} is sir / madam only from a GIVEN gender and empty otherwise (voice backend title_for); Hindi
+    // uses ji (respectful and gender-neutral) for everyone, never sir / madam after the name.
+    const after = { en: "{{customer_name}} {{title}}?", ta: "{{customer_name}} {{title}}-கிட்ட", hi: "{{customer_name}} जी", kn: "{{customer_name}} {{title}} ಅವರ" }[language];
+    for (const line of [out.identity!.question, out.identity!.reask!]) {
+      expect(line).toContain(after);
+      expect(line).not.toMatch(/\b(sir|madam)\b/i); // never fixed: only from the contact's gender
+    }
+    expect(text(out, "opening")).toMatch(/politely ask whether the person you are calling is available/);
   });
 
   it("keeps every locked safety block and the do-not-call / closing blocks of the built-in flow", () => {
@@ -235,7 +249,8 @@ describe("what the compiled flow tells the AI", () => {
   });
 
   it("defaults: Thaara, Kagzso Technology Services, 60 s target, 1 min 45 s maximum, Male", () => {
-    const d = aiAgentInput.parse({ name: "x", businessName: "b", objective: "o" });
+    const min = { name: "x", categoryId: "c", industryId: "i", businessName: "b", objective: "o" };
+    const d = aiAgentInput.parse(min);
     expect(d).toMatchObject({
       executiveName: AI_AGENT_DEFAULTS.executiveName,
       companyName: "Kagzso Technology Services",
@@ -244,9 +259,72 @@ describe("what the compiled flow tells the AI", () => {
       contactGender: "male",
       mode: "autonomous",
     });
-    expect(aiAgentInput.safeParse({ name: "x", businessName: "b", objective: "o", targetDurationSec: 110 }).success).toBe(false);
+    expect(aiAgentInput.safeParse({ ...min, targetDurationSec: 110 }).success).toBe(false);
     expect(aiAgentInput.safeParse({ name: "x", mode: "guided" }).success).toBe(false); // needs its Call Flow
-    expect(aiAgentInput.safeParse({ name: "x", businessName: "b", objective: "o", executiveName: "Thaara2" }).success).toBe(false);
+    expect(aiAgentInput.safeParse({ ...min, executiveName: "Thaara2" }).success).toBe(false);
+  });
+
+  it("typed industries without discovery topics: open questions instead, and never assumptions from the category", () => {
+    const typed = compileAgentFlow(input("en", { categoryName: "Manufacturing", industry: { name: "Textile mill", discoveryTopics: "" } }));
+    expect(callFlowDefinition.safeParse(typed).success).toBe(true);
+    const ind = text(typed, "industry_context");
+    expect(ind).toContain("Industry: **Textile mill**");
+    expect(ind).toMatch(/Never assume which products or services this business offers/);
+    expect(ind).toMatch(/open questions/);
+    expect(ind).not.toMatch(/DISCOVERY/);
+    expect(text(typed, "agent")).toContain("a business in the **Textile mill** industry, (Manufacturing)");
+    expect(typed.training?.persona?.business_type).toBe("Textile mill");
+    // Library industries keep their topic list (and get the same no-assumptions line).
+    const lib = text(compileAgentFlow(input("en")), "industry_context");
+    expect(lib).toMatch(/DISCOVERY/);
+    expect(lib).toMatch(/Never assume/);
+    expect(lib).not.toMatch(/open questions/);
+  });
+});
+
+describe("Business section validation (library entry or typed by hand)", () => {
+  const base = { name: "x", businessName: "b", objective: "o" };
+  const issues = (v: Record<string, unknown>) => {
+    const r = aiAgentInput.safeParse({ ...base, ...v });
+    return r.success ? [] : r.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`);
+  };
+
+  it("an autonomous agent needs a category, an industry and a business name", () => {
+    expect(issues({})).toEqual(["categoryId: Pick a category", "industryId: Pick an industry"]);
+    expect(issues({ categoryId: "c", industryId: "i", businessName: "   " })).toEqual(["businessName: Enter the business name"]);
+    expect(issues({ categoryId: "c", industryId: "i" })).toEqual([]);
+    // Guided agents call with their Call Flow as it is: no Business section needed.
+    expect(aiAgentInput.safeParse({ name: "g", mode: "guided", guidedFlowId: "f" }).success).toBe(true);
+  });
+
+  it("typed names: trimmed and spaces collapsed; empty after trimming = still to be entered", () => {
+    const d = aiAgentInput.parse({ ...base, customCategory: "  Manufacturing  ", customIndustry: " Textile    mill ", businessName: "  ABC   Mills " });
+    expect(d).toMatchObject({ customCategory: "Manufacturing", customIndustry: "Textile mill", businessName: "ABC Mills" });
+    expect(issues({ customCategory: "   ", customIndustry: "Textile mill" })).toEqual(["customCategory: Enter the category"]);
+    expect(issues({ categoryId: "c", customIndustry: "" })).toEqual(["customIndustry: Enter the industry"]);
+    expect(issues({ categoryId: "c", customIndustry: "x".repeat(81) })).toHaveLength(1);
+    expect(issues({ categoryId: "c", customIndustry: "Textile\nmill" })).toHaveLength(1);
+  });
+
+  it("never both a library entry and a typed name; a typed category needs a typed industry", () => {
+    expect(issues({ categoryId: "c", customCategory: "X", industryId: "i" })).toContain("customCategory: Pick a category from the list or enter one, not both");
+    expect(issues({ categoryId: "c", industryId: "i", customIndustry: "Y" })).toContain("customIndustry: Pick an industry from the list or enter one, not both");
+    expect(issues({ customCategory: "X", industryId: "i" })).toEqual(["industryId: Enter the industry for a category you typed in"]);
+    expect(issues({ categoryId: "c", customIndustry: "Y" })).toEqual([]); // typed industry under a library category
+    expect(issues({ customCategory: "X", customIndustry: "Y" })).toEqual([]);
+  });
+
+  it("names match the library ignoring case, spaces and punctuation; archived entries never match", () => {
+    const lib = [
+      { id: "1", name: "IT company", archivedAt: null },
+      { id: "2", name: "Hotel / Restaurant", archivedAt: null },
+      { id: "3", name: "School", archivedAt: "2026-01-01T00:00:00.000Z" },
+    ];
+    expect(matchLibraryName("it-Company", lib)?.id).toBe("1");
+    expect(matchLibraryName("  hotel restaurant ", lib)?.id).toBe("2");
+    expect(matchLibraryName("school", lib)).toBeUndefined();
+    expect(matchLibraryName("Software company", lib)).toBeUndefined();
+    expect(matchLibraryName("--", lib)).toBeUndefined();
   });
 });
 
