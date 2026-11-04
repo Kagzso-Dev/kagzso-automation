@@ -15,7 +15,6 @@
 // Everything the voice backend appends to every prompt (voice rules, safety rules, do-not-call, AI disclosure,
 // identity rules, language rule) still comes after these blocks and can't be overridden by them.
 
-import { createHash } from "node:crypto";
 import {
   AI_AGENT_OPENINGS,
   AI_AGENT_PERSONALITY_TONE,
@@ -353,15 +352,4 @@ export function compileAgentFlow(input: CompileInput): CallFlowDefinition {
     },
   };
   return definition;
-}
-
-/** Stable hash of a compiled definition (key order independent): "unpublished changes" = differs from the last publish. */
-export function compiledHash(definition: CallFlowDefinition): string {
-  const sort = (v: unknown): unknown =>
-    Array.isArray(v)
-      ? v.map(sort)
-      : v && typeof v === "object"
-        ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([k, x]) => [k, sort(x)]))
-        : v;
-  return createHash("sha256").update(JSON.stringify(sort(definition))).digest("hex");
 }

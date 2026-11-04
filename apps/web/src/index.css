@@ -500,11 +500,6 @@
     stroke-dashoffset: 1;
     animation: draw-line 0.9s cubic-bezier(0.4, 0, 0.2, 1) forwards;
   }
-  .spark-draw {
-    stroke-dasharray: 1;
-    stroke-dashoffset: 1;
-    animation: draw-line 0.7s ease-out forwards;
-  }
   .area-fade {
     opacity: 0;
     animation: fade-in 0.6s ease-out 0.35s forwards;

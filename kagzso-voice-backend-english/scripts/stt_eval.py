@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import io
 import itertools
 import json
 import sys

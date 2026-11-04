@@ -125,60 +125,6 @@ export function TrendPill({
   );
 }
 
-/* ---------------------------------------------------------------- Sparkline -- */
-
-export function Sparkline({
-  data,
-  color = SERIES.sent,
-  width = 120,
-  height = 34,
-}: {
-  data: number[];
-  color?: string;
-  width?: number;
-  height?: number;
-}) {
-  const path = useMemo(() => {
-    if (data.length < 2) return { line: "", area: "", last: [0, 0] as [number, number] };
-    const max = Math.max(...data, 1);
-    const min = Math.min(...data, 0);
-    const span = max - min || 1;
-    const step = width / (data.length - 1);
-    const pts = data.map(
-      (v, i) => [i * step, height - 3 - ((v - min) / span) * (height - 6)] as [number, number],
-    );
-    const line = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
-    const area = `${line} L${width},${height} L0,${height} Z`;
-    return { line, area, last: (pts[pts.length - 1] ?? [0, 0]) as [number, number] };
-  }, [data, width, height]);
-
-  const gid = useMemo(() => `spark-${Math.random().toString(36).slice(2)}`, []);
-  if (!path.line) return <div style={{ width, height }} />;
-
-  return (
-    <svg width={width} height={height} className="overflow-visible" aria-hidden>
-      <defs>
-        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity="0.18" />
-          <stop offset="100%" stopColor={color} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <path d={path.area} fill={`url(#${gid})`} />
-      <path
-        d={path.line}
-        fill="none"
-        stroke={color}
-        strokeWidth={1.75}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-        pathLength={1}
-        className="spark-draw"
-      />
-      <circle cx={path.last[0]} cy={path.last[1]} r={2.5} fill={color} />
-    </svg>
-  );
-}
-
 /* --------------------------------------------------------------- AreaChart -- */
 
 export interface SeriesPoint {
