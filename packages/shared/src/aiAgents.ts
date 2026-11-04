@@ -302,6 +302,25 @@ export function aiAgentLanguageSupported(language: AiCallLanguage): boolean {
   return !!AI_AGENT_OPENINGS[language];
 }
 
+/**
+ * Languages whose live AUTONOMOUS AI Agent calls are paused (temporary). Only calls are blocked: agents in these
+ * languages can still be created, edited, given knowledge, previewed and published, and Guided agents (and every
+ * ordinary Call Flow) call as before. Remove a language here - and from AUTONOMOUS_CALLS_BLOCKED in the voice
+ * backend's call_service.py - once its native-speaker review is done.
+ */
+export const AI_AGENT_AUTONOMOUS_CALLS_BLOCKED: Partial<Record<AiCallLanguage, string>> = {
+  kn:
+    "Kannada Autonomous AI calls are paused until a native speaker has reviewed the Kannada do-not-call phrases " +
+    "and opening lines. You can still set up, edit, add knowledge to, preview and publish Kannada agents; " +
+    "Guided agents call as usual.",
+};
+
+/** Why live calls with this flow version are paused (an autonomous flow of a blocked language), or null. */
+export function autonomousCallBlockedReason(language: string, definition: unknown): string | null {
+  const autonomous = !!definition && typeof definition === "object" && !!(definition as { autonomous?: unknown }).autonomous;
+  return autonomous ? (AI_AGENT_AUTONOMOUS_CALLS_BLOCKED[language as AiCallLanguage] ?? null) : null;
+}
+
 /* ------------------------------------------------------------------ API shapes */
 export interface AiIndustryView {
   id: string;

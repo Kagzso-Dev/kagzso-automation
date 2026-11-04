@@ -149,7 +149,9 @@ export async function planAndStartAiCallRun(
     try {
       flowVersion = await versionForNewRun(body.flowId, language);
     } catch (err) {
-      if (err instanceof CallFlowError) throw new AppError(err.status, err.message, err.status === 404 ? "not_found" : "bad_request");
+      if (err instanceof CallFlowError) {
+        throw new AppError(err.status, err.message, err.status === 404 ? "not_found" : err.status === 409 ? "conflict" : "bad_request");
+      }
       throw err;
     }
   } else if (language !== DEFAULT_AI_CALL_LANGUAGE) {

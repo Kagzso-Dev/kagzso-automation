@@ -28,6 +28,7 @@ import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import {
   AI_KNOWLEDGE_MAX_FILES_PER_UPLOAD,
+  AI_AGENT_AUTONOMOUS_CALLS_BLOCKED,
   AI_KNOWLEDGE_MAX_FILE_BYTES,
   aiAgentCallInput,
   aiAgentInput,
@@ -439,6 +440,9 @@ aiAgentsRouter.post(
     const { id } = agentParam.parse(req.params);
     const body = aiAgentCallInput.parse(req.body ?? {});
     const agent = await guard(getAgentRow(id));
+    // Autonomous calls paused in this language (also refused when a run is planned and at dial time).
+    const paused = agent.mode === "AUTONOMOUS" ? AI_AGENT_AUTONOMOUS_CALLS_BLOCKED[aiCallLanguage.parse(agent.language)] : undefined;
+    if (paused) throw new AppError(409, paused, "conflict");
     const flowId = await guard(callFlowIdFor(agent));
     const phone = body.phone ?? agent.contactPhone;
     if (!phone) throw badRequest("Enter the number to call (the agent has no contact number)");

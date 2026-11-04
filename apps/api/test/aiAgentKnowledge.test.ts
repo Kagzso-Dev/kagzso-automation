@@ -169,7 +169,7 @@ describe("upload safety", () => {
     expect(docxBomb.length).toBeLessThan(1024 * 1024);
     await expect(extractKnowledge(docxBomb, "docx", "big.docx", null)).rejects.toThrow(/unpacks to more than 50 MB/);
     await expect(extractKnowledge(await bomb("xl/worksheets/sheet1.xml"), "xlsx", "big.xlsx", null)).rejects.toThrow(/unpacks to more than 50 MB/);
-  });
+  }, 30_000); // building the 60 MB test archives is slow under a full parallel run
   it("a .docx / .xlsx that is not a zip says so", async () => {
     await expect(extractKnowledge(Buffer.from("plain text"), "docx", "x.docx", null)).rejects.toThrow(/not a valid Office file/);
     await expect(extractKnowledge(Buffer.from("plain text"), "xlsx", "x.xlsx", null)).rejects.toThrow(/not a valid Office file/);

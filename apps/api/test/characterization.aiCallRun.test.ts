@@ -118,6 +118,29 @@ describe("processAiCallRun (characterization)", () => {
     expect(voice.placeVoiceCall).not.toHaveBeenCalled();
   });
 
+  it("a Kannada autonomous flow (paused): log FAILED with the reason, nothing dialled, run continues", async () => {
+    helpers.pinnedFlowForRun.mockResolvedValue({
+      flowId: "f_kn", version: 1, draft: false, language: "kn", definition: { language: "kn", autonomous: { target_duration_sec: 60 } },
+    });
+    db.setting.findUnique.mockResolvedValue(null);
+    const wait = await deferredMs(processAiCallRun({ runId: "r1" }));
+    expect(wait).toBeGreaterThanOrEqual(1000);
+    expect(wait).toBeLessThan(2000);
+    expect(voice.placeVoiceCall).not.toHaveBeenCalled();
+    expect(db.aiCallLog.update).toHaveBeenCalledWith({
+      where: { id: "l2" },
+      data: { status: "FAILED", error: expect.stringMatching(/^Skipped — Kannada Autonomous AI calls are paused/) },
+    });
+    expect(helpers.syncCustomerFromLog).toHaveBeenCalledWith("l2");
+  });
+
+  it("a Kannada flow that is not autonomous dials as before", async () => {
+    helpers.pinnedFlowForRun.mockResolvedValue({ flowId: "f_kn", version: 1, draft: false, language: "kn", definition: { language: "kn" } });
+    db.setting.findUnique.mockResolvedValue(null);
+    await deferredMs(processAiCallRun({ runId: "r1" }));
+    expect(voice.placeVoiceCall).toHaveBeenCalledTimes(1);
+  });
+
   it("dials the next customer with the pinned flow, stores ids, defers 5s to poll", async () => {
     const wait = await deferredMs(processAiCallRun({ runId: "r1" }));
     expect(wait).toBeGreaterThanOrEqual(5000);

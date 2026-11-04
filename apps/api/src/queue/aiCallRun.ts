@@ -10,7 +10,7 @@
 // pinned flow's; no flow = English). If an admin switches that language off, the
 // call in flight finishes and the calls still queued are cancelled.
 
-import { DEFAULT_AI_CALL_LANGUAGE, maskPhone, type AiCallLanguage } from "@dispatch/shared";
+import { autonomousCallBlockedReason, DEFAULT_AI_CALL_LANGUAGE, maskPhone, type AiCallLanguage } from "@dispatch/shared";
 import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
 import { aiCallsConfig } from "../config/aiCalls.js";
@@ -151,6 +151,16 @@ export async function processAiCallRun(payload: Record<string, unknown>): Promis
       data: { status: "FAILED", error: "Skipped — number is on the do-not-call list" },
     });
     logger.info({ runId, logId: next.id, phone: maskPhone(next.phone) }, "ai call skipped (do-not-call)");
+    await syncCustomerFromLog(next.id);
+    throw deferFor(1000);
+  }
+
+  // Autonomous AI Agent calls paused in this language (AI_AGENT_AUTONOMOUS_CALLS_BLOCKED): never dialled, even
+  // for a run queued before the pause. Checked at dial time, like do-not-call.
+  const paused = flow ? autonomousCallBlockedReason(flow.language, flow.definition) : null;
+  if (paused) {
+    await prisma.aiCallLog.update({ where: { id: next.id }, data: { status: "FAILED", error: `Skipped — ${paused}` } });
+    logger.info({ runId, logId: next.id, phone: maskPhone(next.phone), language }, "ai call skipped (autonomous calls paused)");
     await syncCustomerFromLog(next.id);
     throw deferFor(1000);
   }

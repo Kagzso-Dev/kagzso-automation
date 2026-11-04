@@ -8,7 +8,13 @@
 
 import { createHash } from "node:crypto";
 import { Prisma, type CallFlowVersion } from "@prisma/client";
-import { AI_CALL_LANGUAGE_NAMES, aiCallLanguagePath, type AiCallLanguage, type CallFlowDefinition } from "@dispatch/shared";
+import {
+  AI_CALL_LANGUAGE_NAMES,
+  aiCallLanguagePath,
+  autonomousCallBlockedReason,
+  type AiCallLanguage,
+  type CallFlowDefinition,
+} from "@dispatch/shared";
 import { prisma } from "../prisma.js";
 import type { PinnedFlow } from "../services/voiceBackend.js";
 import { asAiCallLanguage } from "./aiCallLanguages.js";
@@ -83,6 +89,9 @@ export async function versionForNewRun(flowId: string, language?: AiCallLanguage
   }
   const version = await latestPublished(flowId);
   if (!version) throw new CallFlowError("This call flow has no published version yet — publish it first", 400);
+  // Autonomous AI Agent calls paused in this language (AI_AGENT_AUTONOMOUS_CALLS_BLOCKED): no new run uses it.
+  const blocked = autonomousCallBlockedReason(own, version.definition);
+  if (blocked) throw new CallFlowError(blocked, 409);
   return version;
 }
 
@@ -126,10 +135,13 @@ export async function flowVersionForCallAgain(customerId: string, language: AiCa
       if (!(err instanceof CallFlowError)) throw err;
     }
   }
-  return prisma.callFlowVersion.findFirst({
+  // That language's newest published flow - never an Autonomous AI Agent flow whose calls are paused.
+  const newest = await prisma.callFlowVersion.findMany({
     where: { status: "PUBLISHED", flow: { language, archivedAt: null } },
     orderBy: { publishedAt: "desc" },
+    take: 50,
   });
+  return newest.find((v) => !autonomousCallBlockedReason(language, v.definition)) ?? null;
 }
 
 /** What an admin types to remove a live (published) flow. */

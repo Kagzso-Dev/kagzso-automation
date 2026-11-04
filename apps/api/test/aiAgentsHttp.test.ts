@@ -495,3 +495,50 @@ describe("the generated Call Flow is managed by its agent", () => {
     expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
   });
 });
+
+describe("Kannada Autonomous AI calls are paused (until native-speaker review)", () => {
+  /** An agent of `language` whose own flow already has a live autonomous version (as after a publish). */
+  async function liveAgent(language: string, agent: Record<string, unknown> = AGENT) {
+    const a = await createAgent(language, agent);
+    const flowId = `flow_${a.id}`;
+    T("callFlow").push({ id: flowId, name: "Agent flow", base: "executive", language, archivedAt: null });
+    T("callFlowVersion").push({
+      id: `v_${a.id}`, flowId, version: 1, status: "PUBLISHED", definition: { language, autonomous: { target_duration_sec: 60, dnc_enforce: true } },
+    });
+    T("aiAgent").find((r) => r.id === a.id)!.callFlowId = flowId;
+    return a;
+  }
+
+  it("a Kannada autonomous agent can't call (check or real), with the reason; nothing is planned", async () => {
+    const a = await liveAgent("kn");
+    for (const body of [{ dryRun: true }, {}]) {
+      const r = await req("POST", `/api/ai-agents/${a.id}/call`, body);
+      expect(r.status).toBe(409);
+      expect(((await r.json()) as { error: string }).error).toMatch(/^Kannada Autonomous AI calls are paused until a native speaker/);
+    }
+    expect(runCalls).toEqual([]);
+  });
+
+  it("Kannada agents can still be created, edited and given knowledge", async () => {
+    const a = await createAgent("kn");
+    expect((await req("PUT", `/api/ai-agents/${a.id}`, { agent: { ...AGENT, name: "Kannada - edited" } })).status).toBe(200);
+    const up = await upload(a.id, [{ name: "k.csv", text: CSV }]);
+    expect(up.status).toBe(201);
+    expect(T("aiAgentKnowledgeItem").filter((i) => i.agentId === a.id).length).toBeGreaterThan(0);
+    const k = await req("POST", `/api/ai-agents/${a.id}/knowledge/decide`, { ids: [T("aiAgentKnowledgeItem")[0]!.id], status: "approved" });
+    expect(k.status).toBe(200);
+  });
+
+  it("English, Tamil and Hindi autonomous agents and Kannada GUIDED agents call as before", async () => {
+    for (const language of ["en", "ta", "hi"]) {
+      const a = await liveAgent(language);
+      expect((await req("POST", `/api/ai-agents/${a.id}/call`, { dryRun: true })).status, language).toBe(200);
+    }
+    T("callFlow").push({ id: "kn_nila", name: "Kannada Nila", base: "nila", language: "kn", archivedAt: null });
+    T("callFlowVersion").push({ id: "v_kn1", flowId: "kn_nila", version: 1, status: "PUBLISHED", definition: { language: "kn" } });
+    const g = await createAgent("kn", { name: "Guided kn", mode: "guided", guidedFlowId: "kn_nila", contactPhone: "+919876543210" });
+    expect((await req("POST", `/api/ai-agents/${g.id}/call`, { dryRun: true })).status).toBe(200);
+    expect(runCalls).toHaveLength(4);
+    expect(runCalls[3]![0]).toMatchObject({ flowId: "kn_nila" });
+  });
+});

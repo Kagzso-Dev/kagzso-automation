@@ -18,6 +18,7 @@ import pytest
 from app.core.config import settings
 from app.flows.loader import BUILTIN_FLOWS, flow_hash, parse_flow, FlowError
 from app.flows.schema import CallFlow
+from app.services import call_service as cs
 from app.services import llm_service as llm
 from app.services.llm_service import OUTCOME_SYSTEM
 from tests.conftest import silence_mulaw, tone_mulaw
@@ -230,6 +231,9 @@ def test_compiled_agent_call_per_language(client, auth, fakes, sync_engine, monk
     about the call path changes. (Real Sarvam STT / TTS and a real LLM are NOT exercised here.)"""
     flow = json.loads((FIXTURES / f"{lang}.json").read_text(encoding="utf-8"))
     monkeypatch.setattr(settings, "CALL_LANGUAGE", lang)
+    # Kannada autonomous calls are paused in production (AUTONOMOUS_CALLS_BLOCKED); these tests check the call
+    # behaviour that applies once the native-speaker review lifts the pause.
+    monkeypatch.setattr(cs, "AUTONOMOUS_CALLS_BLOCKED", {})
     systems = _capture_systems(fakes)
     fakes.llm.reply = "Thank you. We help hospitals automate billing follow-ups."
     call_id, token = _call(client, auth, gender="male", flow_id=f"agent_{lang}", flow_version=1, flow=flow)

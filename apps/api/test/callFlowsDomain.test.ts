@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { autonomousCallBlockedReason } from "@dispatch/shared";
 
 // Versioning rules and version pinning, with Prisma replaced by an in-memory table.
 
@@ -12,7 +13,7 @@ type Row = {
   publishedAt: Date | null;
 };
 let rows: Row[] = [];
-let flows: Record<string, { archivedAt: Date | null }> = {};
+let flows: Record<string, { archivedAt: Date | null; language?: string }> = {};
 let links: Record<string, string> = {}; // runId -> versionId
 let nextId = 1;
 
@@ -24,6 +25,11 @@ const callFlowVersion = {
     return hits[0] ?? null;
   },
   findUniqueOrThrow: async ({ where }: { where: { id: string } }) => rows.find((r) => r.id === where.id)!,
+  // "Call again" fallback: the language's published versions, newest first.
+  findMany: async ({ where }: { where: { status: string; flow: { language: string } } }) =>
+    rows
+      .filter((r) => r.status === where.status && flows[r.flowId]?.language === where.flow.language && !flows[r.flowId]?.archivedAt)
+      .sort((a, b) => Number(b.publishedAt) - Number(a.publishedAt)),
   updateMany: async ({ where, data }: { where: Partial<Row>; data: Partial<Row> }) => {
     const hits = rows.filter((r) => match(r, where));
     hits.forEach((r) => Object.assign(r, data));
@@ -40,6 +46,7 @@ const callFlowVersion = {
 };
 const db = {
   callFlowVersion,
+  aiCallCustomerCall: { findMany: async () => [] }, // a customer with no earlier calls
   callFlow: {
     update: async () => ({}),
     findUnique: async ({ where }: { where: { id: string } }) => flows[where.id] ?? null,
@@ -55,7 +62,7 @@ vi.mock("../src/prisma.js", () => ({
   prisma: { ...db, $transaction: (fn: (tx: typeof db) => unknown) => fn(db) },
 }));
 
-const { saveDraft, publishDraft, versionForNewRun, pinnedFlowForRun, CallFlowError, definitionHash } = await import(
+const { saveDraft, publishDraft, versionForNewRun, pinnedFlowForRun, flowVersionForCallAgain, CallFlowError, definitionHash } = await import(
   "../src/domain/callFlows.js"
 );
 
@@ -121,6 +128,45 @@ describe("version pinning", () => {
     flows.f1.archivedAt = new Date();
     await expect(versionForNewRun("f1")).rejects.toThrow(/not found/);
     expect(await pinnedFlowForRun("no-link")).toBeNull();
+  });
+});
+
+describe("Kannada Autonomous AI calls are paused", () => {
+  const autonomous = (language: string) => ({ language, autonomous: { target_duration_sec: 60, dnc_enforce: true } }) as never;
+  async function live(flowId: string, language: string, definition: never) {
+    flows[flowId] = { archivedAt: null, language };
+    await publishDraft((await saveDraft(flowId, definition, null)).id);
+  }
+
+  it("a new run never pins a Kannada autonomous flow (409 with the reason)", async () => {
+    await live("kn_agent", "kn", autonomous("kn"));
+    const err = await versionForNewRun("kn_agent", "kn").catch((e) => e);
+    expect(err).toBeInstanceOf(CallFlowError);
+    expect(err).toMatchObject({ status: 409 });
+    expect(String(err.message)).toMatch(/^Kannada Autonomous AI calls are paused/);
+  });
+
+  it("'call again' never falls back to a paused flow: the newest Kannada flow that may call", async () => {
+    await live("kn_plain", "kn", { language: "kn" } as never);
+    await new Promise((r) => setTimeout(r, 5));
+    await live("kn_agent", "kn", autonomous("kn")); // newer, but paused
+    expect((await flowVersionForCallAgain("c1", "kn"))?.flowId).toBe("kn_plain");
+  });
+
+  it("the shared rule: only an autonomous flow of a paused language", async () => {
+    expect(autonomousCallBlockedReason("kn", autonomous("kn"))).toMatch(/^Kannada Autonomous AI calls are paused/);
+    expect(autonomousCallBlockedReason("kn", { language: "kn" })).toBeNull();
+    expect(autonomousCallBlockedReason("kn", null)).toBeNull();
+    for (const language of ["en", "ta", "hi", "te"]) expect(autonomousCallBlockedReason(language, autonomous(language))).toBeNull();
+  });
+
+  it("ordinary Kannada flows and other languages' autonomous flows are not affected", async () => {
+    await live("kn_plain", "kn", { language: "kn" } as never);
+    expect((await versionForNewRun("kn_plain", "kn")).version).toBe(1);
+    for (const language of ["en", "ta", "hi"]) {
+      await live(`${language}_agent`, language, autonomous(language));
+      expect((await versionForNewRun(`${language}_agent`, language as never)).version, language).toBe(1);
+    }
   });
 });
 

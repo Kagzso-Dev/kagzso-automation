@@ -29,7 +29,7 @@ KN_DNC_LINE = "ಸರಿ, ಅರ್ಥ ಆಯ್ತು. ನಿಮ್ಮ request-
 
 
 def _before(text: str) -> bool:
-    """The detector exactly as it was before the Kannada patterns (the regression reference)."""
+    """The detector as it was before the Kannada and English additions (the regression reference)."""
     text = text.replace("’", "'")
     asked = cs._DO_NOT_CALL_RE.search(text) or cs._DO_NOT_CALL_INDIC_RE.search(text)
     return bool(asked) and not cs._NOT_NOW_RE.search(text)
@@ -102,7 +102,47 @@ def test_the_backend_language_is_the_default(monkeypatch):
     monkeypatch.setattr(settings, "CALL_LANGUAGE", "kn")
     assert is_do_not_call("ಕಾಲ್ ಮಾಡಬೇಡಿ")
     monkeypatch.setattr(settings, "CALL_LANGUAGE", "en")
-    assert not is_do_not_call("ಕಾಲ್ ಮಾಡಬೇಡಿ")  # the English backend decides exactly as before
+    assert not is_do_not_call("ಕಾಲ್ ಮಾಡಬೇಡಿ")  # the Kannada patterns are not used by an English backend
+
+
+# ------------------------------------------------------------------ English (every backend)
+ENGLISH_DNC = [
+    # "from now on" / "going forward" are "never again", not "not now"
+    "Don't call me again from now on", "Please don't call me again from now onwards", "From now on, never call this number",
+    "Going forward, do not contact me", "Don't call me from today onwards",
+    # "again / anymore / ever" next to "now", with no time to call back
+    "I'm busy now, don't call me again", "Now listen, don't call me again", "Don't call me anymore",
+    "Don't call me any more", "Please never call me again", "Don't call this number ever again",
+    # more ways to say it
+    "Do not ever call me again", "Never ever call me", "Don't you ever call me again", "Stop contacting me",
+    "Stop bothering me with these calls", "Stop phoning me", "I told you not to call me again",
+    "I don't want any more calls", "I don't want your calls", "No more calls please", "Stop calling me",
+    # removal: always, whatever time words are around it
+    "Remove me from your list", "Remove my number now", "Delete my number right now", "Take me off your calling list",
+    "Put me on your do not call list", "Unsubscribe me", "Remove my number from your list", "Lose my number",
+    "I want the number removed now", "Please get my number deleted",
+    # spelling: curly apostrophe, capitals, no apostrophe
+    "Don’t call me again", "DON'T CALL ME AGAIN", "dont call me again",
+]
+ENGLISH_NOT_DNC = [
+    "Don't call me now", "Don't call now, call me in the evening", "Call me later", "Don't call me now, call again later",
+    "I'm busy right now", "Don't call me today", "Please don't call me today", "Can you call again tomorrow?",
+    "Don't call me at the moment, I'm driving", "Call me back in an hour", "Please call me again in two hours",
+    "Call me again next week", "Don't call me after 6 pm", "Don't worry, call me tomorrow morning", "I'll call you back",
+    "Yes, speaking", "We don't need it", "Not interested", "Who gave you my number?", "Can you remove the extra charges?",
+]
+
+
+@pytest.mark.parametrize("lang", ["en", "ta", "hi", "kn"])
+@pytest.mark.parametrize("said", ENGLISH_DNC)
+def test_english_do_not_call_variations(said, lang):
+    assert is_do_not_call(said, lang)
+
+
+@pytest.mark.parametrize("lang", ["en", "ta", "hi", "kn"])
+@pytest.mark.parametrize("said", ENGLISH_NOT_DNC)
+def test_english_not_now_and_ordinary_answers(said, lang):
+    assert not is_do_not_call(said, lang)  # left to the AI (busy / callback / an answer)
 
 
 # ------------------------------------------------------------------ the other languages: equivalents
@@ -141,21 +181,23 @@ CORPUS = KANNADA_DNC + KANNADA_NOT_DNC + [s for _, s in EQUIVALENTS + NOT_EQUIVA
 ]
 
 
-@pytest.mark.parametrize("said", CORPUS)
-def test_english_backend_decides_exactly_as_before(said):
-    assert is_do_not_call(said, "en") is _before(said)
+# Requests detected before that are now "not now" on purpose: busy today, not a do-not-call request.
+NOW_NOT_NOW = {"Don't call me today", "Please don't call me today", "Don't call me at the moment, I'm driving"}
 
 
-@pytest.mark.parametrize("lang", ["ta", "hi", "kn", "te"])
-@pytest.mark.parametrize("said", CORPUS)
+@pytest.mark.parametrize("lang", ["en", "ta", "hi", "kn", "te"])
+@pytest.mark.parametrize("said", CORPUS + ENGLISH_DNC + ENGLISH_NOT_DNC)
 def test_anything_detected_before_is_still_detected(lang, said):
-    if _before(said):
+    if _before(said) and said not in NOW_NOT_NOW:
         assert is_do_not_call(said, lang)
 
 
 # ------------------------------------------------------------------ integration: a compiled Kannada agent call
 def _kn_agent(monkeypatch):
     monkeypatch.setattr(settings, "CALL_LANGUAGE", "kn")
+    # Kannada autonomous calls are paused in production (AUTONOMOUS_CALLS_BLOCKED); these tests check the call
+    # behaviour that applies once the native-speaker review lifts the pause.
+    monkeypatch.setattr(cs, "AUTONOMOUS_CALLS_BLOCKED", {})
     return json.loads((FIXTURES / "kn.json").read_text(encoding="utf-8"))
 
 
@@ -239,3 +281,35 @@ def test_kannada_normal_flow_without_enforcement_is_unchanged(client, auth, fake
         _finish(ws, _say(ws))
     assert _agent_lines(sync_engine, call_id)[-1] == "ಸರಿ."
     assert "do_not_call_detected" not in _events(sync_engine, call_id)
+
+
+# ------------------------------------------------------------------ Kannada autonomous calls are paused
+def _outbound(client, auth, flow, flow_id):
+    from tests.test_nila_flow import _nila_id
+
+    body = {"phone_number": "+919876543210", "customer_name": "Ragul", "gender": "male", "agent_id": _nila_id(client, auth),
+            "flow_id": flow_id, "flow_version": 1, "flow": flow}
+    return client.post("/api/calls/outbound", headers=auth, json=body)
+
+
+def test_a_kannada_autonomous_call_is_refused_and_nothing_is_dialled(client, auth, fakes, sync_engine, monkeypatch):
+    monkeypatch.setattr(settings, "CALL_LANGUAGE", "kn")
+    flow = json.loads((FIXTURES / "kn.json").read_text(encoding="utf-8"))
+    r = _outbound(client, auth, flow, "agent_kn")
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "autonomous_paused"
+    assert r.json()["detail"]["message"].startswith("Kannada Autonomous AI calls are paused")
+    assert fakes.plivo.placed == [] and fakes.plivo.time_limits == []
+
+
+def test_kannada_guided_flows_and_other_languages_still_call(client, auth, fakes, monkeypatch):
+    """Only autonomous Kannada flows are paused: a Kannada flow without `autonomous` and the English, Tamil and
+    Hindi agent flows are placed as before."""
+    for lang, drop_autonomous in [("kn", True), ("en", False), ("ta", False), ("hi", False)]:
+        monkeypatch.setattr(settings, "CALL_LANGUAGE", lang)
+        flow = json.loads((FIXTURES / f"{lang}.json").read_text(encoding="utf-8"))
+        if drop_autonomous:
+            flow.pop("autonomous")
+        r = _outbound(client, auth, flow, f"flow_{lang}")
+        assert r.status_code == 200, (lang, r.text)
+    assert len(fakes.plivo.placed) == 4

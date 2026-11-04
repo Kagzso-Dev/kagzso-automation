@@ -565,6 +565,13 @@ Instructions** box, a target length (default 1 min) and a hard maximum (default 
   the agent then says its do-not-call line in the call's language and hangs up. On a non-English backend "remove my
   number" in an Indic script also counts. An English backend decides exactly as before (tests:
   `tests/test_dnc_languages.py`). The Kannada phrases need a native speaker's review with real STT output.
+  English: "from now on" / "going forward" are not a "not now"; "...again / anymore" counts unless a time to call
+  back is named; "remove me / my number" always counts; "today" / "at the moment" are "not now" (busy).
+- **Kannada Autonomous AI calls are paused** until that review (`AI_AGENT_AUTONOMOUS_CALLS_BLOCKED` in
+  `packages/shared/src/aiAgents.ts` and `AUTONOMOUS_CALLS_BLOCKED` in the voice backend's `call_service.py`; remove
+  `kn` from both to lift it). Refused for the agent's Call tab, AI call runs, "call again", test calls, at dial time
+  and by the voice backend itself. Kannada agents can still be created, edited, given knowledge, previewed and
+  published; Kannada Guided agents, ordinary Kannada flows and every other language call as before.
 - **The generated Call Flow is read-only** in Voice Call Flows (badge "AI Agent · read-only"; the API refuses
   save, publish, import, restore, delete and archive with the reason). Change the agent instead, or **Copy flow**
   to edit a copy by hand. If a draft is open on the flow when the agent is published (one saved before this

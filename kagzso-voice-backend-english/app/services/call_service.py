@@ -274,16 +274,64 @@ _NOT_NOW_KN_RE = re.compile(
 )
 
 
+# English (any backend): more ways to ask, beyond _DO_NOT_CALL_RE (which also routes the opening, unchanged).
+_DO_NOT_CALL_EN_RE = re.compile(
+    r"\b(don'?t|do\s+not|never)\s+(you\s+)?(ever\s+)?(call|calls|calling|contact|phone|ring)"
+    r"|\b(stop|quit)\s+(calling|ringing|phoning|contacting|bothering)"
+    r"|\bnot\s+to\s+(call|contact|phone|ring)\s+me"
+    r"|\b(don'?t|do\s+not)\s+want\s+(any\s+)?(more\s+)?(of\s+)?(your\s+|these\s+|such\s+)?calls"
+    r"|\bno\s+(more\s+)?calls\s+(please|again|anymore|any\s+more)",
+    re.IGNORECASE,
+)
+# "Remove / take me off / delete my number": never a "not now", whatever time words are around it.
+_REMOVE_EN_RE = re.compile(
+    r"\bremove\s+(me|my\s+(number|name|details|contact|phone)|this\s+number)\b"
+    r"|\b(take|delete|erase|drop)\s+(me|my\s+(number|name|details|contact))\s+(off|from|out)\b"
+    r"|\b(delete|erase)\s+my\s+(number|details|contact)\b|\b(my|the|this)\s+number\s+(removed|deleted)\b"
+    r"|\bunsubscribe\b|\b(do\s+not|don'?t)\s+call\s+list\b|\bdnc\s+list\b|\blose\s+my\s+number\b",
+    re.IGNORECASE,
+)
+# "From now on" / "going forward" mean "never again", not "not now": dropped before the not-now check.
+_FROM_NOW_ON_RE = re.compile(
+    r"\bfrom\s+(now|today|this\s+(day|moment|point))\s+(on|onwards?|forward|forth)\b|\bhenceforth\b|\bgoing\s+forward\b",
+    re.IGNORECASE,
+)
+# "...again / anymore / ever again" is a do-not-call request even next to "now" ("I'm busy now, don't call me
+# again"), unless a time to call back is named ("don't call now, call again later").
+_AGAIN_EN_RE = re.compile(r"\b(again|anymore|any\s+more|ever)\b", re.IGNORECASE)
+_CALLBACK_TIME_RE = re.compile(
+    r"\b(later|evening|tomorrow|morning|afternoon|tonight|after|next\s+week|some\s*other\s+time|today|this\s+week"
+    r"|in\s+(an?|one|two|few|\d+)\s+(hour|hours|minute|minutes|mins|days?))\b",
+    re.IGNORECASE,
+)
+# English "not now" words beyond _NOT_NOW_RE ("don't call me today" is busy, not do-not-call).
+_NOT_NOW_EN_RE = re.compile(r"\b(today|at\s+the\s+moment|this\s+week)\b", re.IGNORECASE)
+
+
+def _is_do_not_call_any_language(text: str) -> bool:
+    """English, romanised Tamil / Hindi and Tamil / Hindi / Telugu script (every backend)."""
+    asked = (_DO_NOT_CALL_RE.search(text) or _DO_NOT_CALL_INDIC_RE.search(text) or _DO_NOT_CALL_EN_RE.search(text)
+             or _REMOVE_EN_RE.search(text))
+    if not asked:
+        return False
+    if _REMOVE_EN_RE.search(text):
+        return True
+    rest = _FROM_NOW_ON_RE.sub(" ", text)
+    if _AGAIN_EN_RE.search(rest) and not _CALLBACK_TIME_RE.search(rest):
+        return True
+    return not (_NOT_NOW_RE.search(rest) or _NOT_NOW_EN_RE.search(rest))
+
+
 def is_do_not_call(text: str, language: Optional[str] = None) -> bool:
     """DNC_ENFORCE: a request never to be called again (English, romanised, Tamil / Hindi / Telugu / Kannada
     script), unless the same words only mean "not now" or ask for a later call.
-    language: the call's language (default: this backend's CALL_LANGUAGE). An English backend decides exactly
-    as it did before the Kannada / "remove my number" patterns were added; a Tamil / Hindi / Kannada / ...
+    English (every backend): "from now on" is not a "not now"; "...again / anymore" counts unless a time to call
+    back is named; "remove me / my number" always counts; "today" / "at the moment" are "not now".
+    language: the call's language (default: this backend's CALL_LANGUAGE). A Tamil / Hindi / Kannada / ...
     backend also recognises Kannada requests and "remove my number" in an Indic script (which never means
-    "not now", so the not-now words don't cancel it). Anything detected before is still detected."""
+    "not now", so the not-now words don't cancel it)."""
     text = text.replace("\u2019", "'")
-    asked = _DO_NOT_CALL_RE.search(text) or _DO_NOT_CALL_INDIC_RE.search(text)
-    if asked and not _NOT_NOW_RE.search(text):
+    if _is_do_not_call_any_language(text):
         return True
     if (language or default_settings.call_language) == "en":
         return False
@@ -627,6 +675,15 @@ def greeting_pace(first_message: Optional[str], cfg: Settings = default_settings
     return cfg.GREETING_TTS_SPEED if identity_after_greeting(first_message) else None
 
 
+# Languages whose Autonomous AI Agent calls are paused (temporary) until a native speaker has reviewed the
+# do-not-call phrases and opening lines. Only autonomous flows are refused; guided and ordinary flows call as
+# before. Keep in step with AI_AGENT_AUTONOMOUS_CALLS_BLOCKED in packages/shared/src/aiAgents.ts.
+AUTONOMOUS_CALLS_BLOCKED: Dict[str, str] = {
+    "kn": "Kannada Autonomous AI calls are paused until a native speaker has reviewed the Kannada do-not-call "
+          "phrases and opening lines.",
+}
+
+
 class CallError(Exception):
     def __init__(self, status_code: int, message: str, code: Optional[str] = None):
         super().__init__(message)
@@ -693,6 +750,9 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
             if cfg.KEY_LINES_SCRIPTED:  # else the AI says them, as before
                 flow_vars.update({f"flow_key_{k}": v for k, v in rs.flow_key_lines(resolved.flow).items()})
             autonomous = resolved.flow.autonomous  # Autonomous AI Agent (Dispatch "AI Agents"); None = as before
+            if autonomous is not None and cfg.call_language in AUTONOMOUS_CALLS_BLOCKED:
+                # Paused in this language (Dispatch refuses it first; this is the backstop): nothing is dialled.
+                raise CallError(409, AUTONOMOUS_CALLS_BLOCKED[cfg.call_language], "autonomous_paused")
             if (cfg.DNC_ENFORCE or autonomous is not None) and (dnc_line := rs.flow_dnc_line(resolved.flow)):
                 flow_vars["flow_dnc_line"] = dnc_line  # spoken word for word on a do-not-call request
             if autonomous is not None:

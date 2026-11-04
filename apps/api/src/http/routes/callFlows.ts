@@ -40,6 +40,7 @@ import {
   addTestCallNumberInput,
   AI_CALL_DEFAULT_GREETING_DELAY_SEC,
   AI_CALL_LANGUAGE_NAMES,
+  autonomousCallBlockedReason,
   aiCallLanguageQuery,
   DEFAULT_AI_CALL_LANGUAGE,
   isAiCallLanguage,
@@ -734,6 +735,8 @@ callFlowsRouter.post(
     if (!version) throw notFound("Version");
     const definition: CallFlowDefinition | null = callFlowDefinition.safeParse(version.definition).data ?? null;
     if (!definition) throw badRequest("This version is not valid — fix and save it first");
+    const paused = autonomousCallBlockedReason(language, definition);
+    if (paused) throw conflict(paused);
     const check = await previewFlow(definition, {}, language).catch(voiceError);
     if (!check.valid) throw badRequest("The voice backend rejected this flow", { errors: check.errors });
 

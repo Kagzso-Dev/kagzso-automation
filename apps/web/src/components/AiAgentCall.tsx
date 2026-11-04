@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  AI_AGENT_AUTONOMOUS_CALLS_BLOCKED,
   AI_AGENT_GENDER_LABELS,
   AI_AGENT_GENDERS,
   AI_CALL_LANGUAGE_NAMES,
@@ -52,6 +53,16 @@ export function AiAgentCall({ agent }: { agent: AiAgentView }) {
     },
   });
 
+  // Autonomous calls paused in this language (the API refuses them too): everything else on the agent still works.
+  const paused = agent.mode === "autonomous" ? AI_AGENT_AUTONOMOUS_CALLS_BLOCKED[agent.language] : undefined;
+  if (paused) {
+    return (
+      <div className="max-w-3xl rounded-lg border border-warn/40 bg-warn-soft px-4 py-3 text-sm text-warn" role="note">
+        <div className="font-semibold">Calls are paused</div>
+        <div className="mt-0.5">{paused}</div>
+      </div>
+    );
+  }
   if (!agent.liveVersion) {
     return (
       <p className="text-sm text-slate-550">

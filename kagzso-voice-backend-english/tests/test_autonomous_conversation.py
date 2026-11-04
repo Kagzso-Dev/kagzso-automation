@@ -32,6 +32,9 @@ NO_INVENTION = "never guess or invent"
 
 def _flow(lang: str, monkeypatch) -> dict:
     monkeypatch.setattr(settings, "CALL_LANGUAGE", lang)
+    # Kannada autonomous calls are paused in production (AUTONOMOUS_CALLS_BLOCKED); these tests check the call
+    # behaviour that applies once the native-speaker review lifts the pause.
+    monkeypatch.setattr(cs, "AUTONOMOUS_CALLS_BLOCKED", {})
     return json.loads((FIXTURES / f"{lang}.json").read_text(encoding="utf-8"))
 
 
@@ -140,7 +143,7 @@ def test_customer_refusal_ends_politely_without_do_not_call(client, auth, fakes,
 
 # ------------------------------------------------------------------ do-not-call in every agent language
 DNC = {
-    "en": ("Please never call this number again", "Understood. I respect your request. Thank you."),
+    "en": ("I'm busy now, don't call me again from now on", "Understood. I respect your request. Thank you."),
     "ta": ("இனிமே கால் பண்ணாதீங்க", "சரி, புரியுது. உங்க request-ஐ மதிக்கிறோம். நன்றி."),
     "hi": ("मुझे दोबारा कॉल मत करो", "ठीक है, आपकी request का पूरा सम्मान है. धन्यवाद."),
     "kn": ("ದಯವಿಟ್ಟು ಮತ್ತೆ ಕಾಲ್ ಮಾಡಬೇಡಿ", "ಸರಿ, ಅರ್ಥ ಆಯ್ತು. ನಿಮ್ಮ request-ಅನ್ನು ಗೌರವಿಸುತ್ತೇವೆ. ಧನ್ಯವಾದಗಳು."),
