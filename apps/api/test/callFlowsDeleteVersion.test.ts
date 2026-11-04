@@ -14,6 +14,7 @@ let flows: Flow[] = [];
 let deleteCalls: unknown[] = [];
 
 const tx = {
+  aiAgent: { findFirst: async () => null }, // no AI Agents here: no flow is agent-managed
   callFlow: {
     findUnique: async ({ where }: { where: { id: string } }) => {
       const f = flows.find((x) => x.id === where.id);

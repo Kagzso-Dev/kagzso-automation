@@ -106,6 +106,11 @@ const db = {
       const v = await callFlowVersion.create({ data: { ...versions.create, flowId: f.id } });
       return { ...f, versions: [v] };
     },
+    // The Voice Call Flows list includes each flow's versions.
+    findMany: async ({ where }: { where?: Record<string, unknown> } = {}) =>
+      T("callFlow")
+        .filter((r) => matches(r, where))
+        .map((f) => ({ ...f, versions: T("callFlowVersion").filter((v) => v.flowId === f.id) })),
   },
   callFlowVersion,
 };
@@ -138,7 +143,7 @@ const req = (method: string, path: string, body?: unknown, role: "ADMIN" | "EDIT
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token(role)}` },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-const upload = (agentId: string, files: { name: string; text: string }[], extra: Record<string, string> = {}) => {
+const upload = (agentId: string, files: { name: string; text: string | Uint8Array }[], extra: Record<string, string> = {}) => {
   const form = new FormData();
   for (const f of files) form.append("files", new Blob([f.text]), f.name);
   for (const [k, v] of Object.entries(extra)) form.append(k, v);
@@ -212,6 +217,32 @@ describe("agents", () => {
     expect((await req("GET", `/api/ai-agents/${a.id}`, undefined, "EDITOR")).status).toBe(200);
   });
 
+  it("only admins change anything or read the knowledge; editors are stopped at the role gate", async () => {
+    const a = await createAgent();
+    await upload(a.id, [{ name: "k.csv", text: CSV }]);
+    const item = T("aiAgentKnowledgeItem")[0]!.id;
+    const file = T("aiAgentKnowledgeFile")[0]!.id;
+    const before = JSON.stringify(tables);
+    const editorCalls: [string, string, unknown?][] = [
+      ["GET", `/api/ai-agents/${a.id}/knowledge`],
+      ["PUT", `/api/ai-agents/${a.id}`, { agent: AGENT }],
+      ["DELETE", `/api/ai-agents/${a.id}`],
+      ["DELETE", `/api/ai-agents/${a.id}/knowledge/files/${file}`],
+      ["POST", `/api/ai-agents/${a.id}/knowledge/items`, { kind: "fact", topic: "X", text: "Y", questions: [], always: false }],
+      ["PATCH", `/api/ai-agents/${a.id}/knowledge/items/${item}`, { text: "changed" }],
+      ["DELETE", `/api/ai-agents/${a.id}/knowledge/items/${item}`],
+      ["POST", `/api/ai-agents/${a.id}/knowledge/decide`, { ids: [item], status: "approved" }],
+      ["POST", `/api/ai-agents/${a.id}/preview`, {}],
+      ["POST", `/api/ai-agents/${a.id}/knowledge-test`, { message: "hi" }],
+      ["POST", `/api/ai-agents/${a.id}/publish`, {}],
+      ["POST", "/api/ai-agents/library/categories", { name: "X" }],
+    ];
+    for (const [method, path, body] of editorCalls) {
+      expect((await req(method, path, body, "EDITOR")).status, `${method} ${path}`).toBe(403);
+    }
+    expect(JSON.stringify(tables)).toBe(before);
+  });
+
   it("each language section lists only its own agents (one shared industry library)", async () => {
     const en = await createAgent("en");
     const ta = await createAgent("ta", { ...AGENT, name: "Tamil agent" });
@@ -280,6 +311,45 @@ describe("knowledge", () => {
     const k = (await (await req("GET", `/api/ai-agents/${a.id}/knowledge`)).json()) as { files: { status: string }[]; items: { topic: string; status: string }[] };
     expect(k.items).toEqual([expect.objectContaining({ topic: "Appointments", status: "draft" })]);
     expect(k.files.map((f) => f.status).sort()).toEqual(["extracted", "replaced"]);
+  });
+
+  it("a scanned (image-only) PDF is refused with a clear message, and never replaces good knowledge", async () => {
+    const scanned = new Uint8Array(readFileSync(new URL("./fixtures/knowledge/scanned.pdf", import.meta.url)));
+    const a = await createAgent();
+    await upload(a.id, [{ name: "k.csv", text: CSV }]);
+    const fileId = T("aiAgentKnowledgeFile")[0]!.id;
+    const itemId = T("aiAgentKnowledgeItem")[0]!.id;
+    await req("POST", `/api/ai-agents/${a.id}/knowledge/decide`, { ids: [itemId], status: "approved" });
+    const r = await upload(a.id, [{ name: "letter.pdf", text: scanned }], { replacesFileId: fileId });
+    const saved = ((await r.json()) as { files: { status: string; error: string; itemCount: number }[] }).files[0]!;
+    expect(saved.status).toBe("failed");
+    expect(saved.error).toMatch(/no selectable text.*scanned or image-only.*not supported/);
+    expect(saved.itemCount).toBe(0);
+    const k = (await (await req("GET", `/api/ai-agents/${a.id}/knowledge`)).json()) as { files: { id: string; status: string }[]; items: { id: string; status: string }[] };
+    expect(k.files.find((f) => f.id === fileId)?.status).toBe("extracted"); // the old file stays
+    expect(k.items.find((i) => i.id === itemId)?.status).toBe("approved"); // and its approved items
+  });
+
+  it("upload limits answer with a readable 400 (not a server error)", async () => {
+    const a = await createAgent();
+    const big = await upload(a.id, [{ name: "big.txt", text: new Uint8Array(10 * 1024 * 1024 + 1) }]);
+    expect(big.status).toBe(400);
+    expect(((await big.json()) as { error: string }).error).toBe("Each file must be 10 MB or smaller");
+    const many = await upload(a.id, Array.from({ length: 11 }, (_, i) => ({ name: `f${i}.txt`, text: "Billing: Kagzso automates billing." })));
+    expect(many.status).toBe(400);
+    expect(((await many.json()) as { error: string }).error).toMatch(/At most 10 files per upload/);
+    expect(T("aiAgentKnowledgeFile")).toEqual([]);
+  });
+
+  it("a real text PDF upload becomes draft items with page sources", async () => {
+    const pdf = new Uint8Array(readFileSync(new URL("./fixtures/knowledge/multipage.pdf", import.meta.url)));
+    const a = await createAgent();
+    const saved = ((await (await upload(a.id, [{ name: "guide.pdf", text: pdf }])).json()) as { files: { status: string; itemCount: number }[] }).files[0]!;
+    expect(saved).toMatchObject({ status: "extracted", itemCount: 3 });
+    const k = (await (await req("GET", `/api/ai-agents/${a.id}/knowledge`)).json()) as { items: { topic: string; status: string; source: string }[] };
+    expect(k.items.map((i) => [i.topic, i.source, i.status])).toEqual([
+      ["Section 1", "page 1", "draft"], ["Section 2", "page 2", "draft"], ["Section 3", "page 3", "draft"],
+    ]);
   });
 });
 
@@ -353,5 +423,75 @@ describe("publish and call", () => {
     // A flow of another language can't be picked.
     T("callFlow").push({ id: "ta_flow", name: "Tamil", base: "nila", language: "ta", archivedAt: null });
     expect((await req("POST", "/api/ai-agents", { language: "en", agent: { name: "x", mode: "guided", guidedFlowId: "ta_flow" } })).status).toBe(400);
+  });
+});
+
+describe("the generated Call Flow is managed by its agent", () => {
+  async function published() {
+    const a = await createAgent();
+    const r = await req("POST", `/api/ai-agents/${a.id}/publish`);
+    expect(r.status).toBe(200);
+    const { flowId } = (await r.json()) as { flowId: string };
+    return { a, flowId };
+  }
+  const snapshot = () => JSON.stringify([T("callFlow"), T("callFlowVersion")]);
+
+  it("Voice Call Flows can't change it: every write is refused with the reason, nothing changes", async () => {
+    const { a, flowId } = await published();
+    const definition = T("callFlowVersion").find((v) => v.flowId === flowId)!.definition;
+    const before = snapshot();
+    const writes: [string, string, unknown?][] = [
+      ["PUT", `/api/call-flows/${flowId}/draft`, { definition }],
+      ["DELETE", `/api/call-flows/${flowId}/draft`],
+      ["POST", `/api/call-flows/${flowId}/publish`],
+      ["POST", `/api/call-flows/${flowId}/versions/1/restore`],
+      ["DELETE", `/api/call-flows/${flowId}/versions/1`],
+      ["POST", `/api/call-flows/${flowId}/archive`],
+      ["DELETE", `/api/call-flows/${flowId}`, { confirm: "DELETE" }],
+    ];
+    for (const [method, path, body] of writes) {
+      const r = await req(method, path, body);
+      expect(r.status, `${method} ${path}`).toBe(409);
+      expect(((await r.json()) as { error: string }).error).toMatch(/generated by the AI Agent "ABC Hospital - Thaara".*Copy this flow/);
+    }
+    expect(snapshot()).toBe(before);
+    // Viewing works and says who manages it (the list too).
+    const detail = (await (await req("GET", `/api/call-flows/${flowId}`)).json()) as { managedBy: unknown };
+    expect(detail.managedBy).toEqual({ agentId: a.id, agentName: "ABC Hospital - Thaara" });
+    const list = (await (await req("GET", "/api/call-flows")).json()) as { items: { id: string; managedBy: unknown }[] };
+    expect(list.items.find((f) => f.id === flowId)?.managedBy).toEqual({ agentId: a.id, agentName: "ABC Hospital - Thaara" });
+  });
+
+  it("an ordinary flow is not managed; an archived agent's flow becomes an ordinary flow again", async () => {
+    const { a, flowId } = await published();
+    T("callFlow").push({ id: "plain", name: "Plain", base: "executive", language: "en", archivedAt: null, updatedAt: new Date() });
+    expect(((await (await req("GET", "/api/call-flows/plain")).json()) as { managedBy: unknown }).managedBy).toBeNull();
+    expect((await req("DELETE", `/api/ai-agents/${a.id}`)).status).toBeLessThan(300);
+    expect(((await (await req("GET", `/api/call-flows/${flowId}`)).json()) as { managedBy: unknown }).managedBy).toBeNull();
+    expect((await req("POST", `/api/call-flows/${flowId}/archive`)).status).toBe(200);
+  });
+
+  it("publishing never silently replaces a draft left on the flow: it asks, then replaces only when confirmed", async () => {
+    const { a, flowId } = await published();
+    const live = T("callFlowVersion").find((v) => v.flowId === flowId)!;
+    // A hand edit saved before generated flows were read-only.
+    T("callFlowVersion").push({ ...live, id: "hand", version: 2, status: "DRAFT", publishedAt: null, createdByEmail: "ops@test", definition: { hand: true } });
+    const before = snapshot();
+    const r = await req("POST", `/api/ai-agents/${a.id}/publish`, {});
+    expect(r.status).toBe(409);
+    const body = (await r.json()) as { error: string; code: string; details: { draftConflict: { version: number; by: string } } };
+    expect(body.code).toBe("draft_conflict");
+    expect(body.details.draftConflict).toMatchObject({ version: 2, by: "ops@test" });
+    expect(body.error).toMatch(/unpublished draft \(v2, saved by ops@test\).*Copy the flow/);
+    expect(snapshot()).toBe(before); // nothing replaced
+    const ok = await req("POST", `/api/ai-agents/${a.id}/publish`, { replaceDraft: true });
+    expect(ok.status).toBe(200);
+    expect(T("callFlowVersion").find((v) => v.id === "hand")!.definition).not.toEqual({ hand: true });
+  });
+
+  it("the agent's own publishes never ask (no draft is left behind)", async () => {
+    const { a } = await published();
+    expect((await req("POST", `/api/ai-agents/${a.id}/publish`, {})).status).toBe(200);
+    expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
   });
 });

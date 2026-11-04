@@ -220,7 +220,7 @@ def test_knowledge_cases_match_dispatch(case):
 
 
 # ------------------------------------------------------------------ a mocked call per language, compiled flow
-GREETING_WORD = {"en": "Thaara calling from", "ta": "நான் Thaara", "hi": "मैं Thaara", "kn": "ನಾನು Thaara"}
+GREETING_WORD = {"en": "Thaara calling from", "ta": "நான் Thaara", "hi": "मेरा नाम Thaara", "kn": "ನಾನು Thaara"}
 
 
 @pytest.mark.parametrize("lang", ["en", "ta", "hi", "kn"])

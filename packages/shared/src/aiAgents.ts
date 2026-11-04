@@ -260,27 +260,41 @@ export function knowledgeTextIssues(text: string, { policy = true }: { policy?: 
 // {{customer_name}} when the call is placed. The opening has no name in it, so the voice backend asks the
 // identity question right after it (or at once when the customer speaks first) and skips it without a name.
 // Only the standard languages have lines: an agent can't be compiled for another language (never translated).
-// TODO(native review before release): ta, hi, kn.
-export const AI_AGENT_OPENINGS: Partial<Record<AiCallLanguage, { greeting: string; identity: string; reask: string }>> = {
+// dnc: the do-not-call line, spoken word for word when the backend detects a do-not-call request (autonomous
+// agents always enforce it), in the call's language. Hindi lines avoid gendered verbs (रहा / रही): the executive
+// name is editable, so the line must fit any name.
+// Reviewed 2026-11-03 (grammar, respectful address, gender handling) - STILL NEEDS a native speaker to listen
+// to the TTS before release: ta, hi, kn.
+export interface AiAgentOpening {
+  greeting: string;
+  identity: string;
+  reask: string;
+  dnc: string;
+}
+export const AI_AGENT_OPENINGS: Partial<Record<AiCallLanguage, AiAgentOpening>> = {
   en: {
     greeting: "Hello, {{time_greeting}} {{title}}. This is {agent} calling from {company}.",
     identity: "Am I speaking with {{customer_name}}?",
     reask: "Sorry, am I speaking with {{customer_name}}?",
+    dnc: "Understood. I respect your request. Thank you.",
   },
   ta: {
     greeting: "வணக்கம் {{title}}, {{time_greeting}}. நான் {agent}, {company}-ல இருந்து பேசறேன்.",
     identity: "{{customer_name}}-கிட்ட தான் பேசறேனா?",
     reask: "Sorry, {{customer_name}}-கிட்ட தான் பேசறேனா?",
+    dnc: "சரி, புரியுது. உங்க request-ஐ மதிக்கிறோம். நன்றி.",
   },
   hi: {
-    greeting: "नमस्ते {{title}}, {{time_greeting}}. मैं {agent}, {company} से बात कर रही हूँ.",
+    greeting: "नमस्ते {{title}}, {{time_greeting}}. मेरा नाम {agent} है, {company} से.",
     identity: "क्या मेरी बात {{customer_name}} जी से हो रही है?",
     reask: "Sorry, क्या मेरी बात {{customer_name}} जी से हो रही है?",
+    dnc: "ठीक है, आपकी request का पूरा सम्मान है. धन्यवाद.",
   },
   kn: {
-    greeting: "ನಮಸ್ಕಾರ {{title}}, {{time_greeting}}. ನಾನು {agent}, {company} ಇಂದ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆ.",
-    identity: "ನಾನು {{customer_name}} ಅವರ ಜೊತೆ ಮಾತನಾಡುತ್ತಿದ್ದೇನಾ?",
-    reask: "Sorry, ನಾನು {{customer_name}} ಅವರ ಜೊತೆ ಮಾತನಾಡುತ್ತಿದ್ದೇನಾ?",
+    greeting: "ನಮಸ್ಕಾರ {{title}}, {{time_greeting}}. ನಾನು {agent}, {company} ಕಡೆಯಿಂದ ಕರೆ ಮಾಡುತ್ತಿದ್ದೇನೆ.",
+    identity: "ನಾನು {{customer_name}} ಅವರ ಜೊತೆ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆಯೇ?",
+    reask: "Sorry, ನಾನು {{customer_name}} ಅವರ ಜೊತೆ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆಯೇ?",
+    dnc: "ಸರಿ, ಅರ್ಥ ಆಯ್ತು. ನಿಮ್ಮ request-ಅನ್ನು ಗೌರವಿಸುತ್ತೇವೆ. ಧನ್ಯವಾದಗಳು.",
   },
 };
 

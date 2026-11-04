@@ -290,6 +290,7 @@ const flows = new Map<string, { id: string; name: string; archivedAt: Date | nul
 const byFlow = (flowId: string) => rows.filter((r) => r.flowId === flowId).sort((a, b) => b.version - a.version);
 
 const db = {
+  aiAgent: { findFirst: async () => null }, // no AI Agents here: no flow is agent-managed
   callFlow: {
     findUnique: async ({ where }: { where: { id: string } }) => flows.get(where.id) ?? null,
     update: async ({ where }: { where: { id: string } }) => flows.get(where.id),

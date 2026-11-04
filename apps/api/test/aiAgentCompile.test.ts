@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   AI_AGENT_DEFAULTS,
+  AI_AGENT_OPENINGS,
   aiAgentInput,
   callFlowDefinition,
   knowledgeTextIssues,
@@ -86,9 +87,27 @@ describe.each(["en", "ta", "hi", "kn"] as const)("compiled agent flow (%s)", (la
     const base = builtinExecutive(language);
     const locked = (d: CallFlowDefinition) => d.blocks.filter((b) => "locked" in b);
     expect(locked(out)).toEqual(locked(base));
-    for (const id of ["do_not_call", "not_interested", "busy", "end_call_request", "outcome_rules", "rules"]) {
+    for (const id of ["not_interested", "busy", "end_call_request", "outcome_rules", "rules"]) {
       expect(text(out, id)).toBe(text(base, id).replace(/\{\{\s*title_to_use\s*\}\}/g, "{{title}}"));
     }
+    // do_not_call: the same block, with the line the backend speaks word for word in the call's language.
+    const dnc = AI_AGENT_OPENINGS[language]!.dnc;
+    expect(text(out, "do_not_call")).toBe(
+      text(base, "do_not_call").replace('"Understood. I respect your request. Thank you."', `"${dnc}"`),
+    );
+    expect(text(out, "do_not_call")).toContain(`> "${dnc}"`);
+  });
+
+  it("speaks the language's own lines (do-not-call included); Hindi lines avoid gendered verbs", () => {
+    const o = AI_AGENT_OPENINGS[language]!;
+    for (const line of [o.greeting, o.identity, o.reask, o.dnc]) {
+      expect(line.trim()).toBe(line);
+      expect(line).not.toMatch(/[\r\n]/);
+      if (language !== "en") expect(line).not.toBe(AI_AGENT_OPENINGS.en!.dnc);
+    }
+    // The executive talks about themself in these two (identity's "हो रही है" agrees with बात, not the speaker).
+    if (language === "hi") for (const line of [o.greeting, o.dnc]) expect(line).not.toMatch(/रहा|रही|गया|गई|ता हूँ|ती हूँ/);
+    if (language !== "en") expect(o.dnc).not.toMatch(/^[\x00-\x7f]*$/); // not an English-only line
   });
 
   it("writes / matches the fixture the voice backend validates", () => {

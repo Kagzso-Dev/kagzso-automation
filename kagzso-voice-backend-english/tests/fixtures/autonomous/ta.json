@@ -55,7 +55,7 @@
     {
       "id": "do_not_call",
       "group": "closing",
-      "text": "# DO NOT CALL - HIGHEST PRIORITY\n\nIf the customer says:\n\n* \"Don't call me again.\"\n* \"Stop calling.\"\n* \"Remove my number.\"\n* \"No more calls.\"\n\nImmediately say:\n\n> \"Understood. I respect your request. Thank you.\"\n\nThen end the call immediately. No further questions, no explanation, no recovery attempt. Do-not-call always overrides everything else.\n\n---\n\n"
+      "text": "# DO NOT CALL - HIGHEST PRIORITY\n\nIf the customer says:\n\n* \"Don't call me again.\"\n* \"Stop calling.\"\n* \"Remove my number.\"\n* \"No more calls.\"\n\nImmediately say:\n\n> \"சரி, புரியுது. உங்க request-ஐ மதிக்கிறோம். நன்றி.\"\n\nThen end the call immediately. No further questions, no explanation, no recovery attempt. Do-not-call always overrides everything else.\n\n---\n\n"
     },
     {
       "id": "end_call_request",

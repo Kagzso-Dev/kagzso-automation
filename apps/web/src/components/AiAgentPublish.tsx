@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AI_AGENT_GENDER_LABELS, AI_AGENT_GENDERS, type AiAgentGender, type AiAgentView } from "@dispatch/shared";
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { useLanguageReady } from "../lib/aiCallLanguage";
 import { AGENT_QUERY_KEYS, type AgentPreview, type KnowledgeTest } from "../lib/aiAgents";
 import { useConfirm } from "./confirm";
@@ -30,10 +30,27 @@ export function AiAgentPublish({ agent }: { agent: AiAgentView }) {
     mutationFn: () => api<KnowledgeTest>(`/api/ai-agents/${agent.id}/knowledge-test`, { method: "POST", json: { message }, notify: false }),
   });
   const publish = useMutation({
-    mutationFn: () => api<{ version: number }>(`/api/ai-agents/${agent.id}/publish`, { method: "POST", notify: false }),
+    mutationFn: (replaceDraft: boolean) =>
+      api<{ version: number }>(`/api/ai-agents/${agent.id}/publish`, { method: "POST", json: { replaceDraft }, notify: false }),
     onSuccess: (res) => {
       AGENT_QUERY_KEYS.forEach((k) => void qc.invalidateQueries({ queryKey: [...k] }));
       toast.success(`Published v${res.version}`, ["New calls use this version. Calls already queued keep theirs."]);
+    },
+    onError: async (err) => {
+      // The generated flow has a draft that isn't the agent's (an edit from before it became read-only):
+      // replace it only when the admin says so.
+      const conflict = err instanceof ApiError && err.status === 409 ? draftConflictOf(err.details) : null;
+      if (!conflict) return;
+      const ok = await confirm({
+        title: `Replace draft v${conflict.version}?`,
+        body:
+          `The agent's Call Flow has a draft${conflict.by ? ` saved by ${conflict.by}` : ""} that didn't come from this agent. ` +
+          "Publishing replaces it with the agent's settings and approved knowledge. To keep it, Cancel and use Copy flow " +
+          "in Voice Call Flows first.",
+        confirmText: "Replace and publish",
+        tone: "danger",
+      });
+      if (ok) publish.mutate(true);
     },
   });
   const p = preview.data?.preview;
@@ -54,14 +71,14 @@ export function AiAgentPublish({ agent }: { agent: AiAgentView }) {
               body: "Its settings, instructions and approved knowledge become a new live version of its Call Flow. Nothing is called.",
               confirmText: "Publish",
             });
-            if (ok) publish.mutate();
+            if (ok) publish.mutate(false);
           }}
         >
           {publish.isPending ? "Publishing…" : "Publish"}
         </button>
       </div>
       {!ready && <p className="text-warn">This language's voice backend isn't set up, so the agent can't be checked or published yet.</p>}
-      {publish.error && <ErrorNote error={publish.error} />}
+      {publish.error && !(publish.error instanceof ApiError && draftConflictOf(publish.error.details)) && <ErrorNote error={publish.error} />}
 
       <div className="rounded-xl border border-line bg-surface p-4 shadow-sm">
         <h3 className="mb-2 font-semibold">Preview the opening</h3>
@@ -136,4 +153,10 @@ export function AiAgentPublish({ agent }: { agent: AiAgentView }) {
       </div>
     </div>
   );
+}
+
+/** The publish API's "draft_conflict" details, or null. */
+function draftConflictOf(details: unknown): { version: number; by: string | null } | null {
+  const c = (details as { draftConflict?: { version?: unknown; by?: unknown } } | undefined)?.draftConflict;
+  return c && typeof c.version === "number" ? { version: c.version, by: typeof c.by === "string" ? c.by : null } : null;
 }

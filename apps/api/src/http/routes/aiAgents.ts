@@ -60,7 +60,9 @@ import {
   getAgentRow,
   listAgents,
   listKnowledge,
+  discardAgentDraft,
   markPublished,
+  openDraftOf,
   saveAgentDraft,
   updateAgent,
   updateKnowledgeItem,
@@ -104,6 +106,24 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: AI_KNOWLEDGE_MAX_FILE_BYTES, files: AI_KNOWLEDGE_MAX_FILES_PER_UPLOAD },
 });
+/** The upload middleware, with multer's limit errors as a readable 400 (not an "Internal server error"). */
+function uploadFiles(req: Request, res: Response, next: NextFunction) {
+  upload.array("files", AI_KNOWLEDGE_MAX_FILES_PER_UPLOAD)(req, res, (err?: unknown) => {
+    if (err instanceof multer.MulterError) {
+      const mb = Math.round(AI_KNOWLEDGE_MAX_FILE_BYTES / (1024 * 1024));
+      return next(
+        badRequest(
+          err.code === "LIMIT_FILE_SIZE"
+            ? `Each file must be ${mb} MB or smaller`
+            : err.code === "LIMIT_FILE_COUNT" || err.code === "LIMIT_UNEXPECTED_FILE"
+              ? `At most ${AI_KNOWLEDGE_MAX_FILES_PER_UPLOAD} files per upload, in the field "files"`
+              : err.message,
+        ),
+      );
+    }
+    next(err as Error | undefined);
+  });
+}
 
 function domainError(err: unknown): never {
   if (err instanceof AiAgentError || err instanceof AiIndustryError || err instanceof CallFlowError) {
@@ -119,6 +139,7 @@ const agentParam = z.object({ id: z.string().min(1).max(64) });
 const fileParam = agentParam.extend({ fileId: z.string().min(1).max(64) });
 const itemParam = agentParam.extend({ itemId: z.string().min(1).max(64) });
 const archivedPatch = z.object({ archived: z.boolean().optional() });
+const publishBody = z.object({ replaceDraft: z.boolean().optional() });
 
 /* ------------------------------------------------------------------ library */
 aiAgentsRouter.get(
@@ -221,6 +242,7 @@ aiAgentsRouter.delete(
 /* ------------------------------------------------------------------ knowledge */
 aiAgentsRouter.get(
   "/:id/knowledge",
+  adminOnly, // like a Call Flow's training, an agent's knowledge is admin-only (editors only see the counts)
   wrap(async (req, res) => {
     const { id } = agentParam.parse(req.params);
     res.json(await guard(listKnowledge(id)));
@@ -231,7 +253,7 @@ aiAgentsRouter.post(
   "/:id/knowledge/files",
   adminOnly,
   uploadLimiter,
-  upload.array("files", AI_KNOWLEDGE_MAX_FILES_PER_UPLOAD),
+  uploadFiles,
   wrap(async (req, res) => {
     const { id } = agentParam.parse(req.params);
     const files = (req.files as Express.Multer.File[] | undefined) ?? [];
@@ -381,12 +403,28 @@ aiAgentsRouter.post(
   writeLimiter,
   wrap(async (req, res) => {
     const { id } = agentParam.parse(req.params);
+    const body = publishBody.parse(req.body ?? {});
     const { agent, language, definition } = await compiled(id);
     // The voice backend of the agent's language is the authority (script, training rules, token cap).
     const check = await previewFlow(definition, {}, language).catch(voiceError);
     if (!check.valid) throw badRequest("The voice backend rejected the compiled flow", { errors: check.errors });
+    // Never replace a draft someone left on the generated flow without asking.
+    const open = await openDraftOf(agent);
+    if (open && !body.replaceDraft) {
+      throw new AppError(
+        409,
+        `The agent's Call Flow has an unpublished draft (v${open.version}${open.createdByEmail ? `, saved by ${open.createdByEmail}` : ""}) ` +
+          "that this publish would replace. Copy the flow in Voice Call Flows first to keep it, then publish again and confirm.",
+        "draft_conflict",
+        { draftConflict: { version: open.version, by: open.createdByEmail, updatedAt: open.updatedAt } },
+      );
+    }
     const { flowId, draftId } = await guard(saveAgentDraft(agent, definition, req.user!.email));
-    const published = await guard(publishDraft(draftId));
+    const published = await guard(publishDraft(draftId)).catch(async (err) => {
+      await discardAgentDraft(draftId).catch((e) => logger.warn({ err: e, agentId: id }, "ai agent: failed draft not removed"));
+      throw err;
+    });
+    if (open) logger.info({ agentId: id, flowId, replacedDraft: open.version, by: req.user!.email }, "ai agent publish replaced an open draft");
     await markPublished(await getAgentRow(id));
     logger.info({ agentId: id, flowId, version: published.version, language, by: req.user!.email }, "ai agent published");
     res.json({ flowId, version: published.version, agent: await getAgent(id) });

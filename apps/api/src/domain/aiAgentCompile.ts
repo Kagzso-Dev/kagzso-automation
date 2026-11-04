@@ -197,6 +197,18 @@ function instructionsBlock(text: string): string {
   );
 }
 
+// The built-in executive's do-not-call line. The voice backend speaks a flow's first quoted line in its
+// "do_not_call" block word for word (reply_speed.flow_dnc_line), so a Tamil / Hindi / Kannada agent gets it
+// in its own language instead of in English.
+const BUILTIN_DNC_QUOTE = '"Understood. I respect your request. Thank you."';
+
+function doNotCallBlock(text: string, line: string): string {
+  if (!text.includes(BUILTIN_DNC_QUOTE)) {
+    throw new AgentCompileError("The built-in Business executive flow's do-not-call line changed — update the AI Agents compiler");
+  }
+  return text.replace(BUILTIN_DNC_QUOTE, `"${line}"`);
+}
+
 function fill(template: string, exec: string, company: string): string {
   return template.replace("{agent}", exec).replace("{company}", company);
 }
@@ -228,6 +240,7 @@ export function compileAgentFlow(input: CompileInput): CallFlowDefinition {
     if (b.id === "agent") text = agentBlock(input);
     else if (b.id === "opening") text = openingBlock(greeting.replace(/\{\{\s*(time_greeting|title)\s*\}\}/g, (_m, v) => (v === "title" ? "sir / madam" : "Good morning")));
     else if (b.id === "company_facts") text = companyFactsBlock(b.text, company);
+    else if (b.id === "do_not_call") text = doNotCallBlock(b.text, opening.dnc);
     blocks.push({ ...b, text: swapTitle(text) });
     if (b.id === "agent") {
       blocks.push({ id: "industry_context", group: "main_script", text: industryBlock(input) });

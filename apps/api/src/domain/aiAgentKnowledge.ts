@@ -214,9 +214,36 @@ export function textToItems(text: string, fallbackTopic: string, pageOf?: (offse
   return { items: items.slice(0, MAX_ITEMS_PER_FILE), notes: items.length > MAX_ITEMS_PER_FILE ? [...notes, `only the first ${MAX_ITEMS_PER_FILE} items were kept`] : notes };
 }
 
+/** A .docx / .xlsx (a zip) may unpack to at most this much: a small upload can't expand into gigabytes. */
+export const MAX_UNZIPPED_BYTES = 50 * 1024 * 1024;
+const MAX_ZIP_ENTRIES = 5000;
+
+/**
+ * Opens a .docx / .xlsx zip and checks its declared unpacked size and entry count before anything is
+ * decompressed (a "zip bomb" check, from the zip's own directory).
+ */
+export async function checkedZip(buf: Buffer): Promise<JSZip> {
+  let zip: JSZip;
+  try {
+    zip = await JSZip.loadAsync(buf);
+  } catch {
+    throw new Error("this is not a valid Office file (it is not a zip archive)");
+  }
+  let total = 0;
+  let entries = 0;
+  zip.forEach((_path, entry) => {
+    entries += 1;
+    total += (entry as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize ?? 0;
+  });
+  if (entries > MAX_ZIP_ENTRIES || total > MAX_UNZIPPED_BYTES) {
+    throw new Error(`the file unpacks to more than ${MAX_UNZIPPED_BYTES / (1024 * 1024)} MB - split it into smaller files`);
+  }
+  return zip;
+}
+
 /** The text of a .docx: every paragraph (w:p) on its own line, table cells too. */
 export async function docxText(buf: Buffer): Promise<string> {
-  const zip = await JSZip.loadAsync(buf);
+  const zip = await checkedZip(buf);
   const doc = zip.file("word/document.xml");
   if (!doc) throw new Error("not a Word document (word/document.xml is missing)");
   const xml = await doc.async("string");
@@ -228,21 +255,71 @@ export async function docxText(buf: Buffer): Promise<string> {
     .join("\n");
 }
 
+/** At most this many PDF pages are read (an upload is at most 10 MB; the rest is reported in the notes). */
+export const MAX_PDF_PAGES = 200;
+
+/** Shown when a PDF has pages but no text layer (scanned / photographed / image-only): never accepted as empty. */
+export const PDF_NO_TEXT_MESSAGE =
+  "this PDF has no selectable text - it looks like a scanned or image-only document. Scanned PDFs are not " +
+  "supported (no OCR): upload a PDF with selectable text, a Word (.docx) or a .txt file instead";
+
+interface PdfTextItem {
+  str: string;
+  transform?: number[];
+  hasEOL?: boolean;
+}
+
+/**
+ * One page's text with its line and paragraph breaks. pdf.js 1.10 (pdf-parse's) has no hasEOL: a new line is
+ * where the baseline (transform[5]) moves; a gap of more than ~1.6 lines is a new paragraph, so a heading
+ * stays on its own line ("Billing automation" is not glued to "Kagzso automates...").
+ */
+export function pdfPageText(items: PdfTextItem[]): string {
+  let out = "";
+  let lastY: number | null = null;
+  let lineHeight = 0;
+  for (const item of items) {
+    const y = item.transform?.[5];
+    const size = Math.abs(item.transform?.[3] ?? 0);
+    if (lastY !== null && y !== undefined && Math.abs(y - lastY) > 0.5) {
+      const gap = Math.abs(lastY - y);
+      out += lineHeight > 0 && gap > 1.6 * lineHeight ? "\n\n" : "\n";
+    }
+    out += item.str;
+    if (item.hasEOL) out += "\n";
+    if (y !== undefined) lastY = y;
+    if (size > 0) lineHeight = size;
+  }
+  return out;
+}
+
 /** Text with page numbers for a pdf: pdf-parse's per-page render, joined with blank lines. */
-async function pdfText(buf: Buffer): Promise<{ text: string; pageOf: (offset: number) => number }> {
+async function pdfText(buf: Buffer): Promise<{ text: string; pageOf: (offset: number) => number; pages: number }> {
   const starts: number[] = [];
   let all = "";
-  await pdfParse(buf, {
-    pagerender: async (page: { getTextContent: () => Promise<{ items: { str: string; hasEOL?: boolean }[] }> }) => {
-      const content = await page.getTextContent();
-      const text = content.items.map((i) => i.str + (i.hasEOL ? "\n" : "")).join("");
-      starts.push(all.length);
-      all += text + "\n\n";
-      return text;
-    },
-  } as never);
+  let parsed: { numpages?: number };
+  try {
+    // A copy, never the upload Buffer itself: a small Node Buffer is a view into a shared 8 KB+ pool
+    // (byteOffset > 0), and pdf.js reads the pool from its start - every xref offset is then wrong
+    // ("bad XRef entry"), at random, depending on where the pool slice happens to sit.
+    parsed = await pdfParse(new Uint8Array(buf) as unknown as Buffer, {
+      max: MAX_PDF_PAGES,
+      pagerender: async (page: { getTextContent: () => Promise<{ items: PdfTextItem[] }> }) => {
+        const text = pdfPageText((await page.getTextContent()).items);
+        starts.push(all.length);
+        all += text + "\n\n";
+        return text;
+      },
+    } as never);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const name = err instanceof Error ? err.name : "";
+    if (/password/i.test(`${name} ${msg}`)) throw new Error("the PDF is password-protected - remove the password and upload it again");
+    throw new Error(`this is not a readable PDF (it may be damaged or not really a PDF): ${msg.slice(0, 200)}`);
+  }
   return {
     text: all,
+    pages: parsed.numpages ?? starts.length,
     pageOf: (offset) => {
       let page = 1;
       starts.forEach((s, i) => {
@@ -288,6 +365,7 @@ export async function readSheet(buf: Buffer, format: "csv" | "xlsx"): Promise<{ 
     });
     return { headers: headers.filter(Boolean), rows };
   }
+  await checkedZip(buf); // before ExcelJS unpacks it
   const wb = new ExcelJS.Workbook();
   await (wb.xlsx.load as unknown as (data: Uint8Array) => Promise<unknown>)(buf);
   const ws = wb.worksheets[0];
@@ -324,10 +402,16 @@ export async function extractKnowledge(
     if (sheet.rows.length >= MAX_SHEET_ROWS) out.notes.push(`only the first ${MAX_SHEET_ROWS} rows were read`);
     return out;
   }
+  // An empty result is an error, never an "extracted" file with 0 items: that would look like a success and,
+  // as a replacement, would remove the replaced file's (approved) items.
   if (format === "pdf") {
-    const { text, pageOf } = await pdfText(buf);
-    return textToItems(text, stem, pageOf);
+    const { text, pageOf, pages } = await pdfText(buf);
+    const out = textToItems(text, stem, pageOf);
+    if (!out.items.length) throw new Error(pages > 0 ? PDF_NO_TEXT_MESSAGE : "the PDF has no pages");
+    if (pages > MAX_PDF_PAGES) out.notes.push(`only the first ${MAX_PDF_PAGES} of ${pages} pages were read`);
+    return out;
   }
-  if (format === "docx") return textToItems(await docxText(buf), stem);
-  return textToItems(buf.toString("utf8").replace(/^﻿/, ""), stem);
+  const out = textToItems(format === "docx" ? await docxText(buf) : buf.toString("utf8").replace(/^﻿/, ""), stem);
+  if (!out.items.length) throw new Error("the file has no text to use");
+  return out;
 }

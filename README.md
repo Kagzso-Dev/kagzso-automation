@@ -560,15 +560,29 @@ Instructions** box, a target length (default 1 min) and a hard maximum (default 
   time limit is the hard stop).
 - **Guided** agents just call with an existing published Call Flow (Nila, Follow-up, Executive or a copy),
   unchanged.
+- **Do-not-call** is detected by the backend (`is_do_not_call` in `call_service.py`) in English, romanised Tamil /
+  Hindi / Kannada, and Tamil, Hindi, Telugu and Kannada script, at every stage of the call, before the LLM is asked;
+  the agent then says its do-not-call line in the call's language and hangs up. On a non-English backend "remove my
+  number" in an Indic script also counts. An English backend decides exactly as before (tests:
+  `tests/test_dnc_languages.py`). The Kannada phrases need a native speaker's review with real STT output.
+- **The generated Call Flow is read-only** in Voice Call Flows (badge "AI Agent · read-only"; the API refuses
+  save, publish, import, restore, delete and archive with the reason). Change the agent instead, or **Copy flow**
+  to edit a copy by hand. If a draft is open on the flow when the agent is published (one saved before this
+  rule), the publish stops and asks before replacing it. Archiving the agent makes its flow ordinary again.
 - **Knowledge**: upload CSV, XLSX, PDF, DOCX or TXT; rows / paragraphs become fact and Q&A items, each **Draft**
   until an admin approves it. Items with personal data, links, prices, promises etc. (the voice backend's training
   rules, mirrored in `knowledgeTextIssues`) can't be approved until fixed. Only approved items of that agent are
   compiled into that agent's flow (at most 120), and picked per reply by the existing training retrieval.
-- Opening lines exist for English, Tamil, Hindi and Kannada (`AI_AGENT_OPENINGS`; Tamil, Hindi and Kannada need a
-  native-speaker review before release). Other languages offer guided agents only.
+  A PDF without selectable text (scanned / image-only), an empty file, a damaged PDF or a .docx / .xlsx that
+  unpacks to more than 50 MB is refused with the reason (never stored as an empty success, never replacing a
+  file's approved items). Only the first 200 pages of a PDF are read. No OCR.
+- Opening lines (greeting, identity question, do-not-call line) exist for English, Tamil, Hindi and Kannada
+  (`AI_AGENT_OPENINGS`; reviewed for grammar, address and gender, but Tamil, Hindi and Kannada still need a native
+  speaker to listen to the TTS before release). Hindi lines avoid gendered verbs, as the executive name is
+  editable. Other languages offer guided agents only.
 
 **Deploy:** `npm run prisma:deploy` applies `0031_ai_agents` (five new tables plus a starter library; nothing
-existing changes; `down.sql` drops them), then restart the API and the voice backends (they read the new optional
+existing changes; `down.sql` drops them and explains how to clear Prisma's migration history), then restart the API and the voice backends (they read the new optional
 `autonomous` flow field; flows without it hash and behave exactly as before). No `.env` change.
 
 ### WhatsApp media (header media, received files, Inbox)

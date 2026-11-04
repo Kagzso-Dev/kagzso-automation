@@ -110,6 +110,7 @@ const byFlow = (flowId: string) => rows.filter((r) => r.flowId === flowId).sort(
 const logs = new Map<string, unknown>();
 
 const db = {
+  aiAgent: { findFirst: async () => null }, // no AI Agents here: no flow is agent-managed
   callFlow: {
     findUnique: async ({ where, include }: { where: { id: string }; include?: unknown }) => {
       const f = flows.get(where.id);

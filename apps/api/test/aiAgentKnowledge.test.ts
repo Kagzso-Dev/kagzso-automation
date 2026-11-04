@@ -32,9 +32,10 @@ async function docx(paragraphs: string[]): Promise<Buffer> {
 
 // pdf-parse (already used by contact import) is replaced by a stand-in that renders two pages through the
 // `pagerender` hook, the way the real library calls it: this tests the page numbering and text joining here.
+// The real library on real PDF files: aiAgentKnowledgePdf.test.ts.
 vi.mock("pdf-parse/lib/pdf-parse.js", () => ({
-  default: async (buf: Buffer, opts: { pagerender: (p: unknown) => Promise<string> }) => {
-    const pages = buf.toString("utf8").split("\f");
+  default: async (buf: Uint8Array, opts: { pagerender: (p: unknown) => Promise<string> }) => {
+    const pages = Buffer.from(buf).toString("utf8").split("\f");
     for (const text of pages) {
       await opts.pagerender({
         getTextContent: async () => ({ items: text.split("\n").map((str) => ({ str, hasEOL: true })) }),
@@ -127,6 +128,11 @@ describe("free text (txt / docx / pdf)", () => {
     expect(out.items).toEqual([]);
     expect(out.notes[0]).toMatch(/No text/);
   });
+
+  it("an upload with no text is refused (never an 'extracted' file with 0 items)", async () => {
+    await expect(extractKnowledge(Buffer.from("  \n\n"), "txt", "empty.txt", null)).rejects.toThrow("the file has no text to use");
+    await expect(extractKnowledge(await docx([]), "docx", "empty.docx", null)).rejects.toThrow("the file has no text to use");
+  });
 });
 
 describe("helpers", () => {
@@ -148,5 +154,24 @@ describe("helpers", () => {
     );
     // A customer's question may mention price or a demo; only personal data is refused there.
     expect(itemIssues({ kind: "qa", topic: "Cost", text: "It depends on the scope.", questions: ["How much per month?"] })).toEqual([]);
+  });
+});
+
+describe("upload safety", () => {
+  // A few hundred KB that would unpack to ~60 MB: refused from the zip's directory, before anything is unpacked.
+  async function bomb(entry: string): Promise<Buffer> {
+    const zip = new JSZip();
+    zip.file(entry, "0".repeat(60 * 1024 * 1024));
+    return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 9 } });
+  }
+  it("a .docx or .xlsx that unpacks to more than 50 MB is refused", async () => {
+    const docxBomb = await bomb("word/document.xml");
+    expect(docxBomb.length).toBeLessThan(1024 * 1024);
+    await expect(extractKnowledge(docxBomb, "docx", "big.docx", null)).rejects.toThrow(/unpacks to more than 50 MB/);
+    await expect(extractKnowledge(await bomb("xl/worksheets/sheet1.xml"), "xlsx", "big.xlsx", null)).rejects.toThrow(/unpacks to more than 50 MB/);
+  });
+  it("a .docx / .xlsx that is not a zip says so", async () => {
+    await expect(extractKnowledge(Buffer.from("plain text"), "docx", "x.docx", null)).rejects.toThrow(/not a valid Office file/);
+    await expect(extractKnowledge(Buffer.from("plain text"), "xlsx", "x.xlsx", null)).rejects.toThrow(/not a valid Office file/);
   });
 });

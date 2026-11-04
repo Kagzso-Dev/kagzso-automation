@@ -468,8 +468,31 @@ export async function saveAgentDraft(a: AiAgent, definition: CallFlowDefinition,
   });
 }
 
+/**
+ * An open draft on the agent's generated flow. The agent's own publish saves and publishes in one go and removes
+ * its draft when publishing fails (discardAgentDraft), so an open draft was made some other way (by hand before
+ * generated flows became read-only in Voice Call Flows): publishing would replace it, so the admin is asked first.
+ */
+export async function openDraftOf(a: AiAgent): Promise<{ version: number; createdByEmail: string | null; updatedAt: Date } | null> {
+  if (!a.callFlowId) return null;
+  return prisma.callFlowVersion.findFirst({
+    where: { flowId: a.callFlowId, status: "DRAFT" },
+    select: { version: true, createdByEmail: true, updatedAt: true },
+  });
+}
+
+/** The agent's publish failed after its draft was saved: remove that draft (it is rebuilt from the agent anytime). */
+export async function discardAgentDraft(draftId: string): Promise<void> {
+  await prisma.callFlowVersion.deleteMany({ where: { id: draftId, status: "DRAFT", runs: { none: {} } } });
+}
+
 export async function markPublished(a: AiAgent): Promise<void> {
   await prisma.aiAgent.update({ where: { id: a.id }, data: { publishedHash: await agentInputsHash(a) } });
+}
+
+/** The (not archived) AI Agent whose generated flow this is, or null: such a flow changes only on that agent's publish. */
+export async function managingAgent(flowId: string): Promise<{ id: string; name: string } | null> {
+  return prisma.aiAgent.findFirst({ where: { callFlowId: flowId, archivedAt: null }, select: { id: true, name: true } });
 }
 
 /** The published flow an agent calls with (autonomous: its own; guided: the picked one). */
