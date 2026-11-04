@@ -136,6 +136,13 @@ vi.mock("../src/http/routes/aiCalls.js", async (orig) => ({
 }));
 
 /* ------------------------------------------------------------------ fake voice backend + app */
+// The voices each fake backend offers (GET /api/flows/builtin → voices), as app/core/voices.py lists them. Tamil
+// as configured: the four female voices, Shubh (male, from Sarvam's docs) and an untagged voice (no gender).
+const FEMALE = ["roopa", "ritu", "simran", "ishita"].map((id) => ({ id, name: id[0]!.toUpperCase() + id.slice(1), gender: "female" }));
+const FAKE_VOICES: Record<string, { id: string; name: string; gender?: string; language: string }[]> = {
+  en: FEMALE.map((v) => ({ ...v, language: "English (India)" })),
+  ta: [...FEMALE, { id: "shubh", name: "Shubh", gender: "male" }, { id: "priya", name: "Priya" }].map((v) => ({ ...v, language: "Tamil (India)" })),
+};
 let server: Server;
 let voice: Server;
 let base = "";
@@ -166,7 +173,7 @@ beforeAll(async () => {
       // One fake backend for every language: Tamil / Hindi / Kannada are served under /ta, /hi, /kn.
       const [, lang = "en", path = r.url] = r.url!.match(/^\/(ta|hi|kn)(\/.*)$/) ?? [];
       if (path === "/api/flows/builtin") {
-        res.end(JSON.stringify({ ...CATALOGS[lang], locked_blocks: {}, variables: [], groups: [] }));
+        res.end(JSON.stringify({ ...CATALOGS[lang], voices: FAKE_VOICES[lang] ?? FAKE_VOICES.en, locked_blocks: {}, variables: [], groups: [] }));
       } else if (path === "/api/flows/preview") {
         const body = JSON.parse(raw);
         previews.push({ ...body, backend: lang });
@@ -620,5 +627,100 @@ describe("Voice Call Flows: New flow from a built-in (unset settings as null)", 
       const { language_style: _ls, autonomous: _au, ...rest } = CATALOGS[lang]!.flows[b]!;
       expect(def).toEqual({ ...rest, name: `My ${b} (${lang})`, language: lang });
     }
+  });
+});
+
+describe("AI Voice (Settings → AI Voice): the AI's own voice, independent of the contact's gender", () => {
+  let n = 0;
+  beforeEach(() => void (adminSub = `u-admin-voice-${++n}`));
+  afterAll(() => void (adminSub = "u-ADMIN"));
+  type Def = Record<string, unknown> & { voice_id?: string; blocks: { id: string; text?: string }[] };
+  const publishLive = async (id: string): Promise<Def> => {
+    const r = await req("POST", `/api/ai-agents/${id}/publish`, {});
+    expect(r.status, await r.clone().text()).toBe(200);
+    const { flowId, version } = (await r.json()) as { flowId: string; version: number };
+    return T("callFlowVersion").find((v) => v.flowId === flowId && v.version === version)!.definition as Def;
+  };
+  const voiceBlock = (def: Def) => def.blocks.find((b) => b.id === "voice_delivery")!.text!;
+  const get = async (id: string) => (await (await req("GET", `/api/ai-agents/${id}`)).json()) as Record<string, unknown>;
+
+  it("saves the backend's own id, name, gender and language; reopening returns the same voice", async () => {
+    const a = await createAgent("ta", { ...AGENT, voiceId: "ROOPA" });
+    const roopa = { voiceId: "roopa", voiceGender: "female", voiceDisplayName: "Roopa", voiceLanguage: "ta" };
+    expect(a).toMatchObject(roopa);
+    expect(T("aiAgent").find((r) => r.id === a.id)).toMatchObject(roopa);
+    expect(await get(a.id)).toMatchObject(roopa);
+    // Changed to the male voice, saved, reopened.
+    expect((await req("PUT", `/api/ai-agents/${a.id}`, { agent: { ...AGENT, voiceId: "shubh" } })).status).toBe(200);
+    expect(await get(a.id)).toMatchObject({ voiceId: "shubh", voiceGender: "male", voiceDisplayName: "Shubh", voiceLanguage: "ta" });
+    // A save that leaves voiceId out (as a guided agent's save does) keeps the saved voice.
+    expect((await req("PUT", `/api/ai-agents/${a.id}`, { agent: { ...AGENT, instructions: "Be brief." } })).status).toBe(200);
+    expect(await get(a.id)).toMatchObject({ voiceId: "shubh", voiceGender: "male", instructions: "Be brief." });
+  });
+
+  it.each([
+    ["roopa", "female"],
+    ["ritu", "female"],
+    ["simran", "female"],
+    ["ishita", "female"],
+    ["shubh", "male"],
+  ] as const)("Tamil %s (%s): the published flow speaks with that voice", async (voiceId, gender) => {
+    const a = await createAgent("ta", { ...AGENT, voiceId });
+    const def = await publishLive(a.id);
+    expect(def.voice_id).toBe(voiceId);
+    expect(voiceBlock(def)).toContain(`Your voice is a ${gender} voice.`);
+    expect(voiceBlock(def)).toContain("never by the voice's gender");
+  });
+
+  it.each([
+    ["male", "roopa", "female"],
+    ["female", "shubh", "male"],
+  ] as const)("a %s contact with the %s (%s) voice: still addressed by the contact's gender", async (contactGender, voiceId, voiceGender) => {
+    const a = await createAgent("ta", { ...AGENT, contactGender, voiceId });
+    expect(a).toMatchObject({ contactGender, voiceGender });
+    expect((await req("POST", `/api/ai-agents/${a.id}/preview`, {})).status).toBe(200);
+    const sent = previews.at(-1) as { sample: { gender: string }; flow: { voice_id: string; greeting: { text: string } } };
+    expect(sent.sample.gender).toBe(contactGender); // sir / madam come from the contact, not the voice
+    expect(sent.flow.voice_id).toBe(voiceId);
+    expect(sent.flow.greeting.text).toContain("{{title}}");
+  });
+
+  it("only voices the backend offers WITH a gender can be picked (never a typed or guessed one)", async () => {
+    const notOffered = await req("POST", "/api/ai-agents", { language: "ta", agent: { ...AGENT, voiceId: "kavya" } });
+    expect(notOffered.status).toBe(400);
+    expect(((await notOffered.json()) as { error: string }).error).toMatch(/"kavya" is not offered by the Tamil voice backend/);
+    const untagged = await req("POST", "/api/ai-agents", { language: "ta", agent: { ...AGENT, voiceId: "priya" } });
+    expect(untagged.status).toBe(400);
+    expect(((await untagged.json()) as { error: string }).error).toMatch(/Priya has no gender/);
+    expect((await req("POST", "/api/ai-agents", { language: "ta", agent: { ...AGENT, voiceId: "bad id!" } })).status).toBe(400);
+    expect((await req("POST", "/api/ai-agents", { language: "en", agent: { ...AGENT, voiceId: "shubh" } })).status).toBe(400); // not offered in English
+    expect(T("aiAgent")).toHaveLength(0);
+  });
+
+  it("an agent without a voice compiles and hashes exactly as before; the Tamil Roopa default then shows as unpublished", async () => {
+    const { VOICE_DELIVERY_BLOCK } = await import("../src/domain/aiAgentCompile.js");
+    const a = await createAgent("ta");
+    expect(a).toMatchObject({ voiceId: null, voiceGender: null, voiceDisplayName: null, voiceLanguage: null });
+    const def = await publishLive(a.id);
+    // The built-in's own voice (null = the backend's default voice), exactly as before.
+    expect(def.voice_id ?? null).toBe(CATALOGS.ta!.flows.executive!.voice_id ?? null);
+    expect(voiceBlock(def)).toBe(VOICE_DELIVERY_BLOCK);
+    expect((await get(a.id)).unpublishedChanges).toBe(false);
+    // Migration 0032 gives an existing Tamil agent Roopa: "unpublished changes" until an admin publishes again.
+    Object.assign(T("aiAgent").find((r) => r.id === a.id)!, { voiceId: "roopa", voiceGender: "female", voiceDisplayName: "Roopa", voiceLanguage: "ta" });
+    expect((await get(a.id)).unpublishedChanges).toBe(true);
+    expect((await publishLive(a.id)).voice_id).toBe("roopa");
+    expect((await get(a.id)).unpublishedChanges).toBe(false);
+  });
+
+  it("a saved voice the backend no longer offers is reported (409), never silently replaced; nothing is published", async () => {
+    const a = await createAgent("ta", { ...AGENT, voiceId: "ritu" });
+    Object.assign(T("aiAgent").find((r) => r.id === a.id)!, { voiceId: "kavya", voiceDisplayName: "Kavya" });
+    for (const path of ["publish", "preview"]) {
+      const r = await req("POST", `/api/ai-agents/${a.id}/${path}`, {});
+      expect(r.status).toBe(409);
+      expect(((await r.json()) as { error: string }).error).toMatch(/Kavya \(kavya\) is no longer offered by the Tamil voice backend/);
+    }
+    expect(T("callFlowVersion")).toHaveLength(0);
   });
 });

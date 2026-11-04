@@ -12,6 +12,7 @@ import {
   callFlowDefinition,
   type AiAgentConfig,
   type AiAgentView,
+  type AiAgentVoiceGender,
   type AiCallLanguage,
   type AiKnowledgeFileView,
   type AiKnowledgeItemView,
@@ -56,7 +57,34 @@ function configFromRow(a: AiAgent): AiAgentConfig {
     targetDurationSec: a.targetDurationSec,
     maxDurationSec: a.maxDurationSec,
     guidedFlowId: a.guidedFlowId,
+    voiceId: a.voiceId ?? null,
   };
+}
+
+/** The AI's voice as the agent's voice backend lists it (resolved by the caller from GET /api/flows/builtin). */
+export interface AgentVoice {
+  voiceId: string;
+  voiceGender: AiAgentVoiceGender;
+  voiceDisplayName: string;
+  voiceLanguage: AiCallLanguage;
+}
+/** Looks a voice id up in the language's voice backend; throws when it isn't offered (with a gender). */
+export type AgentVoiceLookup = (language: AiCallLanguage, voiceId: string) => Promise<AgentVoice>;
+
+const NO_VOICE = { voiceId: null, voiceGender: null, voiceDisplayName: null, voiceLanguage: null } as const;
+
+/**
+ * The voice columns to write: unchanged (undefined) when voiceId was left out or didn't change, cleared for null,
+ * else looked up in the voice backend.
+ */
+async function voiceData(
+  wanted: string | null | undefined,
+  before: string | null,
+  language: AiCallLanguage,
+  lookup: AgentVoiceLookup,
+): Promise<AgentVoice | typeof NO_VOICE | undefined> {
+  if (wanted === undefined || wanted === before) return undefined;
+  return wanted ? lookup(language, wanted) : NO_VOICE;
 }
 
 function rowData(c: AiAgentConfig) {
@@ -126,6 +154,9 @@ async function view(a: AiAgent): Promise<AiAgentView> {
     liveVersion: live?.version ?? null,
     unpublishedChanges: unpublished,
     knowledge: { draft: n("DRAFT"), approved: n("APPROVED"), rejected: n("REJECTED"), files },
+    voiceGender: a.voiceGender === "female" || a.voiceGender === "male" ? a.voiceGender : null,
+    voiceDisplayName: a.voiceDisplayName ?? null,
+    voiceLanguage: a.voiceLanguage ? aiCallLanguage.parse(a.voiceLanguage) : null,
     createdByEmail: a.createdByEmail,
     createdAt: a.createdAt.toISOString(),
     updatedAt: a.updatedAt.toISOString(),
@@ -141,16 +172,25 @@ export async function getAgent(id: string): Promise<AiAgentView> {
   return view(await getAgentRow(id));
 }
 
-export async function createAgent(language: AiCallLanguage, c: AiAgentConfig, user: { id: string; email: string }): Promise<AiAgentView> {
+export async function createAgent(
+  language: AiCallLanguage,
+  c: AiAgentConfig,
+  user: { id: string; email: string },
+  lookupVoice: AgentVoiceLookup,
+): Promise<AiAgentView> {
   await checkRefs(c, language);
-  const a = await prisma.aiAgent.create({ data: { ...rowData(c), language, createdById: user.id, createdByEmail: user.email } });
+  const voice = await voiceData(c.voiceId, null, language, lookupVoice);
+  const a = await prisma.aiAgent.create({ data: { ...rowData(c), ...voice, language, createdById: user.id, createdByEmail: user.email } });
   return view(a);
 }
 
-export async function updateAgent(id: string, c: AiAgentConfig): Promise<AiAgentView> {
+export async function updateAgent(id: string, c: AiAgentConfig, lookupVoice: AgentVoiceLookup): Promise<AiAgentView> {
   const before = await getAgentRow(id);
-  await checkRefs(c, aiCallLanguage.parse(before.language));
-  const a = await prisma.aiAgent.update({ where: { id }, data: rowData(c) });
+  const language = aiCallLanguage.parse(before.language);
+  await checkRefs(c, language);
+  // The backend is asked only when the voice changed: saving other settings never needs it.
+  const voice = await voiceData(c.voiceId, before.voiceId ?? null, language, lookupVoice);
+  const a = await prisma.aiAgent.update({ where: { id }, data: { ...rowData(c), ...voice } });
   return view(a);
 }
 
@@ -389,8 +429,10 @@ export async function agentInputsHash(a: AiAgent): Promise<string> {
     a.industryId ? prisma.aiIndustry.findUnique({ where: { id: a.industryId } }) : null,
     a.categoryId ? prisma.aiBusinessCategory.findUnique({ where: { id: a.categoryId } }) : null,
   ]);
+  // No voice picked: hashed exactly as before voices existed, so such agents don't show "unpublished changes".
+  const { voiceId, ...config } = configFromRow(a);
   return definitionHash({
-    config: configFromRow(a),
+    config: voiceId ? { ...config, voiceId } : config,
     industry: industry ? [industry.name, industry.discoveryTopics] : null,
     category: category?.name ?? null,
     knowledge: knowledge.map((k) => [k.kind, k.topic, k.text, k.questions, k.always]),
@@ -416,6 +458,7 @@ export async function compileAgent(a: AiAgent, builtinExecutive: unknown): Promi
     industry: industry ? { name: industry.name, discoveryTopics: industry.discoveryTopics ?? "" } : null,
     knowledge,
     base: base.data,
+    voice: a.voiceId ? { id: a.voiceId, gender: a.voiceGender === "female" || a.voiceGender === "male" ? a.voiceGender : null } : null,
   });
   const checked = callFlowDefinition.safeParse(compiled);
   if (!checked.success) {

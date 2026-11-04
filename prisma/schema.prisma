@@ -1037,6 +1037,12 @@ model AiAgent {
   instructions      String?                @db.Text
   targetDurationSec Int                    @default(60)
   maxDurationSec    Int                    @default(105)
+  // Autonomous: the AI's voice (Settings → AI Voice), as the language's voice backend lists it. Independent of
+  // contactGender. All null = none picked (the backend's default voice). Tamil rows were given Roopa in 0032.
+  voiceId           String?                @db.VarChar(64) // Sarvam Bulbul speaker id, e.g. roopa
+  voiceGender       String?                @db.VarChar(8) // female | male (CHECK in 0032)
+  voiceDisplayName  String?                @db.VarChar(40)
+  voiceLanguage     String?                @db.VarChar(8)
   // Autonomous: the Call Flow the agent is compiled into (created on first publish).
   callFlowId        String?                @unique
   // Guided: the existing published Call Flow it calls with.

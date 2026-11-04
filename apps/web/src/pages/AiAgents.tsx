@@ -122,6 +122,12 @@ function AgentCard({ agent: a, onOpen }: { agent: AiAgentView; onOpen: (tab: Tab
       <div className="text-slate-550">
         {[a.businessName, a.executiveName && `${a.executiveName} · ${a.companyName}`].filter(Boolean).join(" — ")}
       </div>
+      {a.mode === "autonomous" && a.voiceDisplayName && (
+        <div className="text-xs text-slate-550">
+          Voice: {a.voiceDisplayName}
+          {a.voiceGender ? ` · ${a.voiceGender}` : ""}
+        </div>
+      )}
       {a.mode === "autonomous" && (
         <div className="text-xs text-slate-550">
           Knowledge: {a.knowledge.approved} approved · {a.knowledge.draft} to review · {a.knowledge.files} file(s)

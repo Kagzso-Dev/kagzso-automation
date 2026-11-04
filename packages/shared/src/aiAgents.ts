@@ -50,6 +50,20 @@ export const AI_AGENT_DEFAULTS = {
   maxDurationSec: 105,
 } as const;
 export const AI_AGENT_DURATION_LIMITS = { minTarget: 30, maxTarget: 105, minMax: 45, maxMax: 105 } as const;
+
+/**
+ * The AI's own voice (Settings → AI Voice, autonomous agents). It has nothing to do with the contact's gender:
+ * the customer is addressed by contactGender (sir / madam) whatever voice speaks. Only voices the language's voice
+ * backend offers WITH a gender (GET /api/flows/builtin → voices, app/core/voices.py) can be picked; the API stores
+ * the backend's own id, name and gender, never one typed in the browser.
+ */
+export const AI_AGENT_VOICE_GENDERS = ["female", "male"] as const;
+export type AiAgentVoiceGender = (typeof AI_AGENT_VOICE_GENDERS)[number];
+export const AI_AGENT_VOICE_GENDER_LABELS: Record<AiAgentVoiceGender, string> = { female: "Female", male: "Male" };
+/** The voice a new agent starts with, per language (none = the voice backend's default voice, as before). */
+export const AI_AGENT_DEFAULT_VOICE: Partial<Record<AiCallLanguage, string>> = { ta: "roopa" };
+/** A Sarvam Bulbul speaker id as the voice backend lists it (app/core/voices.py _VOICE_ID_RE). */
+export const AI_AGENT_VOICE_ID_RE = /^[a-z][a-z0-9_]{0,63}$/;
 export const AI_AGENT_INSTRUCTIONS_MAX = 4000;
 export const AI_AGENT_OBJECTIVE_MAX = 500;
 
@@ -97,6 +111,8 @@ export const aiAgentInput = z
       .default(AI_AGENT_DEFAULTS.maxDurationSec),
     /** Guided mode: the published Call Flow (of the agent's language) it calls with. */
     guidedFlowId: z.string().min(1).max(64).nullable().optional(),
+    /** Autonomous: the AI's voice (an offered voice of the agent's language). Null = the backend's default voice. */
+    voiceId: z.string().trim().toLowerCase().regex(AI_AGENT_VOICE_ID_RE, "Pick one of the listed voices").nullable().optional(),
   })
   .strict()
   .superRefine((a, ctx) => {
@@ -345,6 +361,10 @@ export interface AiAgentView extends AiAgentConfig {
   /** The settings or approved knowledge changed since the last publish (autonomous only). */
   unpublishedChanges: boolean;
   knowledge: { draft: number; approved: number; rejected: number; files: number };
+  /** The picked voice as the voice backend described it when it was saved (null = none picked). */
+  voiceGender: AiAgentVoiceGender | null;
+  voiceDisplayName: string | null;
+  voiceLanguage: AiCallLanguage | null;
   createdByEmail: string | null;
   createdAt: string;
   updatedAt: string;

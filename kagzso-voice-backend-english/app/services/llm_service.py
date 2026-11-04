@@ -583,6 +583,19 @@ def clean_spoken_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+_EXCLAIM_RE = re.compile(r"\s*[!¡]+")
+_QUESTION_EXCLAIM_RE = re.compile(r"\?[!?¡]+|[!¡]+\?")
+
+
+def calm_spoken_text(text: str) -> str:
+    """Autonomous AI Agent calls: exclamation marks make the TTS voice jump in pitch and sound over-cheerful or
+    sales-like, so a sentence is spoken as a calm statement ("Great!" -> "Great.", "Really?!" -> "Really?").
+    Words, numbers and every script are left as they are."""
+    text = _QUESTION_EXCLAIM_RE.sub("?", text)
+    text = _EXCLAIM_RE.sub(".", text)
+    return re.sub(r"(?<!\.)\.\.(?!\.)", ".", text).strip()  # "Great!." -> "Great." (an ellipsis stays)
+
+
 def extract_end_call(text: str) -> Tuple[str, bool]:
     return text.replace(END_CALL_TOKEN, " ").strip(), END_CALL_TOKEN in text
 

@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  AI_AGENT_DEFAULT_VOICE,
   AI_AGENT_DEFAULTS,
   AI_AGENT_DURATION_LIMITS,
   AI_AGENT_GENDER_LABELS,
@@ -14,17 +15,21 @@ import {
   aiAgentLanguageSupported,
   type AiAgentInput,
   type AiAgentView,
+  type AiCallLanguage,
 } from "@dispatch/shared";
 import { api } from "../lib/api";
 import { useAiCallLanguage } from "../lib/aiCallLanguage";
 import { AGENT_QUERY_KEYS, useAiLibrary } from "../lib/aiAgents";
 import { useCallFlows } from "../lib/callFlows";
+import { AiAgentVoice } from "./AiAgentVoice";
 import { PhoneInput, phoneInputOk } from "./PhoneInput";
 import { useConfirm } from "./confirm";
 import { useToast } from "./toast";
 import { ErrorNote } from "./ui";
 
-type Form = Required<Omit<AiAgentInput, "categoryId" | "industryId" | "contactName" | "contactPhone" | "callbackNumber" | "guidedFlowId">> & {
+type Form = Required<Omit<AiAgentInput, "categoryId" | "industryId" | "contactName" | "contactPhone" | "callbackNumber" | "guidedFlowId" | "voiceId">> & {
+  /** "" = no voice picked (the voice backend's default voice). */
+  voiceId: string;
   categoryId: string;
   industryId: string;
   contactName: string;
@@ -33,7 +38,7 @@ type Form = Required<Omit<AiAgentInput, "categoryId" | "industryId" | "contactNa
   guidedFlowId: string;
 };
 
-function initial(a: AiAgentView | null, autonomousOk: boolean): Form {
+function initial(a: AiAgentView | null, autonomousOk: boolean, language: AiCallLanguage): Form {
   return {
     name: a?.name ?? "",
     mode: a?.mode ?? (autonomousOk ? "autonomous" : "guided"),
@@ -52,6 +57,8 @@ function initial(a: AiAgentView | null, autonomousOk: boolean): Form {
     targetDurationSec: a?.targetDurationSec ?? AI_AGENT_DEFAULTS.targetDurationSec,
     maxDurationSec: a?.maxDurationSec ?? AI_AGENT_DEFAULTS.maxDurationSec,
     guidedFlowId: a?.guidedFlowId ?? "",
+    // An existing agent keeps its own voice (none = as before); a new one starts with the language's default voice.
+    voiceId: a ? (a.voiceId ?? "") : (AI_AGENT_DEFAULT_VOICE[language] ?? ""),
   };
 }
 
@@ -66,7 +73,7 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
   const confirm = useConfirm();
   const library = useAiLibrary();
   const flows = useCallFlows(true, language);
-  const [f, setF] = useState<Form>(() => initial(agent, autonomousOk));
+  const [f, setF] = useState<Form>(() => initial(agent, autonomousOk, language));
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setF((p) => ({ ...p, [k]: v }));
 
   const categories = library.data ?? [];
@@ -84,6 +91,8 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
     contactPhone: f.contactPhone || null,
     callbackNumber: f.callbackNumber || null,
     guidedFlowId: f.mode === "guided" ? f.guidedFlowId || null : null,
+    // Guided agents call with their Call Flow's own voice: their saved voice (if any) is left as it is.
+    voiceId: f.mode === "autonomous" ? f.voiceId || null : undefined,
   };
   const check = aiAgentInput.safeParse(body);
   const fieldError = (k: string) => (!check.success ? check.error.issues.find((i) => i.path[0] === k)?.message : undefined);
@@ -233,6 +242,10 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
               </Field>
             </div>
             <p className="text-xs text-slate-550">The callback number is only given when the customer asks how to reach the company or wants details the AI doesn't have.</p>
+          </Section>
+
+          <Section title="AI Voice">
+            <AiAgentVoice language={language} value={f.voiceId} onChange={(v) => set("voiceId", v)} executiveName={f.executiveName} />
           </Section>
 
           <Section title="Call settings">

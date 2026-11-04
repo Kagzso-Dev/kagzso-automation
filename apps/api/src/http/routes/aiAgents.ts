@@ -27,6 +27,7 @@ import multer from "multer";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import {
+  AI_CALL_LANGUAGE_NAMES,
   AI_KNOWLEDGE_MAX_FILES_PER_UPLOAD,
   AI_AGENT_AUTONOMOUS_CALLS_BLOCKED,
   AI_KNOWLEDGE_MAX_FILE_BYTES,
@@ -67,6 +68,7 @@ import {
   saveAgentDraft,
   updateAgent,
   updateKnowledgeItem,
+  type AgentVoiceLookup,
 } from "../../domain/aiAgents.js";
 import { AgentCompileError } from "../../domain/aiAgentCompile.js";
 import { extractKnowledge } from "../../domain/aiAgentKnowledge.js";
@@ -136,6 +138,25 @@ function domainError(err: unknown): never {
 }
 const guard = <T>(p: Promise<T>) => p.catch(domainError);
 
+/**
+ * An agent's voice must be one the language's voice backend offers WITH a gender (its GET /api/flows/builtin list
+ * is the only list): the id, name and gender stored are the backend's own. Never a voice typed in the browser.
+ */
+const lookupVoice: AgentVoiceLookup = async (language, voiceId) => {
+  const catalog = await builtins(language);
+  const v = (catalog.voices ?? []).find((x) => x.id === voiceId);
+  const where = `the ${AI_CALL_LANGUAGE_NAMES[language]} voice backend`;
+  if (!v) throw new AppError(400, `The voice "${voiceId}" is not offered by ${where} — pick one of the listed voices`, "bad_request");
+  if (v.gender !== "female" && v.gender !== "male") {
+    throw new AppError(
+      400,
+      `${v.name} has no gender in ${where}'s voice list, so it can't be picked here. Tag it in that backend's SARVAM_TTS_VOICES (e.g. ${v.id}:male) once you have confirmed it.`,
+      "bad_request",
+    );
+  }
+  return { voiceId: v.id, voiceGender: v.gender, voiceDisplayName: (v.name || v.id).slice(0, 40), voiceLanguage: language };
+};
+
 const agentParam = z.object({ id: z.string().min(1).max(64) });
 const fileParam = agentParam.extend({ fileId: z.string().min(1).max(64) });
 const itemParam = agentParam.extend({ itemId: z.string().min(1).max(64) });
@@ -203,7 +224,7 @@ aiAgentsRouter.post(
   writeLimiter,
   wrap(async (req, res) => {
     const body = createAiAgentInput.parse(req.body);
-    const agent = await guard(createAgent(body.language, body.agent, req.user!));
+    const agent = await guard(createAgent(body.language, body.agent, req.user!, lookupVoice));
     logger.info({ agentId: agent.id, language: body.language, mode: agent.mode, by: req.user!.email }, "ai agent created");
     res.status(201).json(agent);
   }),
@@ -224,7 +245,7 @@ aiAgentsRouter.put(
   wrap(async (req, res) => {
     const { id } = agentParam.parse(req.params);
     const body = z.object({ agent: aiAgentInput }).strict().parse(req.body);
-    res.json(await guard(updateAgent(id, body.agent)));
+    res.json(await guard(updateAgent(id, body.agent, lookupVoice)));
   }),
 );
 
@@ -357,6 +378,15 @@ async function compiled(id: string) {
   const catalog = await builtins(language);
   const base = catalog.flows.executive;
   if (!base) throw new AppError(502, "This language's voice backend has no Business executive script yet — update it first", "unavailable");
+  // The picked voice must still be offered: say so instead of letting the backend play another voice.
+  if (agent.voiceId && catalog.voices && !catalog.voices.some((v) => v.id === agent.voiceId)) {
+    throw new AppError(
+      409,
+      `The agent's voice ${agent.voiceDisplayName ?? agent.voiceId} (${agent.voiceId}) is no longer offered by the ${AI_CALL_LANGUAGE_NAMES[language]} voice backend. ` +
+        "Pick another voice in Settings → AI Voice, or offer it again in that backend's SARVAM_TTS_VOICES.",
+      "voice_unavailable",
+    );
+  }
   return { agent, language, definition: await guard(compileAgent(agent, base)) };
 }
 

@@ -22,18 +22,31 @@ BUILTIN_VOICES: List[Dict[str, str]] = [
 ]
 BUILTIN_DEFAULT = "roopa"
 
+# Genders Sarvam's own documentation states for Bulbul v3 speakers (checked 2026-11-04). Used only for a voice that
+# SARVAM_TTS_VOICES lists WITHOUT ":male" / ":female"; a tag there always wins. Any other voice stays without a
+# gender (never guessed from its name), so it can't be picked as a male / female AI Agent voice until it is tagged.
+#   shubh (male), ishita (female): docs.sarvam.ai .../text-to-speech/voices ("shubh (male) and ishita (female)")
+#   ratan, rohan (male), ritu (female): docs.sarvam.ai .../text-to-speech/bulbul-v3-best-practices,
+#     "Speaker selection by language", Tamil row: Recommended male "ratan, rohan", Recommended female "ishita, ritu"
+DOCUMENTED_GENDERS: Dict[str, str] = {
+    "shubh": "male", "ratan": "male", "rohan": "male",
+    "ishita": "female", "ritu": "female",
+}
+
 _VOICE_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 def offered_voices(voices_env: str, speaker: str, language: str) -> Tuple[List[Dict[str, str]], str]:
     """(voices, default voice) for a backend speaking `language`. `voices_env` is SARVAM_TTS_VOICES
-    ("kavitha:female,mani:male"); empty or nothing usable = the built-in four with Roopa as default.
+    ("kavitha:female,mani:male"; an untagged id gets its DOCUMENTED_GENDERS gender, if any); empty or nothing
+    usable = the built-in four with Roopa as default.
     With a list of its own, the default is SARVAM_TTS_SPEAKER when listed, else the first voice."""
     label = f"{LANGUAGE_NAMES.get(language, LANGUAGE_NAMES['en'])} (India)"
     voices: List[Dict[str, str]] = []
     for item in (voices_env or "").split(","):
         voice_id, _, gender = item.strip().partition(":")
         voice_id, gender = voice_id.strip().lower(), gender.strip().lower()
+        gender = gender or DOCUMENTED_GENDERS.get(voice_id, "")
         if not _VOICE_ID_RE.match(voice_id) or any(v["id"] == voice_id for v in voices):
             continue
         voices.append({"id": voice_id, "name": voice_id.capitalize(),

@@ -12,7 +12,13 @@ import {
   type CallFlowDefinition,
   type CallFlowTextBlock,
 } from "@dispatch/shared";
-import { AgentCompileError, compileAgentFlow, INSTRUCTIONS_HEADER, type CompileInput } from "../src/domain/aiAgentCompile.js";
+import {
+  AgentCompileError,
+  compileAgentFlow,
+  INSTRUCTIONS_HEADER,
+  VOICE_DELIVERY_BLOCK,
+  type CompileInput,
+} from "../src/domain/aiAgentCompile.js";
 import { withoutNullOptionalSettings } from "../src/http/routes/callFlows.js";
 
 // AI Agents → Call Flow compiler. The base is the built-in "executive" flow exactly as each language's voice
@@ -161,6 +167,20 @@ describe("what the compiled flow tells the AI", () => {
   it("no instructions = no instructions block", () => {
     const plain = compileAgentFlow(input("en", { agent: agent({ instructions: "  " }) }));
     expect(plain.blocks.some((b) => b.id === "ai_instructions")).toBe(false);
+  });
+
+  it("voice and delivery: calm, patient, no exclamation marks - after the built-in blocks, before call length", () => {
+    const ids = out.blocks.map((b) => b.id);
+    expect(ids.indexOf("voice_delivery")).toBe(ids.indexOf("call_length") - 1);
+    expect(ids.indexOf("voice_delivery")).toBeGreaterThan(ids.indexOf("rules"));
+    const block = out.blocks.find((b) => b.id === "voice_delivery") as CallFlowTextBlock;
+    expect(block).toMatchObject({ group: "tone", text: VOICE_DELIVERY_BLOCK });
+    expect(block.text).toContain("No exclamation marks");
+    expect(block.text).toMatch(/hesitates, goes quiet, interrupts or asks the same thing again, stay patient/);
+    expect(block.text).not.toMatch(/\{\{|\[\[END_CALL\]\]/);
+    for (const language of ["ta", "hi", "kn"] as const) {
+      expect(text(compileAgentFlow(input(language)), "voice_delivery")).toBe(VOICE_DELIVERY_BLOCK); // every language
+    }
   });
 
   it("call length: target and the hard stop", () => {

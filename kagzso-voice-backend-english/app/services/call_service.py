@@ -50,6 +50,7 @@ from app.services.llm_service import (
     LLMProvider,
     SentenceChunker,
     build_call_variables,
+    calm_spoken_text,
     clean_spoken_text,
     has_pause_markers,
     pauses_from_variables,
@@ -639,9 +640,12 @@ async def synthesize_line(tts: TTSProvider, text: str, pauses: Optional[Mapping[
 
 
 async def prerender_greeting(call_id: str, text: str, voice_id: Optional[str], pace: Optional[float] = None,
-                             pauses: Optional[Mapping[str, int]] = None) -> None:
-    # The same speech settings the call itself will use (admin AI provider settings, else .env).
+                             pauses: Optional[Mapping[str, int]] = None, agent_voice: bool = False) -> None:
+    # The same speech settings the call itself will use (admin AI provider settings, else .env; an Autonomous
+    # AI Agent call: its voice profile).
     tts = (await provider_registry.providers_for_call()).tts_for_voice(voice_id)
+    if agent_voice:
+        tts = provider_registry.with_agent_voice(tts)
     try:
         mulaw = await asyncio.wait_for(synthesize_line(tts, text, pauses, pace), timeout=15)
     except Exception as exc:  # live TTS still works; never fail the call over this
@@ -653,8 +657,9 @@ async def prerender_greeting(call_id: str, text: str, voice_id: Optional[str], p
 
 
 def schedule_greeting_prerender(call_id: str, text: str, voice_id: Optional[str],
-                                pace: Optional[float] = None, pauses: Optional[Mapping[str, int]] = None) -> None:
-    task = asyncio.get_running_loop().create_task(prerender_greeting(call_id, text, voice_id, pace, pauses))
+                                pace: Optional[float] = None, pauses: Optional[Mapping[str, int]] = None,
+                                agent_voice: bool = False) -> None:
+    task = asyncio.get_running_loop().create_task(prerender_greeting(call_id, text, voice_id, pace, pauses, agent_voice))
     _PRERENDER_TASKS.add(task)
     task.add_done_callback(_PRERENDER_TASKS.discard)
 
@@ -673,6 +678,13 @@ def take_greeting_audio(call_id: str, text: str, pace: Optional[float] = None,
 def greeting_pace(first_message: Optional[str], cfg: Settings = default_settings) -> Optional[float]:
     """GREETING_TTS_SPEED for a time-of-day opening's greeting; None (configured speed) otherwise."""
     return cfg.GREETING_TTS_SPEED if identity_after_greeting(first_message) else None
+
+
+# Autonomous AI Agent calls (flow_voice_profile): one calm, steady voice profile for every line - AGENT_TTS_* pace,
+# temperature and synthesis chunk size, no separate greeting speed, whole sentences to the TTS (never a first clause
+# cut at a comma), the first sentence flushed so first audio isn't later, exclamation marks spoken as full stops,
+# and a fallback voice kept once used. Every other call is unchanged.
+AGENT_VOICE_PROFILE = "agent"
 
 
 # Languages whose Autonomous AI Agent calls are paused (temporary) until a native speaker has reviewed the
@@ -755,10 +767,17 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
                 raise CallError(409, AUTONOMOUS_CALLS_BLOCKED[cfg.call_language], "autonomous_paused")
             if (cfg.DNC_ENFORCE or autonomous is not None) and (dnc_line := rs.flow_dnc_line(resolved.flow)):
                 flow_vars["flow_dnc_line"] = dnc_line  # spoken word for word on a do-not-call request
+            if autonomous is not None and resolved.flow.voice_id and flow_voice is None:
+                # The agent's picked voice isn't offered here (SARVAM_TTS_VOICES changed): refuse rather than
+                # silently speaking in another voice. Nothing is dialled. Ordinary flows keep the old behaviour.
+                raise CallError(409, f"The AI agent's voice '{resolved.flow.voice_id}' is not offered by this voice "
+                                     "backend (SARVAM_TTS_VOICES) - pick another voice for the agent and publish it again",
+                                "voice_unavailable")
             if autonomous is not None:
                 # This call only: backend do-not-call whatever DNC_ENFORCE says, and the time hint every turn.
                 flow_vars["flow_dnc_force"] = "true"
                 flow_vars["flow_target_sec"] = str(autonomous.target_duration_sec)
+                flow_vars["flow_voice_profile"] = AGENT_VOICE_PROFILE  # one calm, steady voice for the whole call
             if resolved.flow.pauses is not None:  # else the default pause lengths
                 flow_vars.update({f"flow_pause_{k}": str(v) for k, v in resolved.flow.pauses.model_dump().items()})
             # Training switched on with Active entries: compiled into each reply's prompt (llm_service.training_block).
@@ -793,8 +812,12 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
     if req.greeting_delay_sec is not None:
         variables["greeting_delay_sec"] = str(req.greeting_delay_sec)
     rotation = cfg.voice_rotation
+    # An Autonomous AI Agent with a picked voice: that voice for the whole call, never a rotation voice.
+    agent_picked_voice = flow_voice if flow_vars.get("flow_voice_profile") == AGENT_VOICE_PROFILE else None
     async with _VOICE_ROTATION_LOCK:  # pick + insert together so concurrent calls get different voices
-        if not rotation:
+        if agent_picked_voice:
+            voice_id = agent_picked_voice
+        elif not rotation:
             voice_id = None
         elif cfg.voice_rotation_mode == "concurrent":
             # Ignore calls stuck in a live status (e.g. a missed hangup webhook) after the max duration.
@@ -838,8 +861,10 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
         if cfg.GREETING_PRERENDER and agent.first_message:
             greeting = opening_line(agent.first_message, variables)
             if greeting:
+                agent_voice = variables.get("flow_voice_profile") == AGENT_VOICE_PROFILE
                 schedule_greeting_prerender(call.id, greeting, call.voice_id or agent.voice_id,
-                                            greeting_pace(agent.first_message, cfg), pauses_from_variables(variables))
+                                            None if agent_voice else greeting_pace(agent.first_message, cfg),
+                                            pauses_from_variables(variables), agent_voice=agent_voice)
     return call
 
 
@@ -1208,7 +1233,10 @@ class CallSession:
         self.sender = sender
         self.cfg = cfg
         self.providers = providers or get_providers()
+        self.agent_voice = ctx.variables.get("flow_voice_profile") == AGENT_VOICE_PROFILE
         self.tts = self.providers.tts_for_voice(ctx.voice_id)
+        if self.agent_voice:
+            self.tts = provider_registry.with_agent_voice(self.tts)
         self.stt = stt_for_call(self.providers.stt, ctx.variables, cfg)
         self.store = store or get_session_store()
         # Input noise reduction: speech is detected on cleaned audio with an adaptive floor and a
@@ -2119,6 +2147,8 @@ class CallSession:
     FIRST_SPEECH_HOLD_MAX_SECONDS = 2.0  # wait at most this long for the customer to stop before greeting
 
     def greeting_pace(self) -> Optional[float]:
+        if self.agent_voice:
+            return None  # the agent voice profile's pace for every line, the greeting too
         return self.cfg.GREETING_TTS_SPEED if self._first_speech_mode else None
 
     async def _greet_after_first_wait(self) -> None:
@@ -2657,7 +2687,8 @@ class CallSession:
             await self._play(line_audio)  # not part of the reply: never in the history, never a turn
 
         async def produce() -> None:
-            first_clause = 20 if self.cfg.TTS_FIRST_CLAUSE and st.scripted is None else 0
+            # An agent call never cuts a first clause at a comma (an audible reset mid-sentence).
+            first_clause = 20 if self.cfg.TTS_FIRST_CLAUSE and st.scripted is None and not self.agent_voice else 0
             chunker = SentenceChunker(first_clause_chars=first_clause)
             m.t3 = time.monotonic()
             # REPEAT_QUESTION_GUARD: questions the agent already asked in this call.
@@ -2668,6 +2699,8 @@ class CallSession:
                 if end:
                     self.end_call_requested = True
                 sentence = clean_spoken_text(sentence)
+                if self.agent_voice:
+                    sentence = calm_spoken_text(sentence)
                 if not sentence:
                     return
                 if (st.scripted is None and self.cfg.REPEAT_QUESTION_GUARD and st.spoken
@@ -2691,8 +2724,10 @@ class CallSession:
                     stream = await tts_stream()
                 st.spoken.append(sentence)
                 await stream.send_text(sentence)
-                if first and self.cfg.TTS_FLUSH_FIRST_SENTENCE:
-                    await stream.flush()  # speak it now, even if shorter than Sarvam's buffer
+                if first and (self.cfg.TTS_FLUSH_FIRST_SENTENCE or self.agent_voice):
+                    # Speak it now, even if shorter than Sarvam's buffer (an agent call's longer chunks start
+                    # after the first sentence, so its first audio is not later than before).
+                    await stream.flush()
 
             if st.scripted is not None:
                 m.t3 = None  # fixed text, no LLM involved

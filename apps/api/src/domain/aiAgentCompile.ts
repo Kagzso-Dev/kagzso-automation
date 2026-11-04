@@ -6,7 +6,8 @@
 // What changes compared with the built-in executive flow:
 //   greeting / identity  AI_AGENT_OPENINGS for the language, with the agent and company names filled in
 //   blocks               "agent" (who calls, why, the business), "opening", "company_facts" rewritten;
-//                        "industry_context", "call_length" and (when given) "ai_instructions" added;
+//                        "industry_context", "voice_delivery", "call_length" and (when given) "ai_instructions"
+//                        added;
 //                        {{title_to_use}} → {{title}} everywhere, so a contact without a gender gets no
 //                        sir / madam (title_to_use would fall back to CALL_DEFAULT_TITLE)
 //   training             agent profile (name, company, industry, tone) + approved knowledge, all Active
@@ -45,6 +46,8 @@ export interface CompileInput {
   knowledge: CompileKnowledgeItem[];
   /** The language's built-in "executive" flow (GET /api/flows/builtin of that language's voice backend). */
   base: CallFlowDefinition;
+  /** The AI's picked voice (Settings → AI Voice); null = the built-in flow's voice (the backend default), as before. */
+  voice?: { id: string; gender: "female" | "male" | null } | null;
 }
 
 export class AgentCompileError extends Error {
@@ -175,6 +178,43 @@ function callLengthBlock(target: number, max: number): string {
   );
 }
 
+/**
+ * How the agent's words should sound. The voice itself (one speaker, a relaxed pace, a steady delivery, whole
+ * sentences, no exclamation marks) is set by the voice backend for agent calls (AGENT_TTS_*); this asks the AI
+ * for text that reads calmly aloud and for patience - it never relaxes a rule above it.
+ */
+export const VOICE_DELIVERY_BLOCK =
+  "# VOICE AND DELIVERY\n\n" +
+  "Everything you write is spoken aloud by one calm, warm, professional voice.\n\n" +
+  "* Unhurried and reassuring: short, complete sentences, one idea each. Never rush, and never sound like an " +
+  "advertisement or a sales pitch.\n" +
+  "* No exclamation marks and no words in capital letters: a calm full stop sounds warmer on the phone.\n" +
+  "* Ask one question, then stop and let the customer answer.\n" +
+  "* When the customer hesitates, goes quiet, interrupts or asks the same thing again, stay patient and kind: " +
+  "acknowledge it briefly (for example \"No problem\" or \"Sure\") and answer again, more simply. Never say " +
+  "\"as I said\" and never sound impatient.\n" +
+  "* Keep the same calm, respectful tone from the first line to the last.\n\n---\n\n";
+
+/**
+ * Added to the voice block only when a voice was picked: the voice's gender belongs to the AI, never to the
+ * customer, so a male customer is still "sir" with a female voice (and the other way round). Agents without a
+ * picked voice compile exactly as before.
+ */
+export function voiceIdentityLines(gender: "female" | "male"): string {
+  return (
+    `* Your voice is a ${gender} voice. Whenever your language uses different word forms for a male or a female ` +
+    `speaker, use the ${gender} forms when you speak about yourself.\n` +
+    "* Your voice says nothing about the customer: address the customer only as the call details say (sir, madam, " +
+    "or neither when no gender is given), never by the voice's gender.\n"
+  );
+}
+
+function voiceDeliveryBlock(voice: CompileInput["voice"]): string {
+  if (!voice?.gender) return VOICE_DELIVERY_BLOCK;
+  const end = "\n\n---\n\n";
+  return VOICE_DELIVERY_BLOCK.slice(0, -end.length) + "\n" + voiceIdentityLines(voice.gender).trimEnd() + end;
+}
+
 export const INSTRUCTIONS_HEADER = "# AI CONVERSATION INSTRUCTIONS (FROM THE ADMIN)";
 
 function instructionsBlock(text: string): string {
@@ -246,6 +286,7 @@ export function compileAgentFlow(input: CompileInput): CallFlowDefinition {
       blocks.push({ id: "industry_context", group: "main_script", text: industryBlock(input) });
     }
   }
+  blocks.push({ id: "voice_delivery", group: "tone", text: voiceDeliveryBlock(input.voice) });
   blocks.push({ id: "call_length", group: "rules", text: callLengthBlock(agent.targetDurationSec, agent.maxDurationSec) });
   if (blockSafe(agent.instructions)) {
     blocks.push({ id: "ai_instructions", group: "rules", text: instructionsBlock(agent.instructions) });
@@ -259,6 +300,8 @@ export function compileAgentFlow(input: CompileInput): CallFlowDefinition {
   const tone = AI_AGENT_PERSONALITY_TONE[agent.personality];
   const definition: CallFlowDefinition = {
     ...base,
+    // The picked voice speaks every line of every call of this flow (greeting, replies, fixed lines).
+    ...(input.voice ? { voice_id: input.voice.id } : {}),
     name: oneLine(agent.name).slice(0, 100) || "AI Agent",
     greeting: { text: greeting },
     identity: { question: opening.identity, reask: opening.reask },

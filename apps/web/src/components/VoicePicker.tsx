@@ -96,6 +96,7 @@ export function VoicePicker({
   language = DEFAULT_AI_CALL_LANGUAGE,
   flowLine,
   languageStyle,
+  missingNote,
 }: {
   voices: VoiceOption[];
   defaultVoice: string;
@@ -110,6 +111,11 @@ export function VoicePicker({
   flowLine?: string | null;
   /** The flow's language style (non-English): picks the fallback line when there is no flowLine. */
   languageStyle?: CallFlowLanguageStyle;
+  /**
+   * Shown instead of "using <default>" when `value` is not in `voices`; nothing is shown as selected then (AI Agents:
+   * a voice that is no longer offered is reported, never silently replaced). Absent = the Call Flows behaviour.
+   */
+  missingNote?: string;
 }) {
   const fallback = (languageStyle === "mixed" ? AI_CALL_VOICE_SAMPLES_MIXED[language] : undefined) ?? AI_CALL_VOICE_SAMPLES[language];
   const defaultSample = sampleLine(flowLine) ?? fallback;
@@ -132,7 +138,7 @@ export function VoicePicker({
   const toast = useToast();
 
   const known = !value || voices.some((v) => v.id === value);
-  const selected = value && known ? value : defaultVoice;
+  const selected = value && known ? value : missingNote ? null : defaultVoice;
   const defaultName = voices.find((v) => v.id === defaultVoice)?.name ?? defaultVoice;
 
   function stop() {
@@ -219,7 +225,12 @@ export function VoicePicker({
           );
         })}
       </ul>
-      {!known && <p className="mt-1.5 text-xs text-warn">Previous voice is no longer available, using {defaultName}.</p>}
+      {!known &&
+        (missingNote ? (
+          <p className="mt-1.5 text-xs text-crit">{missingNote}</p>
+        ) : (
+          <p className="mt-1.5 text-xs text-warn">Previous voice is no longer available, using {defaultName}.</p>
+        ))}
       <label className="label mt-3">Sample line to listen to</label>
       <input
         className="input"

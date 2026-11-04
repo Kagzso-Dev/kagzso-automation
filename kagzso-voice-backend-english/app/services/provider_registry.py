@@ -445,21 +445,31 @@ class FallbackTTS(TTSProvider):
 
     name = "fallback"
 
-    def __init__(self, primary: TTSProvider, fallback: TTSProvider):
+    def __init__(self, primary: TTSProvider, fallback: TTSProvider, sticky: bool = False):
         self.primary, self.fallback = primary, fallback
+        # sticky (Autonomous AI Agent calls): once the fallback voice has spoken, the rest of the call keeps it,
+        # so the voice never switches back and forth. Off = each request tries the primary first, as before.
+        self.sticky = sticky
+        self._on_fallback = False
 
     async def synthesize(self, text: str, pace: Optional[float] = None) -> bytes:
+        if self._on_fallback:
+            return await self.fallback.synthesize(text, pace=pace)
         try:
             return await self.primary.synthesize(text, pace=pace)
         except TTSError as exc:
             log.warning("TTS %s failed (%s) - using the fallback voice", getattr(self.primary, "voice_id", "?"), exc.kind)
+            self._on_fallback = self.sticky
             return await self.fallback.synthesize(text, pace=pace)
 
     async def open_stream(self, pace: Optional[float] = None) -> TTSStream:
+        if self._on_fallback:
+            return await self.fallback.open_stream(pace=pace)
         try:
             return await self.primary.open_stream(pace=pace)
         except TTSError as exc:
             log.warning("TTS stream failed to open (%s) - using the fallback voice", exc.kind)
+            self._on_fallback = self.sticky
             return await self.fallback.open_stream(pace=pace)
 
     async def synthesize_preview(self, text: str) -> bytes:
@@ -467,6 +477,27 @@ class FallbackTTS(TTSProvider):
             return await self.primary.synthesize_preview(text)  # type: ignore[attr-defined]
         except TTSError:
             return await self.fallback.synthesize_preview(text)  # type: ignore[attr-defined]
+
+
+def agent_voice_settings(cfg: Settings) -> Dict[str, Any]:
+    """The Autonomous AI Agent voice profile as Sarvam TTS settings (AGENT_TTS_*, clamped to Sarvam's ranges)."""
+    return {
+        "SARVAM_TTS_PACE": min(2.0, max(0.5, cfg.AGENT_TTS_PACE)),
+        "SARVAM_TTS_TEMPERATURE": min(1.0, max(0.01, cfg.AGENT_TTS_TEMPERATURE)),
+        "SARVAM_TTS_MIN_BUFFER_CHARS": min(200, max(30, cfg.AGENT_TTS_MIN_BUFFER_CHARS)),
+    }
+
+
+def with_agent_voice(tts: TTSProvider) -> TTSProvider:
+    """A call's TTS with the Autonomous AI Agent voice profile: the same speaker, model and key, with the profile's
+    pace, temperature and synthesis chunk size for every request and stream; a fallback voice, once used, stays
+    for the rest of the call. Any other provider (e.g. a test double) is returned unchanged."""
+    if isinstance(tts, FallbackTTS):
+        return FallbackTTS(with_agent_voice(tts.primary), with_agent_voice(tts.fallback), sticky=True)
+    if isinstance(tts, SarvamTTS):
+        return type(tts)(tts.cfg.model_copy(update=agent_voice_settings(tts.cfg)), voice_id=tts.voice_id,
+                         client=tts._client, exact_voice=True)
+    return tts
 
 
 @lru_cache(maxsize=None)

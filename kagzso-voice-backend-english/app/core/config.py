@@ -127,6 +127,13 @@ class Settings(BaseSettings):
     # 30 = today's value (fastest first audio). Higher joins sentences more smoothly but the
     # first audio starts a little later. Clamped to 30-200.
     SARVAM_TTS_MIN_BUFFER_CHARS: int = 30
+    # Autonomous AI Agent calls (Thaara, Dispatch "AI Agents") only - every other call keeps the values above.
+    # One voice profile for every line of such a call (greeting, replies, acknowledgements, fixed lines):
+    # a relaxed, slightly slow pace (0.5-2.0), a steadier delivery (lower temperature = less variation in
+    # pitch / emotion between chunks, 0.01-1.0) and longer synthesis chunks (whole sentences, 30-200 chars).
+    AGENT_TTS_PACE: float = 0.9
+    AGENT_TTS_TEMPERATURE: float = 0.4
+    AGENT_TTS_MIN_BUFFER_CHARS: int = 120
     SARVAM_TTS_WS_URL: str = "wss://api.sarvam.ai/text-to-speech/ws"
     # Comma-separated speaker ids: each new call uses the next one in turn (empty = SARVAM_TTS_SPEAKER)
     SARVAM_TTS_VOICE_ROTATION: str = ""
