@@ -105,7 +105,7 @@ class SarvamSTTStream(STTStream):
             "input_audio_codec": "pcm_s16le",
             "flush_signal": "true",
         }
-        if self.cfg.SARVAM_STT_MODEL.startswith("saaras:"):
+        if self.cfg.SARVAM_STT_MODEL.startswith("saaras:v3"):  # mode is a saaras:v3 setting (as the REST request)
             params["mode"] = self.cfg.SARVAM_STT_MODE
         return f"{self.cfg.SARVAM_STT_WS_URL}?{urlencode(params)}"
 

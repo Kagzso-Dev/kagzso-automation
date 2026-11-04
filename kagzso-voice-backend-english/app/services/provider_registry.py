@@ -510,12 +510,68 @@ def _call_providers_class():
         (the flow's bulbul:v3 voice is its fallback)."""
 
         fixed_tts: Optional[TTSProvider] = None
+        source = "admin"
 
         def tts_for_voice(self, voice_id: Optional[str]) -> TTSProvider:
             base = super().tts_for_voice(voice_id)
             return FallbackTTS(self.fixed_tts, base) if self.fixed_tts is not None else base
 
+        def tts_for_agent_voice(self, voice_id: str) -> TTSProvider:
+            """An AI Agent's saved voice wins over the page's fixed speaker: that speaker is a persona of another
+            model (bulbul:v4-flash), so the agent's bulbul:v3 voice can't be spoken by it. The call uses the
+            agent's voice on the working bulbul:v3 setup for every line - one voice, never switching mid-call."""
+            base = super().tts_for_voice(voice_id)
+            if self.fixed_tts is not None:
+                log.warning("AI Providers TTS %s / %s not used for this AI Agent call: the agent's saved voice %s "
+                            "is a bulbul:v3 speaker (calls with it use bulbul:v3)",
+                            getattr(getattr(self.fixed_tts, "cfg", None), "SARVAM_TTS_MODEL", "?"),
+                            getattr(self.fixed_tts, "voice_id", "?"), voice_id)
+            return base
+
     return CallProviders
+
+
+def _tts_view(tts: TTSProvider) -> Dict[str, Any]:
+    if isinstance(tts, FallbackTTS):
+        return {"primary": _tts_view(tts.primary), "fallback": _tts_view(tts.fallback),
+                **({"sticky": True} if tts.sticky else {})}
+    cfg = getattr(tts, "cfg", None)
+    view: Dict[str, Any] = {"provider": getattr(tts, "name", type(tts).__name__)}
+    if cfg is not None:
+        view["model"] = cfg.SARVAM_TTS_MODEL
+    if getattr(tts, "voice_id", None):
+        view["voice"] = tts.voice_id
+    if cfg is not None and hasattr(tts, "_voice_settings"):
+        vs = tts._voice_settings()  # type: ignore[attr-defined]
+        view.update({k: vs[k] for k in ("pace", "temperature") if k in vs})
+        view["chunk_chars"] = cfg.SARVAM_TTS_MIN_BUFFER_CHARS
+    return view
+
+
+def describe_call(providers: Any, stt: Any, tts: TTSProvider) -> Dict[str, Any]:
+    """What one call uses, for its log line (the provider execution trace): where the setup comes from, the LLM
+    chain in order (provider:model), the STT model / mode / language / fallback model and the TTS model / voice.
+    Never a key or any other secret."""
+    llm = providers.llm
+    if isinstance(llm, ChainLLMProvider):
+        llm_view: Any = llm.labels
+    else:
+        cfg = llm.cfg
+        llm_view = [f"{getattr(llm, 'name', '?')}:{getattr(llm, 'model', '?')}"]
+        if cfg.LLM_FALLBACK_MODEL:
+            llm_view.append(f"{getattr(llm, 'name', '?')}:{cfg.LLM_FALLBACK_MODEL}")
+        if cfg.LLM_FALLBACK2_PROVIDER:
+            llm_view.append(f"{cfg.LLM_FALLBACK2_PROVIDER}:{cfg.LLM_FALLBACK2_MODEL or '?'}")
+    scfg = getattr(stt, "cfg", None)
+    stt_view: Dict[str, Any] = {"provider": getattr(stt, "name", type(stt).__name__)}
+    if scfg is not None:
+        model = scfg.SARVAM_STT_MODEL
+        stt_view.update({"model": model, "language": scfg.sarvam_language_code,
+                         "fallback_model": scfg.STT_FALLBACK_MODEL or None,
+                         "streaming": bool(scfg.STT_STREAMING)})
+        if model.startswith("saaras:v3"):
+            stt_view["mode"] = scfg.SARVAM_STT_MODE
+    return {"source": getattr(providers, "source", "env"), "llm": llm_view, "stt": stt_view, "tts": _tts_view(tts)}
 
 
 async def build_call_providers(db: AsyncSession, cfg: Settings = default_settings):

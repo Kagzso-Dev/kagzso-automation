@@ -528,11 +528,19 @@ class Providers:
             return self.twilio
         return self.plivo
 
+    # Where these providers come from (the call trace): "env" = the .env setup, "admin" = AI Providers page.
+    source = "env"
+
     def tts_for_voice(self, voice_id: Optional[str]) -> TTSProvider:
         if voice_id and isinstance(self.tts, SarvamTTS):
             voiced = SarvamTTS(self.tts.cfg, voice_id=voice_id, client=self.tts._client)
             return voiced if voiced.voice_id != self.tts.voice_id else self.tts
         return self.tts
+
+    def tts_for_agent_voice(self, voice_id: str) -> TTSProvider:
+        """An AI Agent's saved voice (Settings → AI Voice): that speaker for every line of the call. Here the
+        same as tts_for_voice; the AI Providers page's setup (provider_registry) overrides it."""
+        return self.tts_for_voice(voice_id)
 
     async def aclose(self) -> None:
         for p in (self.stt, self.llm, self.tts, self.twilio):
@@ -569,9 +577,10 @@ def stt_for_call(stt: STTProvider, variables: Mapping[str, Optional[str]], cfg: 
     """The speech recogniser for one call: the shared one, except a "Pure" language-style flow while
     SARVAM_STT_MODE_PURE is set - then its own copy with that mode (same connection pool)."""
     mode = (cfg.SARVAM_STT_MODE_PURE or "").strip()
-    if not mode or variables.get("flow_language_style") != "pure" or not isinstance(stt, SarvamSTT) or mode == cfg.SARVAM_STT_MODE:
+    if not mode or variables.get("flow_language_style") != "pure" or not isinstance(stt, SarvamSTT) or mode == stt.cfg.SARVAM_STT_MODE:
         return stt
-    return SarvamSTT(cfg.model_copy(update={"SARVAM_STT_MODE": mode}), client=stt._client)
+    # The call's own STT settings (the AI Providers page's model and key when switched on), only the mode changed.
+    return SarvamSTT(stt.cfg.model_copy(update={"SARVAM_STT_MODE": mode}), client=stt._client)
 
 
 # ===========================================================================
@@ -640,10 +649,12 @@ async def synthesize_line(tts: TTSProvider, text: str, pauses: Optional[Mapping[
 
 
 async def prerender_greeting(call_id: str, text: str, voice_id: Optional[str], pace: Optional[float] = None,
-                             pauses: Optional[Mapping[str, int]] = None, agent_voice: bool = False) -> None:
+                             pauses: Optional[Mapping[str, int]] = None, agent_voice: bool = False,
+                             picked_voice: Optional[str] = None) -> None:
     # The same speech settings the call itself will use (admin AI provider settings, else .env; an Autonomous
-    # AI Agent call: its voice profile).
-    tts = (await provider_registry.providers_for_call()).tts_for_voice(voice_id)
+    # AI Agent call: its voice profile, and its saved voice when it has one - exactly as CallSession picks them).
+    providers = await provider_registry.providers_for_call()
+    tts = providers.tts_for_agent_voice(picked_voice) if picked_voice else providers.tts_for_voice(voice_id)
     if agent_voice:
         tts = provider_registry.with_agent_voice(tts)
     try:
@@ -658,8 +669,9 @@ async def prerender_greeting(call_id: str, text: str, voice_id: Optional[str], p
 
 def schedule_greeting_prerender(call_id: str, text: str, voice_id: Optional[str],
                                 pace: Optional[float] = None, pauses: Optional[Mapping[str, int]] = None,
-                                agent_voice: bool = False) -> None:
-    task = asyncio.get_running_loop().create_task(prerender_greeting(call_id, text, voice_id, pace, pauses, agent_voice))
+                                agent_voice: bool = False, picked_voice: Optional[str] = None) -> None:
+    task = asyncio.get_running_loop().create_task(
+        prerender_greeting(call_id, text, voice_id, pace, pauses, agent_voice, picked_voice))
     _PRERENDER_TASKS.add(task)
     task.add_done_callback(_PRERENDER_TASKS.discard)
 
@@ -778,6 +790,8 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
                 flow_vars["flow_dnc_force"] = "true"
                 flow_vars["flow_target_sec"] = str(autonomous.target_duration_sec)
                 flow_vars["flow_voice_profile"] = AGENT_VOICE_PROFILE  # one calm, steady voice for the whole call
+                if flow_voice:  # the agent's saved voice: every line, whatever the AI Providers TTS speaker is
+                    flow_vars["flow_agent_voice"] = flow_voice
             if resolved.flow.pauses is not None:  # else the default pause lengths
                 flow_vars.update({f"flow_pause_{k}": str(v) for k, v in resolved.flow.pauses.model_dump().items()})
             # Training switched on with Active entries: compiled into each reply's prompt (llm_service.training_block).
@@ -813,7 +827,7 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
         variables["greeting_delay_sec"] = str(req.greeting_delay_sec)
     rotation = cfg.voice_rotation
     # An Autonomous AI Agent with a picked voice: that voice for the whole call, never a rotation voice.
-    agent_picked_voice = flow_voice if flow_vars.get("flow_voice_profile") == AGENT_VOICE_PROFILE else None
+    agent_picked_voice = flow_vars.get("flow_agent_voice")
     async with _VOICE_ROTATION_LOCK:  # pick + insert together so concurrent calls get different voices
         if agent_picked_voice:
             voice_id = agent_picked_voice
@@ -864,7 +878,8 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
                 agent_voice = variables.get("flow_voice_profile") == AGENT_VOICE_PROFILE
                 schedule_greeting_prerender(call.id, greeting, call.voice_id or agent.voice_id,
                                             None if agent_voice else greeting_pace(agent.first_message, cfg),
-                                            pauses_from_variables(variables), agent_voice=agent_voice)
+                                            pauses_from_variables(variables), agent_voice=agent_voice,
+                                            picked_voice=variables.get("flow_agent_voice"))
     return call
 
 
@@ -1234,10 +1249,13 @@ class CallSession:
         self.cfg = cfg
         self.providers = providers or get_providers()
         self.agent_voice = ctx.variables.get("flow_voice_profile") == AGENT_VOICE_PROFILE
-        self.tts = self.providers.tts_for_voice(ctx.voice_id)
+        picked = ctx.variables.get("flow_agent_voice")  # an AI Agent's saved voice (Settings → AI Voice)
+        self.tts = self.providers.tts_for_agent_voice(picked) if picked else self.providers.tts_for_voice(ctx.voice_id)
         if self.agent_voice:
             self.tts = provider_registry.with_agent_voice(self.tts)
         self.stt = stt_for_call(self.providers.stt, ctx.variables, cfg)
+        # Which LLM chain / STT / TTS / voice this call uses (never a key): one line per call for the logs.
+        log.info("Call providers: %s", provider_registry.describe_call(self.providers, self.stt, self.tts))
         self.store = store or get_session_store()
         # Input noise reduction: speech is detected on cleaned audio with an adaptive floor and a
         # low minimum (no fixed loudness gate), so quiet voices are heard; anything that started
