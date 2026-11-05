@@ -789,6 +789,8 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
                 # This call only: backend do-not-call whatever DNC_ENFORCE says, and the time hint every turn.
                 flow_vars["flow_dnc_force"] = "true"
                 flow_vars["flow_target_sec"] = str(autonomous.target_duration_sec)
+                # The hard stop as the phone system applies it (time_limit below), for the timing line only.
+                flow_vars["flow_max_sec"] = str(min(resolved.flow.limits.max_duration_sec, cfg.MAX_CALL_DURATION_SECONDS))
                 flow_vars["flow_voice_profile"] = AGENT_VOICE_PROFILE  # one calm, steady voice for the whole call
                 if flow_voice:  # the agent's saved voice: every line, whatever the AI Providers TTS speaker is
                     flow_vars["flow_agent_voice"] = flow_voice
@@ -1516,6 +1518,17 @@ class CallSession:
         """Backend do-not-call handling: DNC_ENFORCE, or this call is an Autonomous AI Agent's (always on)."""
         return self.cfg.DNC_ENFORCE or self.ctx.dnc_forced
 
+    @property
+    def autonomous_call(self) -> bool:
+        """An Autonomous AI Agent's call (call_service sets flow_target_sec only for those)."""
+        return bool(self.ctx.variables.get("flow_target_sec"))
+
+    @property
+    def hangup_cancel_on_barge_in(self) -> bool:
+        """Words over the closing line keep the call open: HANGUP_CANCEL_ON_BARGE_IN, or always on an
+        Autonomous AI Agent's call (never after do-not-call: _end_locked). Every other call: the switch, as before."""
+        return self.cfg.HANGUP_CANCEL_ON_BARGE_IN or self.autonomous_call
+
     def turn_variables(self) -> Mapping[str, Optional[str]]:
         """The variables for one LLM reply. An Autonomous AI Agent's call (flow_target_sec) also gets the
         seconds since the call connected (llm_service adds the timing line); every other call: unchanged."""
@@ -1978,7 +1991,7 @@ class CallSession:
         if self.cfg.BARGE_EARLY_STOP and self._speaking_turn is not None and self.ai_busy:
             self._note_heard(self._speaking_turn)
         hangup = self._hangup_task
-        if (self.cfg.HANGUP_CANCEL_ON_BARGE_IN and not self._end_locked and hangup is not None
+        if (self.hangup_cancel_on_barge_in and not self._end_locked and hangup is not None
                 and not hangup.done()):
             # Words over the closing line: the call stays open and they are answered.
             hangup.cancel()

@@ -212,8 +212,8 @@ class _Sender:
     async def checkpoint(self, name): ...
 
 
-def _session():
-    ctx = CallContextData(call_id="c-policy", agent_prompt="x", variables={})
+def _session(variables=None):
+    ctx = CallContextData(call_id="c-policy", agent_prompt="x", variables=variables or {})
     return CallSession(ctx, _Sender(), call_service.get_providers(), classifier=energy_classifier)
 
 
@@ -221,6 +221,19 @@ def _session():
 async def test_words_over_the_closing_line_cancel_the_hang_up_but_never_after_dnc(monkeypatch, switch, locked, cancelled):
     monkeypatch.setattr(settings, "HANGUP_CANCEL_ON_BARGE_IN", switch)
     s = _session()
+    s.end_call_requested, s._end_locked = True, locked
+    hangup = s._hangup_task = asyncio.create_task(asyncio.sleep(30))
+    await s.barge_in()
+    await asyncio.sleep(0.01)
+    assert hangup.cancelled() is cancelled
+    assert s.end_call_requested is not cancelled
+    hangup.cancel()
+
+
+@pytest.mark.parametrize("locked, cancelled", [(False, True), (True, False)])
+async def test_autonomous_agent_calls_always_cancel_the_hang_up_on_words_but_never_after_dnc(monkeypatch, locked, cancelled):
+    monkeypatch.setattr(settings, "HANGUP_CANCEL_ON_BARGE_IN", False)  # the switch stays off for every other call
+    s = _session({"flow_target_sec": "60", "flow_max_sec": "105"})
     s.end_call_requested, s._end_locked = True, locked
     hangup = s._hangup_task = asyncio.create_task(asyncio.sleep(30))
     await s.barge_in()

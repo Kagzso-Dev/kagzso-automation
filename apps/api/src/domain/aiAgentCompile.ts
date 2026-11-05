@@ -180,11 +180,15 @@ function companyFactsBlock(original: string, company: string): string {
 function callLengthBlock(target: number, max: number): string {
   return (
     "# CALL LENGTH\n\n" +
-    `Aim to finish in about ${target} seconds. The call is cut off by the phone system at ${max} seconds, so never let it run long.\n\n` +
+    `Aim to finish in about ${target} seconds. The call is cut off by the phone system at ${max} seconds, so make sure your goodbye is finished before then.\n\n` +
     "In order of priority: 1. introduce yourself, 2. the reason for the call, 3. one relevant service, 4. one or two questions " +
     "about their needs, 5. their interest and a suitable next step, 6. a polite closing.\n\n" +
-    "Never interrupt or rush the customer to keep to the time, and never mention the time. A customer who wants to stop, is " +
-    "busy, refuses or asks not to be called again ends the call at once.\n\n---\n\n"
+    "If the customer is interested and asking relevant questions, continue naturally past the target. Never stretch a call " +
+    "just to reach it.\n\n" +
+    "Never interrupt or rush the customer to keep to the time, and never mention the time. A customer who is not interested, " +
+    "is busy or wants to stop gets one short, warm closing: acknowledge them, thank them for their time and say goodbye, with " +
+    "no further pitch, then end the call. A request not to be called again ends the call at once, as the do-not-call rule " +
+    "says.\n\n---\n\n"
   );
 }
 

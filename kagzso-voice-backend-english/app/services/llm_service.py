@@ -512,18 +512,27 @@ def call_timing(variables: Mapping[str, Optional[str]]) -> str:
     try:
         target = int(variables.get("flow_target_sec") or 0)
         elapsed = int(variables.get("call_elapsed_sec") or 0)
+        limit = int(variables.get("flow_max_sec") or 0)  # the phone system's hard stop (0 = not given)
     except (TypeError, ValueError):
         return ""
     if target <= 0:
         return ""
     line = (f"\n\n--- Call timing (system) ---\nThe call has been running about {elapsed} seconds; the target "
             f"length is about {target} seconds. ")
+    if limit > 0 and elapsed >= limit - CALL_TIMING_FINAL_SEC:
+        return line + (f"The phone system ends the call at {limit} seconds: close now. If they are asking something, "
+                       "answer it in one short sentence, then thank them warmly and say goodbye (end the call as in "
+                       "CLOSING). Never mention the time.")
     if elapsed < target:
         return line + ("Keep replies short and focused on the most useful next step. Never rush or cut off the "
                        "customer, and never mention the time.")
-    return line + ("The target has passed: if the customer is not in the middle of a question, move to a polite "
-                   "close now (thank them and end the call as in CLOSING). If they are asking something, answer "
-                   "it in one short sentence first. Never mention the time.")
+    return line + ("The target has passed. If the customer is interested and asking relevant questions, continue "
+                   "naturally and answer them. Otherwise, move to a polite close when the conversation allows (thank "
+                   "them and end the call as in CLOSING). Never cut the customer off and never mention the time.")
+
+
+# Autonomous calls: this many seconds before the hard stop, the timing line asks for the closing.
+CALL_TIMING_FINAL_SEC = 20
 
 
 def turn_system_prompt(agent_prompt: str, history: List[Message], user_message: Optional[str],

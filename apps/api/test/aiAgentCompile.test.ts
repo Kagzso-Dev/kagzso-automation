@@ -202,6 +202,11 @@ describe("what the compiled flow tells the AI", () => {
     expect(len).toContain("about 60 seconds");
     expect(len).toContain("at 105 seconds");
     expect(len).toMatch(/Never interrupt or rush/);
+    // A refusal gets a warm closing (not an abrupt end); only do-not-call ends the call at once.
+    expect(len).toMatch(/not interested, is busy or wants to stop gets one short, warm closing/);
+    expect(len).toMatch(/not to be called again ends the call at once/);
+    expect(len).not.toMatch(/refuses or asks not to be called again ends the call at once/);
+    expect(len).toMatch(/interested and asking relevant questions, continue naturally past the target/);
   });
 
   it("training: active profile and only the given (approved) knowledge, all active", () => {

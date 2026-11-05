@@ -94,10 +94,21 @@ def test_timing_line_before_and_after_the_target():
     late = llm.call_timing({"flow_target_sec": "60", "call_elapsed_sec": "75"})
     assert "about 20 seconds" in early and "Keep replies short" in early and "move to a polite close" not in early
     assert "about 75 seconds" in late and "move to a polite close" in late
+    # Past the target an interested customer's questions are still answered; the close comes when it fits.
+    assert "interested and asking relevant questions, continue" in late and "close now" not in late
     assert llm.call_timing({"flow_target_sec": "x"}) == ""
     prompt = llm.build_system_prompt("You are Thaara.", {"customer_name": "Ragul", "flow_target_sec": "60",
                                                          "call_elapsed_sec": "75"})
     assert prompt.endswith(late)  # last: the rest of the prompt stays the same from turn to turn
+
+
+def test_timing_line_closes_before_the_hard_stop():
+    v = {"flow_target_sec": "60", "flow_max_sec": "105"}
+    assert "close now" not in llm.call_timing({**v, "call_elapsed_sec": "84"})
+    final = llm.call_timing({**v, "call_elapsed_sec": "85"})
+    assert "ends the call at 105 seconds: close now" in final and "continue naturally" not in final
+    # Without the hard stop (older calls) the line is as before.
+    assert "close now" not in llm.call_timing({"flow_target_sec": "60", "call_elapsed_sec": "100"})
 
 
 # ------------------------------------------------------------------ live call (fake STT / LLM / TTS)

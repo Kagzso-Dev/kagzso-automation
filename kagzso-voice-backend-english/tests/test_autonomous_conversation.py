@@ -124,21 +124,58 @@ def test_customer_interrupts_the_agent(client, auth, fakes, sync_engine, monkeyp
 
 
 # ------------------------------------------------------------------ refusal (not do-not-call)
-def test_customer_refusal_ends_politely_without_do_not_call(client, auth, fakes, sync_engine, monkeypatch):
-    flow = _flow("en", monkeypatch)
+# A warm goodbye per language, the customer's refusal, and what they say over the goodbye.
+GOODBYE = {
+    "en": "Okay, no problem sir. Thank you so much for your time. Have a nice day.",
+    "ta": "பரவாயில்ல sir, புரியுது. உங்க time-க்கு ரொம்ப thanks. Have a nice day sir.",
+}
+REFUSAL = {"en": "Not interested, thanks", "ta": "இப்போ interest இல்ல sir"}
+OVER_GOODBYE = {"en": "Wait, do you have a website?", "ta": "Sorry, உங்க website என்ன?"}
+WEBSITE = {"en": "Yes sir, it is kagzso.com.", "ta": "ஆமா sir, kagzso.com."}
+
+
+@pytest.mark.parametrize("lang", ["en", "ta"])
+def test_customer_refusal_ends_politely_without_do_not_call(client, auth, fakes, sync_engine, monkeypatch, lang):
+    flow = _flow(lang, monkeypatch)
     systems = _capture_systems(fakes)
-    fakes.llm.reply = "Okay, no problem. Thank you so much for your time. Have a nice day. [[END_CALL]]"
-    call_id, token = _dial(client, auth, flow)
-    fakes.stt.replies = ["Hello?", "Yes", "Not interested, thanks"]
+    fakes.llm.reply = GOODBYE[lang] + " [[END_CALL]]"
+    call_id, token = _dial(client, auth, flow, flow_id=f"agent_{lang}")
+    fakes.stt.replies = ["Hello?", "Yes", REFUSAL[lang]]
     _converse(client, call_id, token, turns=2)
     lines = _agent_lines(sync_engine, call_id)
-    assert lines[-1] == "Okay, no problem. Thank you so much for your time. Have a nice day."  # marker never spoken
-    assert fakes.plivo.hangups == ["uuid-k"]
+    assert lines[-1] == GOODBYE[lang]  # the warm goodbye is spoken in full; the marker never is
+    assert fakes.plivo.hangups == ["uuid-k"]  # then the call ends naturally
     assert "# NOT INTERESTED" in systems[-1] and "Do not ask why" in systems[-1]
+    # A refusal gets a warm closing; only do-not-call ends the call at once.
+    assert "gets one short, warm closing" in systems[-1]
+    assert "refuses or asks not to be called again ends the call at once" not in systems[-1]
     events = _events(sync_engine, call_id)
     assert "do_not_call_detected" not in events
     dnd = _rows(sync_engine, "select c.dnd from contacts c join calls k on k.contact_id = c.id where k.id = :id", call_id)
     assert not dnd[0][0]  # a refusal is not a do-not-call: the contact can be called again
+
+
+@pytest.mark.parametrize("lang", ["en", "ta"])
+def test_words_over_the_goodbye_keep_an_agent_call_open(client, auth, fakes, sync_engine, monkeypatch, lang):
+    assert settings.HANGUP_CANCEL_ON_BARGE_IN is False  # the shared switch stays off: agent calls only
+    flow = _flow(lang, monkeypatch)
+    fakes.llm.reply = GOODBYE[lang] + " [[END_CALL]]"
+    fakes.tts.chunks_per_sentence = 20  # the goodbye is still playing at Plivo: the hang-up is pending
+    call_id, token = _dial(client, auth, flow, flow_id=f"agent_{lang}")
+    fakes.stt.replies = ["Hello?", "Yes", REFUSAL[lang], OVER_GOODBYE[lang]]
+    with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
+        _start(ws)
+        _send(ws, tone_mulaw(400) + silence_mulaw(900))
+        _until(ws, "checkpoint")  # opening
+        _say(ws)  # identity question
+        _say(ws)  # the goodbye, still playing
+        fakes.llm.reply = WEBSITE[lang]
+        _send(ws, tone_mulaw(400) + silence_mulaw(900))  # the customer talks over the goodbye
+        _finish(ws, _until(ws, "checkpoint", limit=400))
+    events = _events(sync_engine, call_id)
+    assert "hangup_cancelled" in events and "agent_hangup" not in events
+    assert fakes.plivo.hangups == []  # the call stays open
+    assert _agent_lines(sync_engine, call_id)[-1] == WEBSITE[lang]  # and the customer is answered
 
 
 # ------------------------------------------------------------------ do-not-call in every agent language
@@ -192,19 +229,25 @@ def test_a_telephony_failure_when_placing_the_call_is_reported_not_retried(clien
 
 
 # ------------------------------------------------------------------ maximum duration
+@pytest.mark.parametrize("lang", ["en", "ta"])
+@pytest.mark.parametrize("elapsed, expect, absent", [
+    (70, "interested and asking relevant questions, continue naturally", "close now"),  # past the target
+    (100, "ends the call at 105 seconds: close now", "continue naturally"),             # near the hard stop
+])
 def test_maximum_duration_is_the_providers_hard_limit_and_the_target_triggers_wrap_up(client, auth, fakes, sync_engine,
-                                                                                      monkeypatch):
-    flow = _flow("en", monkeypatch)
+                                                                                      monkeypatch, lang, elapsed,
+                                                                                      expect, absent):
+    flow = _flow(lang, monkeypatch)
     assert flow["limits"]["max_duration_sec"] == 105 and flow["autonomous"]["target_duration_sec"] == 60
     systems = _capture_systems(fakes)
     fakes.llm.reply = "Thank you."
-    call_id, token = _dial(client, auth, flow)
+    call_id, token = _dial(client, auth, flow, flow_id=f"agent_{lang}")
     assert fakes.plivo.time_limits[-1] == 105  # Plivo cuts the call at 1:45 whatever is happening
 
-    def past_the_target():  # as if the call had been running for 100 s (no real waiting)
-        cs.ACTIVE_SESSIONS[call_id]._session_started -= 100
+    def running_for():  # as if the call had been running this long (no real waiting)
+        cs.ACTIVE_SESSIONS[call_id]._session_started -= elapsed
 
     fakes.stt.replies = ["Hello?", "Yes", "Tell me more"]
-    _converse(client, call_id, token, turns=2, on_open=past_the_target)
+    _converse(client, call_id, token, turns=2, on_open=running_for)
     timing = systems[-1].split("--- Call timing (system) ---", 1)[1]
-    assert "60" in timing and "close" in timing.lower()
+    assert "60" in timing and expect in timing and absent not in timing
