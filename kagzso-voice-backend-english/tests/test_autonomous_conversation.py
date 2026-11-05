@@ -12,6 +12,7 @@ duration and correct-language lines.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,20 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "autonomous"
 ANSWER = "It works alongside the software the hospital already uses."  # approved Q&A (k2)
 ALWAYS = "Kagzso automates billing follow-ups"  # approved always-on fact (k1)
 NO_INVENTION = "never guess or invent"
+# Agents open the call in their own words (autonomous.natural_lines): the LLM answers "Hello?" with its greeting
+# and asks for the customer, then answers "Yes" with the reason for the call. The fake LLM's first two replies.
+OPENING = {
+    "en": ["Good morning sir, this is Thaara from Kagzso Technology Services. Am I speaking with Ragul sir?",
+           "Thank you Ragul sir. I'm calling about automation for your hospital."],
+    "ta": ["வணக்கம் sir, good morning. நான் Thaara, Kagzso Technology Services-ல இருந்து. Ragul sir-கிட்ட தான் பேசறேனா?",
+           "Thanks Ragul sir. உங்க hospital-க்கு automation பத்தி பேசலாம்னு call பண்ணேன்."],
+}
+
+
+def _opening_then(fakes, lang: str, reply: str) -> None:
+    """The natural opening (two LLM replies in the call's language), then `reply` for every later turn."""
+    fakes.llm.replies = list(OPENING.get(lang, OPENING["en"]))
+    fakes.llm.reply = reply
 
 
 def _flow(lang: str, monkeypatch) -> dict:
@@ -60,11 +75,11 @@ def test_questions_objections_follow_ups_memory_and_repeats(client, auth, fakes,
     """One English agent call through every kind of customer turn."""
     flow = _flow("en", monkeypatch)
     systems = _capture_systems(fakes)
-    fakes.llm.reply = "Thank you for asking."
+    _opening_then(fakes, "en", "Thank you for asking.")
     call_id, token = _dial(client, auth, flow)
     said = [
-        "Hello?",
-        "Yes, speaking",                                            # identity (answered by the system)
+        "Hello?",                                                   # the AI greets and asks for Ragul
+        "Yes, speaking",                                            # the AI says why it is calling
         "Do you have an office in Dubai?",                          # 1 unexpected question, nothing approved on it
         "We already have billing software, will it replace our software?",  # 2 objection with an approved answer
         "And what does it do for payment reminders?",              # 3 follow-up question
@@ -72,8 +87,9 @@ def test_questions_objections_follow_ups_memory_and_repeats(client, auth, fakes,
     ]
     fakes.stt.replies = list(said)
     _converse(client, call_id, token, turns=len(said) - 1)
-    assert len(systems) == 4  # one LLM reply per customer turn after the identity question
-    unexpected, objection, follow_up, repeated = systems
+    assert len(systems) == 6  # the AI answers every customer turn, the opening ones too
+    _hello, _yes, unexpected, objection, follow_up, repeated = systems
+    assert _agent_lines(sync_engine, call_id)[:2] == OPENING["en"]  # its own words, no fixed greeting
 
     # Every turn: the approved always-on fact, the no-invention rules and the objection handling.
     for s in systems:
@@ -96,15 +112,16 @@ def test_questions_objections_follow_ups_memory_and_repeats(client, auth, fakes,
 # ------------------------------------------------------------------ interruption
 def test_customer_interrupts_the_agent(client, auth, fakes, sync_engine, monkeypatch):
     flow = _flow("en", monkeypatch)
-    fakes.llm.reply = "Kagzso helps hospitals. It automates billing follow-ups. It also sends payment reminders. It saves staff time."
-    fakes.tts.chunks_per_sentence = 20  # ~2 s per sentence still queued at Plivo: interruptible
+    _opening_then(fakes, "en",
+                  "Kagzso helps hospitals. It automates billing follow-ups. It also sends payment reminders. It saves staff time.")
     call_id, token = _dial(client, auth, flow)
     fakes.stt.replies = ["Hello?", "Yes", "What is this about?", "Wait, is this a sales call?"]
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         _start(ws)
         _send(ws, tone_mulaw(400) + silence_mulaw(900))
-        _until(ws, "checkpoint")  # opening
-        _say(ws)  # identity question
+        _until(ws, "checkpoint")  # the AI's greeting
+        _say(ws)  # the AI says why it is calling
+        fakes.tts.chunks_per_sentence = 20  # ~2 s per sentence still queued at Plivo: interruptible
         _say(ws)  # the long AI reply, still playing
         # The customer talks over it (no playedStream): playback is cleared at once.
         _send(ws, tone_mulaw(400) + silence_mulaw(900))
@@ -138,7 +155,7 @@ WEBSITE = {"en": "Yes sir, it is kagzso.com.", "ta": "ஆமா sir, kagzso.com.
 def test_customer_refusal_ends_politely_without_do_not_call(client, auth, fakes, sync_engine, monkeypatch, lang):
     flow = _flow(lang, monkeypatch)
     systems = _capture_systems(fakes)
-    fakes.llm.reply = GOODBYE[lang] + " [[END_CALL]]"
+    _opening_then(fakes, lang, GOODBYE[lang] + " [[END_CALL]]")
     call_id, token = _dial(client, auth, flow, flow_id=f"agent_{lang}")
     fakes.stt.replies = ["Hello?", "Yes", REFUSAL[lang]]
     _converse(client, call_id, token, turns=2)
@@ -146,6 +163,9 @@ def test_customer_refusal_ends_politely_without_do_not_call(client, auth, fakes,
     assert lines[-1] == GOODBYE[lang]  # the warm goodbye is spoken in full; the marker never is
     assert fakes.plivo.hangups == ["uuid-k"]  # then the call ends naturally
     assert "# NOT INTERESTED" in systems[-1] and "Do not ask why" in systems[-1]
+    # Said in its own words, in the call's language: no fixed English line is handed to the model.
+    assert "Okay, no problem. Thank you so much for your time" not in systems[-1]
+    assert "in your own words and in the call's language" in systems[-1]
     # A refusal gets a warm closing; only do-not-call ends the call at once.
     assert "gets one short, warm closing" in systems[-1]
     assert "refuses or asks not to be called again ends the call at once" not in systems[-1]
@@ -159,15 +179,15 @@ def test_customer_refusal_ends_politely_without_do_not_call(client, auth, fakes,
 def test_words_over_the_goodbye_keep_an_agent_call_open(client, auth, fakes, sync_engine, monkeypatch, lang):
     assert settings.HANGUP_CANCEL_ON_BARGE_IN is False  # the shared switch stays off: agent calls only
     flow = _flow(lang, monkeypatch)
-    fakes.llm.reply = GOODBYE[lang] + " [[END_CALL]]"
-    fakes.tts.chunks_per_sentence = 20  # the goodbye is still playing at Plivo: the hang-up is pending
+    _opening_then(fakes, lang, GOODBYE[lang] + " [[END_CALL]]")
     call_id, token = _dial(client, auth, flow, flow_id=f"agent_{lang}")
     fakes.stt.replies = ["Hello?", "Yes", REFUSAL[lang], OVER_GOODBYE[lang]]
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         _start(ws)
         _send(ws, tone_mulaw(400) + silence_mulaw(900))
-        _until(ws, "checkpoint")  # opening
-        _say(ws)  # identity question
+        _until(ws, "checkpoint")  # the AI's greeting
+        _say(ws)  # the AI says why it is calling
+        fakes.tts.chunks_per_sentence = 20  # the goodbye is still playing at Plivo: the hang-up is pending
         _say(ws)  # the goodbye, still playing
         fakes.llm.reply = WEBSITE[lang]
         _send(ws, tone_mulaw(400) + silence_mulaw(900))  # the customer talks over the goodbye
@@ -176,6 +196,93 @@ def test_words_over_the_goodbye_keep_an_agent_call_open(client, auth, fakes, syn
     assert "hangup_cancelled" in events and "agent_hangup" not in events
     assert fakes.plivo.hangups == []  # the call stays open
     assert _agent_lines(sync_engine, call_id)[-1] == WEBSITE[lang]  # and the customer is answered
+
+
+# ------------------------------------------------------------------ natural lines: silent pick-up and silence
+@pytest.mark.parametrize("lang", ["en", "ta"])
+def test_silent_pickup_and_silence_are_said_by_the_ai_in_its_own_words(client, auth, fakes, sync_engine, monkeypatch, lang):
+    monkeypatch.setattr(settings, "GREETING_DELAY_MS", 200)
+    monkeypatch.setattr(settings, "SILENCE_REPROMPT_SECONDS", 0.6)
+    flow = _flow(lang, monkeypatch)
+    assert flow["autonomous"]["natural_lines"] is True
+    said = [OPENING[lang][0], "Hello sir, can you hear me okay?", "No problem sir, I'll call another time. Have a nice day."]
+    fakes.llm.replies = list(said)
+    call_id, token = _dial(client, auth, flow, flow_id=f"agent_{lang}")
+    with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
+        _start(ws)
+        _send(ws, silence_mulaw(300))  # the customer picks up and says nothing, all call long
+        for _ in range(3):  # greeting, check-in, goodbye - each played
+            cp = _until(ws, "checkpoint")
+            ws.send_text(json.dumps({"event": "playedStream", "streamId": "s-k", "name": cp["name"]}))
+        deadline = time.time() + 5
+        while not fakes.plivo.hangups and time.time() < deadline:
+            time.sleep(0.05)
+    # Each moment was the LLM's own reply to a one-off instruction (never stored as the customer's words).
+    asked = [m[-1]["content"] for m in fakes.llm.seen_messages]
+    assert asked == [cs.AGENT_GREETING_INSTRUCTION, cs.AGENT_SILENCE_REPROMPT_INSTRUCTION, cs.AGENT_SILENCE_CLOSE_INSTRUCTION]
+    lines = _agent_lines(sync_engine, call_id)
+    assert lines == said
+    assert flow["silence"]["reprompt"] not in lines and flow["silence"]["closing"] not in lines  # no fixed lines
+    assert fakes.plivo.hangups == ["uuid-k"]  # the call still ends after the silent goodbye
+    customer = _rows(sync_engine, "select text from transcripts where call_id = :id and speaker = 'customer'", call_id)
+    assert customer == []
+
+
+# ------------------------------------------------------------------ busy / interested (follow-up switched off)
+BUSY = {"en": "I'm busy right now, I'm in a meeting", "ta": "நான் இப்போ busy-ஆ இருக்கேன் sir"}
+BUSY_CLOSE = {
+    "en": "No problem sir. Thanks for your time. Have a nice day.",
+    "ta": "பரவாயில்ல sir. உங்க time-க்கு thanks. Have a nice day sir.",
+}
+INTERESTED = {
+    "en": ["Yes, tell me. We run a hospital.", "How do billing follow-ups work?"],
+    "ta": ["ஆமா, சொல்லுங்க. நாங்க hospital நடத்துறோம்.", "Billing follow-up எப்படி வேலை செய்யும்?"],
+}
+NO_FOLLOW_UP = "Team follow-up is NOT configured: never say that the team will contact the customer."
+
+
+@pytest.mark.parametrize("lang", ["en", "ta"])
+def test_busy_customer_gets_a_polite_closing_without_a_callback(client, auth, fakes, sync_engine, monkeypatch, lang):
+    monkeypatch.setattr(settings, "TEAM_FOLLOWUP_ENABLED", False)  # as in the local .env / .env.ta
+    flow = _flow(lang, monkeypatch)
+    systems = _capture_systems(fakes)
+    _opening_then(fakes, lang, BUSY_CLOSE[lang] + " [[END_CALL]]")
+    call_id, token = _dial(client, auth, flow, flow_id=f"agent_{lang}")
+    fakes.stt.replies = ["Hello?", "Yes", BUSY[lang]]
+    _converse(client, call_id, token, turns=2)
+    assert _agent_lines(sync_engine, call_id)[-1] == BUSY_CLOSE[lang]
+    assert fakes.plivo.hangups == ["uuid-k"]
+    assert "# BUSY / NOT NOW" in systems[-1] and "never promise a callback" in systems[-1]
+    assert "No problem. Thanks for your time. Have a nice day." not in systems[-1]  # no fixed line to copy
+    assert NO_FOLLOW_UP in systems[-1] and '"team_follow_up_configured": false' in systems[-1]
+    assert "do_not_call_detected" not in _events(sync_engine, call_id)
+    dnd = _rows(sync_engine, "select c.dnd from contacts c join calls k on k.contact_id = c.id where k.id = :id", call_id)
+    assert not dnd[0][0]  # busy is not a do-not-call
+
+
+@pytest.mark.parametrize("lang", ["en", "ta"])
+def test_interested_customer_keeps_talking_past_the_target(client, auth, fakes, sync_engine, monkeypatch, lang):
+    monkeypatch.setattr(settings, "TEAM_FOLLOWUP_ENABLED", False)  # as in the local .env / .env.ta
+    flow = _flow(lang, monkeypatch)
+    systems = _capture_systems(fakes)
+    _opening_then(fakes, lang, "It sends the reminders for your team, sir.")
+    call_id, token = _dial(client, auth, flow, flow_id=f"agent_{lang}")
+
+    def past_the_target():  # 70 s into the call (no real waiting)
+        cs.ACTIVE_SESSIONS[call_id]._session_started -= 70
+
+    fakes.stt.replies = ["Hello?", "Yes", *INTERESTED[lang]]
+    _converse(client, call_id, token, turns=3, on_open=past_the_target)
+    assert len(systems) == 4  # every turn answered: the two opening turns and both of the customer's questions
+    systems = systems[2:]
+    assert fakes.plivo.hangups == []  # nothing ends the call while they are interested
+    for s in systems:
+        assert ALWAYS in s and NO_INVENTION in s  # approved facts only
+        assert NO_FOLLOW_UP in s and '"team_follow_up_configured": false' in s
+    timing = systems[-1].split("--- Call timing (system) ---", 1)[1]
+    assert "continue naturally" in timing and "close now" not in timing
+    history = [m["content"] for m in fakes.llm.seen_messages[-1]]
+    assert all(any(q in h for h in history) for q in INTERESTED[lang])  # the conversation is kept, in order
 
 
 # ------------------------------------------------------------------ do-not-call in every agent language
@@ -197,8 +304,8 @@ def test_do_not_call_overrides_the_conversation_in_the_call_language(client, aut
     call_id, token = _dial(client, auth, flow, flow_id=f"agent_{lang}")
     fakes.stt.replies = ["Hello?", "Yes", "Tell me more", request]
     _converse(client, call_id, token, turns=3)
-    assert _agent_lines(sync_engine, call_id)[-1] == line  # word for word, in the call's language
-    assert len(systems) == 1  # the model answered "Tell me more" only, never the do-not-call turn
+    assert _agent_lines(sync_engine, call_id)[-1] == line  # word for word, in the call's language (still fixed)
+    assert len(systems) == 3  # the model answered "Hello?", "Yes" and "Tell me more", never the do-not-call turn
     assert fakes.plivo.hangups == ["uuid-k"]
     assert _rows(sync_engine, "select outcome from calls where id = :id", call_id)[0][0] == "do_not_call"
 
@@ -209,11 +316,12 @@ def test_llm_failures_get_the_call_languages_fallback_then_a_polite_close(client
     flow = _flow(lang, monkeypatch)
     _failing_llm(fakes, monkeypatch, fail_times=2)
     call_id, token = _dial(client, auth, flow)
-    fakes.stt.replies = ["Hello?", "Yes", "Tell me more", "Hello?"]
-    _converse(client, call_id, token, turns=3)
+    # The AI says the opening itself, so the LLM being down shows at once: "Hello?" and "Yes" both fail.
+    fakes.stt.replies = ["Hello?", "Yes"]
+    _converse(client, call_id, token, turns=1)
     lines = _agent_lines(sync_engine, call_id)
-    assert lines[-2] == cs.FALLBACK_REPLIES[lang]  # one clarification, in the call's language
-    assert lines[-1] == flow["silence"]["closing"]  # then the flow's own closing line
+    assert lines == [cs.FALLBACK_REPLIES[lang], flow["silence"]["closing"]]  # one clarification, then the close
+    # (both fixed: with the LLM down, nothing else can speak - in the call's language)
     assert fakes.plivo.hangups == ["uuid-k"]
     assert _events(sync_engine, call_id).count("fallback_line") == 2
 

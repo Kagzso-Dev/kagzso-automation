@@ -205,7 +205,12 @@ export const callFlowDefinition = z
      * stays limits.max_duration_sec) and the voice backend enforces do-not-call whatever DNC_ENFORCE says.
      */
     autonomous: z
-      .object({ target_duration_sec: z.number().int().min(20).max(600), dnc_enforce: z.literal(true).default(true) })
+      .object({
+        target_duration_sec: z.number().int().min(20).max(600),
+        dnc_enforce: z.literal(true).default(true),
+        // The LLM says the opening and the silence lines in its own words (the voice backend's FlowAutonomous).
+        natural_lines: z.boolean().optional(),
+      })
       .strict()
       .optional(),
     transfer: z

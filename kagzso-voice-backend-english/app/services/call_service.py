@@ -83,6 +83,20 @@ GREETING_INSTRUCTION = (
     "(The customer has picked up the phone but has not said anything yet. "
     "Greet them warmly, introduce yourself in one sentence, and ask if now is a good time.)"
 )
+# Autonomous AI Agents with natural lines (CallContextData.natural_lines): the LLM says these moments in its own
+# words, in the call's language. Sent as this turn's message only; never stored as the customer's words.
+AGENT_GREETING_INSTRUCTION = (
+    "(The customer has just picked up the phone and has not said anything yet. Open the call as OPENING says, "
+    "in your own words: a warm greeting, your name and the company, and whether you are speaking with the "
+    "customer. One or two short sentences.)"
+)
+AGENT_SILENCE_REPROMPT_INSTRUCTION = (
+    "(The customer has been silent for a while. In one short, natural sentence, check gently whether they can "
+    "hear you. Nothing else.)"
+)
+AGENT_SILENCE_CLOSE_INSTRUCTION = (
+    "(The customer is still silent. Say one short, warm goodbye in your own words. The call ends after it.)"
+)
 FALLBACK_REPLIES = {
     "en": "Sorry, I couldn't hear you clearly. Could you please repeat that?",
     "ta": "Sorry, clear-ஆ கேக்கல. கொஞ்சம் repeat பண்ணுங்க please.",
@@ -791,6 +805,8 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
                 flow_vars["flow_target_sec"] = str(autonomous.target_duration_sec)
                 # The hard stop as the phone system applies it (time_limit below), for the timing line only.
                 flow_vars["flow_max_sec"] = str(min(resolved.flow.limits.max_duration_sec, cfg.MAX_CALL_DURATION_SECONDS))
+                if autonomous.natural_lines:  # the LLM says the opening and the silence lines (load_call_context)
+                    flow_vars["flow_natural_lines"] = "true"
                 flow_vars["flow_voice_profile"] = AGENT_VOICE_PROFILE  # one calm, steady voice for the whole call
                 if flow_voice:  # the agent's saved voice: every line, whatever the AI Providers TTS speaker is
                     flow_vars["flow_agent_voice"] = flow_voice
@@ -874,7 +890,7 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
         await get_session_store().set_fields(call.id, provider_request_id=result.request_uuid)
         log.info("Plivo outbound call fired")
         watch_for_provider_callback(call.id, cfg.NO_PROVIDER_CALLBACK_SECONDS)
-        if cfg.GREETING_PRERENDER and agent.first_message:
+        if cfg.GREETING_PRERENDER and agent.first_message and variables.get("flow_natural_lines") != "true":
             greeting = opening_line(agent.first_message, variables)
             if greeting:
                 agent_voice = variables.get("flow_voice_profile") == AGENT_VOICE_PROFILE
@@ -1141,6 +1157,9 @@ class CallContextData:
     dnc_line: Optional[str] = None
     # An Autonomous AI Agent's call: do-not-call is enforced by the backend whatever DNC_ENFORCE says.
     dnc_forced: bool = False
+    # An Autonomous AI Agent with natural lines: no fixed greeting (first_message None); the LLM opens the call
+    # and says the silence lines in its own words. The do-not-call and fallback lines stay fixed.
+    natural_lines: bool = False
 
 
 @dataclass
@@ -2173,7 +2192,7 @@ class CallSession:
             if self.ctx.first_message:
                 self._start_turn(scripted=self.greeting_text())
             else:
-                self._start_turn(injected=GREETING_INSTRUCTION)
+                self._start_turn(injected=self.greeting_instruction())
 
     FIRST_SPEECH_HOLD_MAX_SECONDS = 2.0  # wait at most this long for the customer to stop before greeting
 
@@ -2213,7 +2232,11 @@ class CallSession:
         if self.ctx.first_message:
             self._start_turn(scripted=self.greeting_text())
         else:
-            self._start_turn(injected=GREETING_INSTRUCTION)
+            self._start_turn(injected=self.greeting_instruction())
+
+    def greeting_instruction(self) -> str:
+        """What the LLM is asked when it opens a call without a fixed greeting."""
+        return AGENT_GREETING_INSTRUCTION if self.ctx.natural_lines else GREETING_INSTRUCTION
 
     async def _greet_at_delay(self) -> None:
         """Dispatch's AI Greeting Delay: greet exactly this long after the customer answered, whatever
@@ -2298,16 +2321,23 @@ class CallSession:
                 idle =time.monotonic() - max(self._last_activity, self._playback_until)
                 if idle < self.cfg.SILENCE_REPROMPT_SECONDS:
                     continue
+                natural = self.ctx.natural_lines  # the LLM says these in its own words (agents only)
                 if self._silence_prompts == 0:
                     self._silence_prompts = 1
                     log.info("Customer silent for %.0fs - re-prompting", idle)
                     self._event("silence_reprompt")
-                    self._start_turn(scripted=self.ctx.silence_reprompt or silence_reprompt(self.cfg.CALL_LANGUAGE))
+                    if natural:
+                        self._start_turn(injected=AGENT_SILENCE_REPROMPT_INSTRUCTION)
+                    else:
+                        self._start_turn(scripted=self.ctx.silence_reprompt or silence_reprompt(self.cfg.CALL_LANGUAGE))
                 else:
                     log.info("Still no response - closing the call politely")
                     self._event("silence_close")
-                    self.end_call_requested = True
-                    self._start_turn(scripted=self.ctx.silence_closing or silence_closing(self.cfg.CALL_LANGUAGE))
+                    self.end_call_requested = True  # the call ends after this line, whatever it says
+                    if natural:
+                        self._start_turn(injected=AGENT_SILENCE_CLOSE_INSTRUCTION)
+                    else:
+                        self._start_turn(scripted=self.ctx.silence_closing or silence_closing(self.cfg.CALL_LANGUAGE))
                 self._last_activity = time.monotonic()
 
     def _identity_silence_active(self) -> bool:
@@ -3091,10 +3121,12 @@ async def load_call_context(call_id: str) -> Optional[CallContextData]:
         variables = dict(call.variables or {})
         flow_lines = {key: render_first_message(variables[f"flow_silence_{key}"], variables) or None
                       for key in ("reprompt", "closing") if variables.get(f"flow_silence_{key}")}
+        natural = variables.get("flow_natural_lines") == "true"
         return CallContextData(
             call_id=call.id,
             agent_prompt=call.agent.system_prompt,
-            first_message=call.agent.first_message,
+            first_message=None if natural else call.agent.first_message,
+            natural_lines=natural,
             variables=variables,
             voice_id=call.voice_id or call.agent.voice_id,
             provider_call_id=call.provider_call_id,

@@ -631,7 +631,7 @@ describe("Preview and Publish with the built-in flows a real voice backend serve
     expect(sent.sample).toEqual({ customer_name: "Raagul", gender: "male" });
     expect(sent.flow.language).toBe(lang);
     expect(sent.flow).not.toHaveProperty("language_style");
-    expect(sent.flow.autonomous).toEqual({ target_duration_sec: 60, dnc_enforce: true });
+    expect(sent.flow.autonomous).toEqual({ target_duration_sec: 60, dnc_enforce: true, natural_lines: true });
     expect(String((sent.flow.greeting as { text: string }).text)).toContain(GREETING[lang]);
     expect(sent.flow.training.knowledge.map((k) => [k.status, k.topic, k.text])).toEqual([
       ["active", "Integration", "It works alongside your software."],

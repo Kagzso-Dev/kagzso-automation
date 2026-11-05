@@ -5,7 +5,8 @@
 //
 // What changes compared with the built-in executive flow:
 //   greeting / identity  AI_AGENT_OPENINGS for the language, with the agent and company names filled in
-//   blocks               "agent" (who calls, why, the business), "opening", "company_facts" rewritten;
+//   blocks               "agent" (who calls, why, the business), "opening" (the agent greets in its own words),
+//                        "company_facts" and the busy / not-interested / end closings (no fixed quoted line) rewritten;
 //                        "industry_context", "voice_delivery", "call_length" and (when given) "ai_instructions"
 //                        added;
 //                        {{title_to_use}} → {{title}} everywhere, so a contact without a gender gets no
@@ -111,12 +112,18 @@ function agentBlock(input: CompileInput): string {
   );
 }
 
-function openingBlock(greeting: string): string {
+/**
+ * The agent opens the call itself (autonomous.natural_lines): no fixed greeting or identity question is spoken by
+ * the system, so the LLM greets, says who it is and asks for the customer in its own words, in the call's language.
+ */
+function openingBlock(): string {
   return (
     "# OPENING\n\n" +
-    `The call opens with the system saying "${greeting}". When the customer's name is known, the system then asks whether ` +
-    "it is speaking with them. Both appear as assistant messages in the conversation: never say them again and never say good " +
-    "morning, good afternoon or good evening yourself.\n\n" +
+    "There is no fixed greeting: you open the call yourself, in your own words, like a real person on the phone. When " +
+    "the customer picks up or says hello, in one or two short sentences: greet them warmly (use `time_greeting` from the " +
+    "customer details, for example good morning, when it is given), say your name and the company, and ask whether you " +
+    "are speaking with the customer by `address_as`. Without a customer name, greet them, say who you are and ask " +
+    "whether they have a minute. Greet only once: never repeat the greeting or your introduction.\n\n" +
     "Whatever the customer says next, respond to it. After they confirm who they are, thank them briefly and say in one short " +
     "sentence why you are calling, relevant to their industry (see THE CUSTOMER'S BUSINESS). Confirming their name never ends the call. " +
     "If they say they are not the person you asked for, or it is unclear who answered, do not assume anything: politely ask " +
@@ -251,6 +258,27 @@ function instructionsBlock(text: string): string {
   );
 }
 
+/**
+ * The built-in closings quote one fixed English line ("Okay, no problem. Thank you ..."), which an LLM tends to read
+ * word for word, in English even on a Tamil call. An agent says them in its own words, in the call's language.
+ */
+export const NATURAL_CLOSINGS: Record<string, string> = {
+  busy:
+    "# BUSY / NOT NOW\n\n" +
+    "If the customer is busy, in a meeting, driving, or asks you to call later: acknowledge it kindly, thank them for " +
+    "their time and say goodbye, in your own words and in the call's language, in one or two short sentences. Then end " +
+    "the call. Do not ask when to call back and never promise a callback.\n\n---\n\n",
+  not_interested:
+    "# NOT INTERESTED\n\n" +
+    "If the customer says they are not interested, don't need it, or are fine: acknowledge it kindly, thank them warmly " +
+    "for their time and say goodbye, in your own words and in the call's language, in one or two short sentences. Then " +
+    "end the call. Do not ask why, do not re-pitch.\n\n---\n\n",
+  end_call_request:
+    "# THE CUSTOMER WANTS TO END\n\n" +
+    "If the customer says bye, has to go, or asks to end the call: thank them for their time and say goodbye, in your " +
+    "own words and in the call's language, in one short sentence. Then end the call.\n\n---\n\n",
+};
+
 // The built-in executive's do-not-call line. The voice backend speaks a flow's first quoted line in its
 // "do_not_call" block word for word (reply_speed.flow_dnc_line), so a Tamil / Hindi / Kannada agent gets it
 // in its own language instead of in English.
@@ -292,7 +320,8 @@ export function compileAgentFlow(input: CompileInput): CallFlowDefinition {
     }
     let text = b.text;
     if (b.id === "agent") text = agentBlock(input);
-    else if (b.id === "opening") text = openingBlock(greeting.replace(/\{\{\s*(time_greeting|title)\s*\}\}/g, (_m, v) => (v === "title" ? "sir / madam" : "Good morning")));
+    else if (b.id === "opening") text = openingBlock();
+    else if (b.id in NATURAL_CLOSINGS) text = NATURAL_CLOSINGS[b.id]!;
     else if (b.id === "company_facts") text = companyFactsBlock(b.text, company);
     else if (b.id === "do_not_call") text = doNotCallBlock(b.text, opening.dnc);
     blocks.push({ ...b, text: swapTitle(text) });
@@ -321,7 +350,9 @@ export function compileAgentFlow(input: CompileInput): CallFlowDefinition {
     identity: { question: opening.identity, reask: opening.reask },
     blocks,
     limits: { max_duration_sec: agent.maxDurationSec },
-    autonomous: { target_duration_sec: agent.targetDurationSec, dnc_enforce: true },
+    // natural_lines: the agent opens the call and says the silence lines in its own words (the fixed greeting and
+    // identity lines above stay in the definition for voice backends without it). Do-not-call stays fixed.
+    autonomous: { target_duration_sec: agent.targetDurationSec, dnc_enforce: true, natural_lines: true },
     training: {
       enabled: true,
       token_cap: TRAINING_MAX_TOKEN_CAP,

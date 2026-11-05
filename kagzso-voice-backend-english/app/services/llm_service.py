@@ -479,6 +479,8 @@ def build_system_prompt(
     agent = agent_call(variables) and not guided
     if agent:  # structured, every turn: the name with the title for the GIVEN gender, in the call's language
         data["address_as"] = address_as_for(safe["customer_name"], safe["gender"], lang) or None
+        if variables.get("flow_natural_lines") == "true":  # the AI opens the call itself (no fixed greeting)
+            data["time_greeting"] = safe["time_greeting"] or None
     brand = (
         f"\n- Our company name is spelled Kagzso but pronounced \"Kexo\". "
         f"Whenever you say it, write it exactly as {brand_spoken(lang)}."

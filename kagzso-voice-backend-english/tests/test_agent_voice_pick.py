@@ -26,6 +26,7 @@ from app.core.config import settings
 from app.core.voices import DOCUMENTED_GENDERS, offered_voices
 from app.services import call_service as cs
 from tests.test_agent_voice import REPLIES, RecordingSarvamTTS, recorder  # noqa: F401  (pytest fixture)
+from tests.test_autonomous_agent import _capture_systems
 from tests.test_autonomous_conversation import _converse, _flow
 from tests.test_nila_flow import _call
 
@@ -102,11 +103,14 @@ def test_every_line_of_a_tamil_agent_call_uses_the_picked_voice(client, auth, fa
 def test_the_customer_is_addressed_by_the_contact_gender_whatever_the_voice(client, auth, fakes, monkeypatch, recorder,
                                                                            tamil_voices, contact, voice):
     flow = {**_flow("ta", monkeypatch), "voice_id": voice}
+    systems = _capture_systems(fakes)
     _talk(client, auth, fakes, flow, contact, flow_id=f"agent_{contact}_{voice}")
     title, other = ("sir", "madam") if contact == "male" else ("madam", "sir")  # llm_service: male → sir, female → madam
-    spoken = [t for s in recorder.streams for t in s.texts] + [e[1] for e in recorder.log if e[0] == "rest"]
-    greeting = next(t for t in spoken if t and "வணக்கம்" in t)
-    assert title in greeting and other not in greeting
+    # The agent greets in its own words (natural_lines): every reply is told how to address the customer, by the
+    # contact's gender - never by the voice's.
+    assert systems
+    for s in systems:
+        assert f'"address_as": "Ragul {title}' in s and f'"address_as": "Ragul {other}' not in s
     assert _speakers(recorder.log) == {voice}
 
 

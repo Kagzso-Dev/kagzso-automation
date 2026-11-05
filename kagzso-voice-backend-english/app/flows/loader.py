@@ -72,6 +72,8 @@ def flow_hash(flow: CallFlow) -> str:
     for optional in ("pauses", "recording_notice", "identity", "training", "autonomous"):  # flows without them keep the hash they always had
         if data.get(optional) is None:
             data.pop(optional, None)
+    if isinstance(data.get("autonomous"), dict) and not data["autonomous"].get("natural_lines"):
+        data["autonomous"].pop("natural_lines", None)  # agents published before it keep their hash
     canonical = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

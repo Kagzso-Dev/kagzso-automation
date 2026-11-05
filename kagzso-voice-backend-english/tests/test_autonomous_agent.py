@@ -111,6 +111,19 @@ def test_timing_line_closes_before_the_hard_stop():
     assert "close now" not in llm.call_timing({"flow_target_sec": "60", "call_elapsed_sec": "100"})
 
 
+def test_natural_lines_off_keeps_the_hash_agents_were_published_with(monkeypatch):
+    import copy
+    from app.flows.loader import flow_hash, parse_flow
+
+    monkeypatch.setattr(settings, "CALL_LANGUAGE", "en")
+    raw = json.loads((FIXTURES / "en.json").read_text(encoding="utf-8"))
+    off, missing = copy.deepcopy(raw), copy.deepcopy(raw)
+    off["autonomous"]["natural_lines"] = False
+    del missing["autonomous"]["natural_lines"]
+    assert parse_flow(missing).autonomous.natural_lines is False  # older agents: the fixed lines, as before
+    assert flow_hash(parse_flow(off)) == flow_hash(parse_flow(missing)) != flow_hash(parse_flow(raw))
+
+
 # ------------------------------------------------------------------ live call (fake STT / LLM / TTS)
 def _capture_systems(fakes):
     seen = []
@@ -246,23 +259,29 @@ def test_compiled_agent_call_per_language(client, auth, fakes, sync_engine, monk
     # behaviour that applies once the native-speaker review lifts the pause.
     monkeypatch.setattr(cs, "AUTONOMOUS_CALLS_BLOCKED", {})
     systems = _capture_systems(fakes)
+    # The agent opens the call in its own words (natural_lines): the LLM answers "Hello?" and "Yes, speaking" too.
+    opening = ["Hello, this is Thaara from Kagzso Technology Services. Am I speaking with Ragul sir?",
+               "Thank you sir. I'm calling about automation for your hospital."]
+    fakes.llm.replies = list(opening)
     fakes.llm.reply = "Thank you. We help hospitals automate billing follow-ups."
     call_id, token = _call(client, auth, gender="male", flow_id=f"agent_{lang}", flow_version=1, flow=flow)
     fakes.stt.replies = ["Hello?", "Yes, speaking", "Will it replace our software?", "Okay, thank you"]
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         _start(ws)
         _send(ws, tone_mulaw(400) + silence_mulaw(900))
-        _until(ws, "checkpoint")  # opening
-        _say(ws)  # identity question
+        _until(ws, "checkpoint")  # the AI's greeting
+        _say(ws)  # the AI says why it is calling
         _say(ws)  # first AI reply
         _finish(ws, _say(ws))  # the knowledge question
     lines = _agent_lines(sync_engine, call_id)
-    assert GREETING_WORD[lang] in lines[0] and "Kagzso Technology Services" in lines[0]
-    assert any("Ragul" in line for line in lines[1:3])  # the identity question names the contact
-    # Two AI replies: to "Will it replace our software?" and to "Okay, thank you" ("Yes, speaking" answered the
-    # system's identity question).
-    assert len(systems) == 2
-    question, after = systems
+    assert lines[:2] == opening  # the AI's own words: the compiled flow's fixed greeting is never spoken
+    assert not any(GREETING_WORD[lang] in line for line in lines)
+    # Four AI replies: "Hello?", "Yes, speaking", "Will it replace our software?" and "Okay, thank you".
+    assert len(systems) == 4
+    for s in systems:
+        assert "There is no fixed greeting: you open the call yourself" in s
+        assert '"time_greeting": "Good' in s and '"address_as": "Ragul' in s  # what it greets and asks with
+    question, after = systems[2:]
     answer = "It works alongside the software the hospital already uses."
     assert answer in question and answer not in after  # retrieved for the turn that asks it, per turn
     for s in systems:

@@ -82,6 +82,8 @@ class FakeLLM(LLMProvider):
     def __init__(self):
         super().__init__(settings)
         self.reply = "Hi Arun, this is Priya from Kagzso. Is now a good time for a quick introduction?"
+        # Replies used one per live reply, in order, before `reply` (empty = always `reply`, as before).
+        self.replies: List[str] = []
         self.outcome_json = '{"outcome": "interested", "summary": "Customer is interested."}'
         self.seen_messages = []
 
@@ -90,7 +92,8 @@ class FakeLLM(LLMProvider):
             yield self.outcome_json
             return
         self.seen_messages.append(messages)
-        for word in self.reply.split(" "):
+        text = self.replies.pop(0) if self.replies else self.reply
+        for word in text.split(" "):
             yield word + " "
 
 

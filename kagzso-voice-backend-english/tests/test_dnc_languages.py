@@ -220,14 +220,14 @@ def test_kannada_agent_mid_conversation(client, auth, fakes, sync_engine, monkey
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         _start(ws)
         _send(ws, tone_mulaw(400) + silence_mulaw(900))
-        _until(ws, "checkpoint")  # opening
-        _say(ws)  # identity question
+        _until(ws, "checkpoint")  # the AI's greeting (natural_lines: its own words)
+        _say(ws)  # the AI says why it is calling
         _say(ws)  # the AI answers the question
         _finish(ws, _say(ws))  # do-not-call
     lines = _agent_lines(sync_engine, call_id)
     assert fakes.llm.reply in lines  # a real AI turn happened first
     assert lines[-1] == KN_DNC_LINE  # the agent's own Kannada line, word for word
-    assert len(systems) == 1  # the LLM answered the question only: never asked about the do-not-call turn
+    assert len(systems) == 3  # "Hello?", "ಹೌದು" and the question: never asked about the do-not-call turn
     _assert_dnc_recorded(sync_engine, fakes, call_id)
 
 
@@ -236,16 +236,15 @@ def test_kannada_agent_dnc_answering_the_identity_question(client, auth, fakes, 
     systems = _capture_systems(fakes)
     fakes.llm.reply = "ಧನ್ಯವಾದಗಳು."
     call_id, token = _call(client, auth, gender="female", flow_id="agent_kn", flow_version=1, flow=flow)
-    fakes.stt.replies = ["Hello?", "ಹೌದು", "ಕಾಲ್ ಮಾಡಬೇಡಿ"]
+    fakes.stt.replies = ["Hello?", "ಕಾಲ್ ಮಾಡಬೇಡಿ"]
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         _start(ws)
         _send(ws, tone_mulaw(400) + silence_mulaw(900))
-        _until(ws, "checkpoint")  # opening
-        _say(ws)  # identity question
+        _until(ws, "checkpoint")  # the AI's greeting, asking for the customer (natural_lines)
         _finish(ws, _say(ws))  # "don't call" instead of an answer to the identity question
     lines = _agent_lines(sync_engine, call_id)
     assert lines[-1] == KN_DNC_LINE
-    assert not systems
+    assert len(systems) == 1  # the LLM said the greeting only: never asked about the do-not-call turn
     _assert_dnc_recorded(sync_engine, fakes, call_id)
 
 

@@ -169,9 +169,13 @@ class FlowAutonomous(_Strict):
     normal flow, exactly as before. With it, the call (only this call):
       - is told each turn how long it has been running, and to start closing once target_duration_sec has
         passed (the hard stop stays limits.max_duration_sec, the Plivo / Twilio time limit);
-      - enforces do-not-call in the backend (as DNC_ENFORCE does) whatever DNC_ENFORCE is set to."""
+      - enforces do-not-call in the backend (as DNC_ENFORCE does) whatever DNC_ENFORCE is set to;
+      - natural_lines: the LLM says the opening (greeting + "am I speaking with ...") and the silence lines in its
+        own words instead of the fixed greeting / identity question / silence lines. The do-not-call line and the
+        fallback lines (LLM down) stay fixed. False = the fixed lines, as before."""
     target_duration_sec: int = Field(60, ge=20, le=600)
     dnc_enforce: Literal[True] = True
+    natural_lines: bool = False
 
 
 class FlowTransfer(_Strict):

@@ -17,6 +17,7 @@ import {
   AgentCompileError,
   compileAgentFlow,
   INSTRUCTIONS_HEADER,
+  NATURAL_CLOSINGS,
   VOICE_DELIVERY_BLOCK,
   type CompileInput,
 } from "../src/domain/aiAgentCompile.js";
@@ -80,7 +81,17 @@ describe.each(["en", "ta", "hi", "kn"] as const)("compiled agent flow (%s)", (la
     expect(out.base).toBe("executive");
     expect(out.language).toBe(language);
     expect(out.limits).toEqual({ max_duration_sec: 105 });
-    expect(out.autonomous).toEqual({ target_duration_sec: 60, dnc_enforce: true });
+    expect(out.autonomous).toEqual({ target_duration_sec: 60, dnc_enforce: true, natural_lines: true });
+  });
+
+  it("the agent opens the call in its own words: no fixed greeting quoted to the LLM", () => {
+    const opening = text(out, "opening");
+    expect(opening).toMatch(/There is no fixed greeting: you open the call yourself, in your own words/);
+    expect(opening).toMatch(/`time_greeting`/);
+    expect(opening).toMatch(/`address_as`/);
+    expect(opening).toMatch(/Greet only once/);
+    expect(opening).not.toContain(out.greeting.text.slice(0, 12)); // the fixed line is not handed to the LLM
+    expect(opening).not.toMatch(/never say good morning/i);
   });
 
   it("opens with the agent and company, then the identity question; sir / madam only from a given gender", () => {
@@ -104,13 +115,23 @@ describe.each(["en", "ta", "hi", "kn"] as const)("compiled agent flow (%s)", (la
     expect(text(out, "opening")).toMatch(/politely ask whether the person you are calling is available/);
   });
 
-  it("keeps every locked safety block and the do-not-call / closing blocks of the built-in flow", () => {
+  it("keeps every locked safety block and the do-not-call / outcome / rules blocks of the built-in flow", () => {
     const base = builtinExecutive(language);
     const locked = (d: CallFlowDefinition) => d.blocks.filter((b) => "locked" in b);
     expect(locked(out)).toEqual(locked(base));
-    for (const id of ["not_interested", "busy", "end_call_request", "outcome_rules", "rules"]) {
+    for (const id of ["outcome_rules", "rules"]) {
       expect(text(out, id)).toBe(text(base, id).replace(/\{\{\s*title_to_use\s*\}\}/g, "{{title}}"));
     }
+    // The closings: the same situations and limits, said in the agent's own words (no fixed quoted line).
+    for (const id of ["not_interested", "busy", "end_call_request"]) {
+      expect(text(base, id)).toMatch(/> "/);
+      expect(text(out, id)).toBe(NATURAL_CLOSINGS[id]);
+      expect(text(out, id)).not.toMatch(/> "/);
+      expect(text(out, id)).toMatch(/in your own words and in the call's language/);
+      expect(text(out, id)).toMatch(/Then end the call/);
+    }
+    expect(text(out, "busy")).toMatch(/never promise a callback/);
+    expect(text(out, "not_interested")).toMatch(/do not re-pitch/);
     // do_not_call: the same block, with the line the backend speaks word for word in the call's language.
     const dnc = AI_AGENT_OPENINGS[language]!.dnc;
     expect(text(out, "do_not_call")).toBe(
