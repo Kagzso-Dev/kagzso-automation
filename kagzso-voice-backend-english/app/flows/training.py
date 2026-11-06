@@ -13,6 +13,11 @@ fixed rule, right before the customer data, under a header saying it never overr
     tail   "For this reply": phrases, Q&A, facts and examples picked for the customer's latest
            words by keyword / character-trigram matching (no paid service). The phrase used in
            the previous reply is never offered again, so the same phrase isn't said twice in a row.
+           An Autonomous AI Agent's call (`recent`, the customer's earlier words): every approved
+           Q&A and fact is offered, most relevant to the conversation first, as far as the cap allows.
+           The LLM reads and understands them itself, so a follow-up that names no topic, or Tamil
+           speech about knowledge written in English, still reaches it. Keyword matching alone
+           can't do either.
 
 The block never exceeds the flow's token cap: activation is refused when core + the largest possible
 tail would (validate_cap), and the tail is filled greedily within the cap at run time anyway. A flow
@@ -25,7 +30,7 @@ import json
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 from typing_extensions import Annotated
@@ -697,8 +702,18 @@ DNC_LINE = ("- The customer asked not to be called again: say the do-not-call li
             "from these notes applies.")
 
 
-def tail_items(payload: Mapping[str, Any], message: Optional[str], last_reply: Optional[str]) -> List[Tuple[str, str]]:
-    """(kind, line) candidates for this reply, most relevant first within each kind."""
+EARLIER_WORDS_WEIGHT = 0.8  # what the customer said earlier in the call counts a little less than their latest words
+
+
+def conversation_score(score: Callable[[str], float], message: str, recent: Optional[Sequence[str]]) -> float:
+    """How relevant something is to the customer's latest words, or to what they said earlier in the call."""
+    return max([score(message)] + [EARLIER_WORDS_WEIGHT * score(earlier) for earlier in recent or ()])
+
+
+def tail_items(payload: Mapping[str, Any], message: Optional[str], last_reply: Optional[str],
+               recent: Optional[Sequence[str]] = None) -> List[Tuple[str, str]]:
+    """(kind, line) candidates for this reply, most relevant first within each kind. `recent` (an Autonomous AI
+    Agent's call: the customer's earlier words, may be empty) ranks all the knowledge instead of picking a few."""
     msg = message or ""
     last = f" {_norm(last_reply)} " if last_reply else ""
     if is_do_not_call_request(msg):
@@ -706,18 +721,21 @@ def tail_items(payload: Mapping[str, Any], message: Optional[str], last_reply: O
         closing = [p for p in payload.get("phrases", []) if p["situation"] == "closing" and not used_in(p["text"], last)]
         return [("dnc", DNC_LINE)] + [("phrase", phrase_line(p)) for p in closing[:2]]
     items: List[Tuple[str, str]] = []
+    everything = recent is not None
     # Q&A and topic facts. An answer given in the previous reply is not offered again word for word.
     scored: List[Tuple[float, str]] = []
     for qa in payload.get("qa", []):
-        score = qa_score(msg, qa)
-        if score >= QA_THRESHOLD:
+        score = conversation_score(lambda text: qa_score(text, qa), msg, recent)
+        if everything or score >= QA_THRESHOLD:
             scored.append((score, repeat_line(qa) if just_answered(qa["text"], last) else qa_line(qa)))
     for fact in payload.get("facts", []):
         if not fact.get("always"):
-            score = max(similarity(msg, fact["topic"]), similarity(msg, fact["text"]))
-            if score >= QA_THRESHOLD:
+            score = conversation_score(
+                lambda text: max(similarity(text, fact["topic"]), similarity(text, fact["text"])), msg, recent)
+            if everything or score >= QA_THRESHOLD:
                 scored.append((score, fact_line(fact)))
-    items += [("knowledge", line) for _, line in sorted(scored, key=lambda s: -s[0])[:TAIL_KNOWLEDGE]]
+    ranked = sorted(scored, key=lambda s: -s[0])
+    items += [("knowledge", line) for _, line in (ranked if everything else ranked[:TAIL_KNOWLEDGE])]
     # Phrases for the situation, never one used in the previous reply.
     situations = situations_for(msg)
     phrases = [p for s in situations for p in payload.get("phrases", [])
@@ -742,6 +760,7 @@ def example_score(message: str, e: Mapping[str, Any], matched: set) -> float:
 
 
 TAIL_TITLE = "\nFor this reply (picked for the customer's last words):\n"
+KNOWLEDGE_TITLE = "\nApproved knowledge for this call, most relevant to the conversation first (use only what fits):\n"
 
 
 @dataclass
@@ -758,21 +777,22 @@ class CompiledTraining:
 
 
 def compile_training(payload: Mapping[str, Any], message: Optional[str] = None,
-                     last_reply: Optional[str] = None) -> CompiledTraining:
+                     last_reply: Optional[str] = None, recent: Optional[Sequence[str]] = None) -> CompiledTraining:
     """The block for one reply: the fixed core, then the relevant tail filled within the cap."""
     core = core_text(payload)
     core_tokens = estimate_tokens(core)
-    budget = int(payload.get("cap") or DEFAULT_TOKEN_CAP) - core_tokens - estimate_tokens(TAIL_TITLE)
+    title = TAIL_TITLE if recent is None else KNOWLEDGE_TITLE
+    budget = int(payload.get("cap") or DEFAULT_TOKEN_CAP) - core_tokens - estimate_tokens(title)
     chosen: List[str] = []
     dropped: List[str] = []
-    for _, line in tail_items(payload, message, last_reply):
+    for _, line in tail_items(payload, message, last_reply, recent):
         cost = estimate_tokens(line) + 1
         if cost <= budget:
             chosen.append(line)
             budget -= cost
         else:
             dropped.append(line)
-    tail = TAIL_TITLE + "\n".join(chosen) if chosen else ""
+    tail = title + "\n".join(chosen) if chosen else ""
     return CompiledTraining(text=core + tail, core_tokens=core_tokens, tail_tokens=estimate_tokens(tail),
                             selected=chosen, dropped=dropped)
 

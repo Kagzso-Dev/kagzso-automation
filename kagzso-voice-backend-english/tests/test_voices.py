@@ -75,6 +75,27 @@ def test_preview_returns_wav_for_the_chosen_voice_and_places_no_call(client, aut
     assert fakes.plivo.calls == [] if hasattr(fakes.plivo, "calls") else True
 
 
+def test_preview_at_an_agents_speed_sounds_as_its_calls_do(client, auth, fakes, monkeypatch):
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"audios": [base64.b64encode(_wav(b"\x01\x00" * 2205, 22050)).decode()]})
+
+    monkeypatch.setattr(settings, "SARVAM_API_KEY", type(settings.SARVAM_API_KEY)("sarvam-test-key"))
+    fakes.tts = SarvamTTS(settings, client=httpx.AsyncClient(base_url="https://api.sarvam.ai", transport=httpx.MockTransport(handler)))
+    body = {"voice_id": "ritu", "text": "Hi, is this Ragul?"}
+    assert client.post("/api/voices/preview", json={**body, "pace": 1.2}, headers=auth).status_code == 200
+    assert client.post("/api/voices/preview", json=body, headers=auth).status_code == 200
+    assert (seen[0]["pace"], seen[0]["temperature"], seen[0]["speaker"]) == (1.2, settings.AGENT_TTS_TEMPERATURE, "ritu")
+    assert (seen[1]["pace"], seen[1]["temperature"]) == (settings.SARVAM_TTS_PACE, settings.SARVAM_TTS_TEMPERATURE)  # as before
+    for bad in (0.4, 2.1):
+        assert client.post("/api/voices/preview", json={**body, "pace": bad}, headers=auth).status_code == 422
+    for typed in (0.5, 1.37, 2.0):
+        assert client.post("/api/voices/preview", json={**body, "pace": typed}, headers=auth).status_code == 200
+        assert seen[-1]["pace"] == typed
+
+
 def test_preview_refuses_removed_voices_bad_text_and_missing_key(client, auth):
     assert client.post("/api/voices/preview", json={"voice_id": "tanya", "text": "Hi"}, headers=auth).status_code == 422
     assert client.post("/api/voices/preview", json={"voice_id": "roopa", "text": "x" * 201}, headers=auth).status_code == 422

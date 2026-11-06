@@ -7,6 +7,7 @@
 import { createHash } from "node:crypto";
 import { Prisma, type AiAgent, type AiAgentKnowledgeItem } from "@prisma/client";
 import {
+  AI_AGENT_DEFAULTS,
   AI_KNOWLEDGE_MAX_APPROVED,
   aiCallLanguage,
   callFlowDefinition,
@@ -21,9 +22,10 @@ import {
   type CallFlowDefinition,
 } from "@dispatch/shared";
 import { prisma } from "../prisma.js";
-import { compileAgentFlow, type CompileKnowledgeItem } from "./aiAgentCompile.js";
+import { AI_AGENT_COMPILER_VERSION, compileAgentFlow, type CompileKnowledgeItem } from "./aiAgentCompile.js";
 import { itemIssues, type Extraction } from "./aiAgentKnowledge.js";
 import { definitionHash, latestPublished, schemaIssues } from "./callFlows.js";
+import { getSetting, setSetting } from "./settings.js";
 
 export class AiAgentError extends Error {
   constructor(
@@ -39,7 +41,7 @@ const STATUS_DB: Record<AiKnowledgeStatus, "DRAFT" | "APPROVED" | "REJECTED"> = 
 const STATUS_VIEW = { DRAFT: "draft", APPROVED: "approved", REJECTED: "rejected" } as const;
 
 /* ------------------------------------------------------------------ agents */
-function configFromRow(a: AiAgent): AiAgentConfig {
+function configFromRow(a: AiAgent): Omit<AiAgentConfig, "voiceSpeed"> {
   return {
     name: a.name,
     mode: a.mode === "GUIDED" ? "guided" : "autonomous",
@@ -62,6 +64,13 @@ function configFromRow(a: AiAgent): AiAgentConfig {
     guidedFlowId: a.guidedFlowId,
     voiceId: a.voiceId ?? null,
   };
+}
+
+/** An agent's speaking speed lives in Settings, beside its row (no ai_agents column); absent = the default speed. */
+const voiceSpeedKey = (agentId: string) => `aiAgentVoiceSpeed:${agentId}`;
+
+async function agentConfig(a: AiAgent): Promise<AiAgentConfig> {
+  return { ...configFromRow(a), voiceSpeed: await getSetting(voiceSpeedKey(a.id), AI_AGENT_DEFAULTS.voiceSpeed) };
 }
 
 /** The AI's voice as the agent's voice backend lists it (resolved by the caller from GET /api/flows/builtin). */
@@ -173,7 +182,7 @@ async function view(a: AiAgent): Promise<AiAgentView> {
     unpublished = !a.publishedHash || a.publishedHash !== (await agentInputsHash(a));
   }
   return {
-    ...configFromRow(a),
+    ...(await agentConfig(a)),
     id: a.id,
     language: aiCallLanguage.parse(a.language),
     callFlowId: flowId,
@@ -208,6 +217,7 @@ export async function createAgent(
   await checkRefs(c, language);
   const voice = await voiceData(c.voiceId, null, language, lookupVoice);
   const a = await prisma.aiAgent.create({ data: { ...rowData(c), ...voice, language, createdById: user.id, createdByEmail: user.email } });
+  await setSetting(voiceSpeedKey(a.id), c.voiceSpeed);
   return view(a);
 }
 
@@ -219,6 +229,7 @@ export async function updateAgent(id: string, c: AiAgentConfig, lookupVoice: Age
   // The backend is asked only when the voice changed: saving other settings never needs it.
   const voice = await voiceData(c.voiceId, before.voiceId ?? null, language, lookupVoice);
   const a = await prisma.aiAgent.update({ where: { id }, data: { ...rowData(c), ...voice } });
+  await setSetting(voiceSpeedKey(a.id), c.voiceSpeed);
   return view(a);
 }
 
@@ -469,7 +480,7 @@ export async function businessContext(a: AiAgent): Promise<{ categoryName: strin
   };
 }
 
-/** Hash of everything a publish compiles from (settings, industry, approved knowledge): differs = unpublished changes. */
+/** Hash of everything a publish compiles from (compiler, settings, industry, approved knowledge): differs = unpublished changes. */
 export async function agentInputsHash(a: AiAgent): Promise<string> {
   const [knowledge, industry, category] = await Promise.all([
     approvedKnowledge(a.id),
@@ -478,8 +489,9 @@ export async function agentInputsHash(a: AiAgent): Promise<string> {
   ]);
   // No voice picked / nothing typed by hand: hashed exactly as before those settings existed, so such agents
   // don't show "unpublished changes".
-  const { voiceId, customCategory, customIndustry, ...config } = configFromRow(a);
+  const { voiceId, customCategory, customIndustry, ...config } = await agentConfig(a);
   return definitionHash({
+    compiler: AI_AGENT_COMPILER_VERSION,
     config: {
       ...config,
       ...(voiceId ? { voiceId } : {}),
@@ -502,7 +514,7 @@ export async function compileAgent(a: AiAgent, builtinExecutive: unknown): Promi
   const [knowledge, business] = await Promise.all([approvedKnowledge(a.id), businessContext(a)]);
   const compiled = compileAgentFlow({
     language,
-    agent: configFromRow(a),
+    agent: await agentConfig(a),
     ...business,
     knowledge,
     base: base.data,

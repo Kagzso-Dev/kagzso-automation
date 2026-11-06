@@ -1,7 +1,8 @@
 """Voice "Listen" previews (X-API-Key protected).
 
-    POST /api/voices/preview   {voice_id, text, pauses?} -> audio/wav of that voice saying the line
-                               ({{short_delay}} etc. in the line become real silence)
+    POST /api/voices/preview   {voice_id, text, pauses?, pace?} -> audio/wav of that voice saying the line
+                               ({{short_delay}} etc. in the line become real silence; pace = an AI Agent's
+                               voice speed, with its voice profile, so the sample sounds as its calls do)
 
 Text-to-speech only: nothing is dialled and no call or contact row is written.
 The voice list itself is served with the flow catalog (GET /api/flows/builtin).
@@ -22,6 +23,7 @@ from app.core.config import settings
 from app.core.security import require_api_key
 from app.core.voices import VOICE_IDS, offered_voice
 from app.flows.schema import FlowPauses
+from app.services import provider_registry
 from app.services.call_service import get_providers
 from app.services.llm_service import has_pause_markers, split_pauses
 from app.services.tts import TTSError
@@ -37,6 +39,7 @@ class PreviewRequest(BaseModel):
     voice_id: str = Field(..., max_length=64)
     text: str = Field(..., min_length=1, max_length=200)
     pauses: Optional[FlowPauses] = None  # the flow's pause lengths; None = the defaults
+    pace: Optional[float] = Field(None, ge=0.5, le=2.0)  # an AI Agent's voice speed; None = the voice's ordinary speed
 
 
 async def _preview_with_pauses(tts, text: str, pauses: FlowPauses) -> bytes:
@@ -72,6 +75,8 @@ async def preview_voice(body: PreviewRequest) -> Response:
         raise HTTPException(503, "Text-to-speech is not configured (SARVAM_API_KEY)")
     # Shares the providers' HTTP client (never closed here - live calls use it too).
     tts = get_providers().tts_for_voice(voice)
+    if body.pace is not None:
+        tts = provider_registry.with_agent_voice(tts, body.pace)
     if not hasattr(tts, "synthesize_preview"):
         raise HTTPException(503, "Voice previews need the Sarvam text-to-speech provider")
     async def synthesize() -> bytes:

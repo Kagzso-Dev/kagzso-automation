@@ -559,11 +559,24 @@ Instructions** box, a target length (default 1 min) and a hard maximum (default 
 - **Autonomous** agents are compiled (`apps/api/src/domain/aiAgentCompile.ts`) into an ordinary `executive`
   Call Flow version with an `autonomous` block, and published through the same path as the Call Flows page (the
   language's voice backend validates it first). Calls then use the normal run, queue, voice backend, STT / TTS,
-  recordings and history: no separate LLM pipeline. The LLM leads the conversation; the system still speaks the
-  opening, the identity question and the do-not-call line word for word, and every fixed safety rule comes after
-  the admin's instructions. For these calls only, the voice backend enforces do-not-call even with
-  `DNC_ENFORCE` off, and each reply is told the call's running time (wrap up after the target; the provider's
-  time limit is the hard stop).
+  recordings and history: no separate LLM pipeline. **The LLM decides everything that is said**: there is no fixed
+  greeting, identity question, question list or sequence, and the built-in flow's numbered stages are removed. Only
+  the do-not-call line and the failure lines (LLM down) stay fixed, and every fixed safety rule comes after the
+  admin's instructions. **The backend enforces what must not depend on the model**: for these calls only it enforces
+  do-not-call even with `DNC_ENFORCE` off, the provider's time limit is the hard stop, and each reply is told the
+  call's running time (wrap up after the target). `TEAM_FOLLOWUP_ENABLED` never makes an agent promise anything: no
+  follow-up workflow is linked to these calls yet.
+- **Voice speed** is set per agent in **Settings → AI Voice**: a level (Slow 0.8, Relaxed 0.9, Normal 1.0, Brisk 1.1,
+  Fast 1.2; default Relaxed) or any speed typed from 0.5 to 2.0 (Sarvam's limits), and Listen plays at it. It is kept
+  in the `Setting` table (`aiAgentVoiceSpeed:<agent id>`, no `ai_agents` column), published in the flow as
+  `autonomous.voice_pace`, and used for every line of the call. The call's time limits don't change with it, so a slow
+  speed fits fewer words. An agent published before this setting uses the voice backend's `AGENT_TTS_PACE` until it is
+  published again.
+- **A published agent is a stored copy.** Compiler changes reach it only through a new publish, so an agent published
+  with an older compiler shows "unpublished changes" (`AI_AGENT_COMPILER_VERSION`, bump it with any such change).
+- **Checking real conversations:** `scripts/autonomous_conversation_check.py --language en|ta --run` in the voice
+  backend talks to the configured LLM (no call, no audio, uses tokens). The pytest suite uses a fake LLM, so it can't
+  judge how the model talks: run this after changing the compiler's blocks and read the conversations.
 - **Guided** agents just call with an existing published Call Flow (Nila, Follow-up, Executive or a copy),
   unchanged.
 - **Do-not-call** is detected by the backend (`is_do_not_call` in `call_service.py`) in English, romanised Tamil /
@@ -585,14 +598,16 @@ Instructions** box, a target length (default 1 min) and a hard maximum (default 
 - **Knowledge**: upload CSV, XLSX, PDF, DOCX or TXT; rows / paragraphs become fact and Q&A items, each **Draft**
   until an admin approves it. Items with personal data, links, prices, promises etc. (the voice backend's training
   rules, mirrored in `knowledgeTextIssues`) can't be approved until fixed. Only approved items of that agent are
-  compiled into that agent's flow (at most 120), and picked per reply by the existing training retrieval.
+  compiled into that agent's flow (at most 120). Every approved item is offered to the LLM on each reply, most
+  relevant to the conversation first, up to the training token cap (keyword matching alone misses follow-ups that
+  name no topic, and Tamil speech about knowledge written in English); the model reads them and decides what fits.
   A PDF without selectable text (scanned / image-only), an empty file, a damaged PDF or a .docx / .xlsx that
   unpacks to more than 50 MB is refused with the reason (never stored as an empty success, never replacing a
   file's approved items). Only the first 200 pages of a PDF are read. No OCR.
-- Opening lines (greeting, identity question, do-not-call line) exist for English, Tamil, Hindi and Kannada
-  (`AI_AGENT_OPENINGS`; reviewed for grammar, address and gender, but Tamil, Hindi and Kannada still need a native
-  speaker to listen to the TTS before release). Hindi lines avoid gendered verbs, as the executive name is
-  editable. Other languages offer guided agents only.
+- Reviewed lines (the do-not-call line, and a greeting the schema requires but that is never spoken) exist for
+  English, Tamil, Hindi and Kannada (`AI_AGENT_OPENINGS`; reviewed for grammar, address and gender, but Tamil, Hindi
+  and Kannada still need a native speaker to listen to the TTS before release). Hindi lines avoid gendered verbs, as
+  the executive name is editable. Other languages offer guided agents only.
 
 **Deploy:** `npm run prisma:deploy` applies `0031_ai_agents` (five new tables plus a starter library; nothing
 existing changes; `down.sql` drops them and explains how to clear Prisma's migration history), then restart the API and the voice backends (they read the new optional

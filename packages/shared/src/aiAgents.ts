@@ -49,6 +49,8 @@ export const AI_AGENT_DEFAULTS = {
   targetDurationSec: 60,
   /** Hard stop: the Plivo / Twilio time limit of every call this agent places. */
   maxDurationSec: 105,
+  /** How fast the AI speaks (a level of AI_AGENT_VOICE_SPEEDS, or typed within AI_AGENT_VOICE_SPEED_LIMITS). */
+  voiceSpeed: 0.9,
 } as const;
 export const AI_AGENT_DURATION_LIMITS = { minTarget: 30, maxTarget: 105, minMax: 45, maxMax: 105 } as const;
 
@@ -63,6 +65,21 @@ export type AiAgentVoiceGender = (typeof AI_AGENT_VOICE_GENDERS)[number];
 export const AI_AGENT_VOICE_GENDER_LABELS: Record<AiAgentVoiceGender, string> = { female: "Female", male: "Male" };
 /** The voice a new agent starts with, per language (none = the voice backend's default voice, as before). */
 export const AI_AGENT_DEFAULT_VOICE: Partial<Record<AiCallLanguage, string>> = { ta: "roopa" };
+/**
+ * How fast the agent speaks (Settings → AI Voice, autonomous agents): the text-to-speech pace of every line of its
+ * calls. Compiled into its flow (autonomous.voice_pace), so a new speed reaches calls with the next publish. The
+ * levels are shortcuts: any speed within AI_AGENT_VOICE_SPEED_LIMITS can be typed instead.
+ */
+export const AI_AGENT_VOICE_SPEEDS = [
+  { value: 0.8, label: "Slow" },
+  { value: 0.9, label: "Relaxed" },
+  { value: 1, label: "Normal" },
+  { value: 1.1, label: "Brisk" },
+  { value: 1.2, label: "Fast" },
+] as const;
+/** The speeds a voice takes: Sarvam's pace range, which the published flow (voice_pace) and Listen check as well. */
+export const AI_AGENT_VOICE_SPEED_LIMITS = { min: 0.5, max: 2 } as const;
+const VOICE_SPEED_RULE = `Enter a speed from ${AI_AGENT_VOICE_SPEED_LIMITS.min.toFixed(1)} to ${AI_AGENT_VOICE_SPEED_LIMITS.max.toFixed(1)}`;
 /** A Sarvam Bulbul speaker id as the voice backend lists it (app/core/voices.py _VOICE_ID_RE). */
 export const AI_AGENT_VOICE_ID_RE = /^[a-z][a-z0-9_]{0,63}$/;
 export const AI_AGENT_INSTRUCTIONS_MAX = 4000;
@@ -142,6 +159,12 @@ export const aiAgentInput = z
     guidedFlowId: z.string().min(1).max(64).nullable().optional(),
     /** Autonomous: the AI's voice (an offered voice of the agent's language). Null = the backend's default voice. */
     voiceId: z.string().trim().toLowerCase().regex(AI_AGENT_VOICE_ID_RE, "Pick one of the listed voices").nullable().optional(),
+    /** Autonomous: how fast the AI speaks, a level or a typed speed. */
+    voiceSpeed: z.coerce
+      .number({ invalid_type_error: VOICE_SPEED_RULE })
+      .min(AI_AGENT_VOICE_SPEED_LIMITS.min, VOICE_SPEED_RULE)
+      .max(AI_AGENT_VOICE_SPEED_LIMITS.max, VOICE_SPEED_RULE)
+      .default(AI_AGENT_DEFAULTS.voiceSpeed),
   })
   .strict()
   .superRefine((a, ctx) => {
@@ -313,50 +336,36 @@ export function knowledgeTextIssues(text: string, { policy = true }: { policy?: 
 }
 
 /* ------------------------------------------------------------------ spoken openings per language */
-// The system speaks these word for word (never the LLM): {agent} / {company} are filled in when the agent is
-// compiled; {{time_greeting}}, {{title}} (sir / madam from a GIVEN gender, empty when not specified) and
-// {{customer_name}} when the call is placed. The opening has no name in it, so the voice backend asks the
-// identity question right after it (or at once when the customer speaks first) and skips it without a name.
+// greeting: required by the flow schema but never spoken: an autonomous agent's LLM opens the call in its own words
+// (autonomous.natural_lines). {agent} / {company} are filled in when the agent is compiled, {{title}} (sir / madam
+// from a GIVEN gender, empty when not specified) when the call is placed.
 // Only the standard languages have lines: an agent can't be compiled for another language (never translated).
 // dnc: the do-not-call line, spoken word for word when the backend detects a do-not-call request (autonomous
 // agents always enforce it), in the call's language. Hindi lines avoid gendered verbs (रहा / रही): the executive
 // name is editable, so the line must fit any name.
-// Identity lines address the customer by name with the title for the contact's GIVEN gender, after the name
-// as the language does it: "Ragul sir" / "Priya madam" / "Ragul" (en), "Ragul sir-கிட்ட" / "Ragul-கிட்ட" (ta: the
-// voice backend joins the ending to the name when there is no title), "Ragul जी" (hi: ji is respectful and
-// gender-neutral, so it is the same for every gender), "Ragul sir ಅವರ" / "Ragul ಅವರ" (kn). The AI voice's gender
-// plays no part. In the conversation itself the voice backend gives the AI the same form (address_as).
+// The AI voice's gender plays no part. In the conversation the voice backend gives the AI the customer's name with
+// the title as the language does it (address_as).
 // Reviewed 2026-11-03 (grammar, respectful address, gender handling) - STILL NEEDS a native speaker to listen
 // to the TTS before release: ta, hi, kn.
 export interface AiAgentOpening {
   greeting: string;
-  identity: string;
-  reask: string;
   dnc: string;
 }
 export const AI_AGENT_OPENINGS: Partial<Record<AiCallLanguage, AiAgentOpening>> = {
   en: {
-    greeting: "Hello, {{time_greeting}} {{title}}. This is {agent} calling from {company}.",
-    identity: "Am I speaking with {{customer_name}} {{title}}?",
-    reask: "Sorry, am I speaking with {{customer_name}} {{title}}?",
+    greeting: "Hello {{title}}. This is {agent} calling from {company}.",
     dnc: "Understood. I respect your request. Thank you.",
   },
   ta: {
-    greeting: "வணக்கம் {{title}}, {{time_greeting}}. நான் {agent}, {company}-ல இருந்து பேசறேன்.",
-    identity: "{{customer_name}} {{title}}-கிட்ட தான் பேசறேனா?",
-    reask: "Sorry, {{customer_name}} {{title}}-கிட்ட தான் பேசறேனா?",
+    greeting: "வணக்கம் {{title}}. நான் {agent}, {company}-ல இருந்து பேசறேன்.",
     dnc: "சரி, புரியுது. உங்க request-ஐ மதிக்கிறோம். நன்றி.",
   },
   hi: {
-    greeting: "नमस्ते {{title}}, {{time_greeting}}. मेरा नाम {agent} है, {company} से.",
-    identity: "क्या मेरी बात {{customer_name}} जी से हो रही है?",
-    reask: "Sorry, क्या मेरी बात {{customer_name}} जी से हो रही है?",
+    greeting: "नमस्ते {{title}}. मेरा नाम {agent} है, {company} से.",
     dnc: "ठीक है, आपकी request का पूरा सम्मान है. धन्यवाद.",
   },
   kn: {
-    greeting: "ನಮಸ್ಕಾರ {{title}}, {{time_greeting}}. ನಾನು {agent}, {company} ಕಡೆಯಿಂದ ಕರೆ ಮಾಡುತ್ತಿದ್ದೇನೆ.",
-    identity: "ನಾನು {{customer_name}} {{title}} ಅವರ ಜೊತೆ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆಯೇ?",
-    reask: "Sorry, ನಾನು {{customer_name}} {{title}} ಅವರ ಜೊತೆ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆಯೇ?",
+    greeting: "ನಮಸ್ಕಾರ {{title}}. ನಾನು {agent}, {company} ಕಡೆಯಿಂದ ಕರೆ ಮಾಡುತ್ತಿದ್ದೇನೆ.",
     dnc: "ಸರಿ, ಅರ್ಥ ಆಯ್ತು. ನಿಮ್ಮ request-ಅನ್ನು ಗೌರವಿಸುತ್ತೇವೆ. ಧನ್ಯವಾದಗಳು.",
   },
 };

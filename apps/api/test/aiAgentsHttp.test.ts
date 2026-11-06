@@ -97,6 +97,15 @@ const db = {
   aiAgentKnowledgeFile: model("aiAgentKnowledgeFile"),
   aiAgentKnowledgeItem: model("aiAgentKnowledgeItem", () => ({ status: "DRAFT", always: false, decidedAt: null, decidedByEmail: null })),
   aiIndustry: model("aiIndustry", () => ({ archivedAt: null })),
+  setting: {
+    ...model("setting"),
+    upsert: async ({ where, create, update }: { where: { key: string }; create: { key: string; value: unknown }; update: { value: unknown } }) => {
+      const hit = T("setting").find((s) => s.key === where.key);
+      if (hit) return Object.assign(hit, update);
+      T("setting").push(create as unknown as Row);
+      return create;
+    },
+  },
   aiBusinessCategory: {
     ...model("aiBusinessCategory", () => ({ archivedAt: null })),
     findMany: async () => T("aiBusinessCategory").map((c) => ({ ...c, industries: T("aiIndustry").filter((i) => i.categoryId === c.id) })),
@@ -564,6 +573,68 @@ describe("the generated Call Flow is managed by its agent", () => {
   });
 });
 
+describe("Voice speed (Settings → AI Voice): each agent's own, followed by its calls", () => {
+  let n = 0;
+  beforeEach(() => void (adminSub = `u-admin-speed-${++n}`));
+  afterAll(() => void (adminSub = "u-ADMIN"));
+  const made = async (speed?: number) =>
+    (await createAgent("en", { ...AGENT, ...(speed === undefined ? {} : { voiceSpeed: speed }) })) as unknown as { id: string; voiceSpeed: number };
+  const get = async (id: string) => (await (await req("GET", `/api/ai-agents/${id}`)).json()) as { voiceSpeed: number; unpublishedChanges: boolean };
+  const lastPublished = () => (previews.at(-1)!.flow as { autonomous: { voice_pace: number } }).autonomous.voice_pace;
+
+  it("a new agent starts at the default speed, and a picked speed is kept and shown again", async () => {
+    expect((await made()).voiceSpeed).toBe(0.9);
+    const a = await made(1.1);
+    expect(a.voiceSpeed).toBe(1.1);
+    expect((await get(a.id)).voiceSpeed).toBe(1.1);
+    expect((await (await req("GET", "/api/ai-agents?language=en")).json() as { id: string; voiceSpeed: number }[]).find((x) => x.id === a.id)?.voiceSpeed).toBe(1.1);
+  });
+
+  it("no ai_agents column: the row stays as it was and the speed sits in Settings, one per agent", async () => {
+    const a = await made(1.2);
+    const other = await made(0.8);
+    expect(T("aiAgent").find((r) => r.id === a.id)).not.toHaveProperty("voiceSpeed");
+    expect(T("setting").find((s) => s.key === `aiAgentVoiceSpeed:${a.id}`)?.value).toBe(1.2);
+    expect((await get(other.id)).voiceSpeed).toBe(0.8);
+  });
+
+  it("a new speed reaches calls with the next publish, and shows as unpublished until then", async () => {
+    const a = await made(1.1);
+    expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
+    expect(lastPublished()).toBe(1.1);
+    expect((await get(a.id)).unpublishedChanges).toBe(false);
+    await req("PUT", `/api/ai-agents/${a.id}`, { agent: { ...AGENT, voiceSpeed: 0.8 } });
+    expect(await get(a.id)).toMatchObject({ voiceSpeed: 0.8, unpublishedChanges: true });
+    expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
+    expect(lastPublished()).toBe(0.8);
+    expect((await get(a.id)).unpublishedChanges).toBe(false);
+  });
+
+  it("an agent saved before this setting existed reads as the default speed", async () => {
+    const a = await made(1.2);
+    tables.setting = T("setting").filter((s) => s.key !== `aiAgentVoiceSpeed:${a.id}`);
+    expect((await get(a.id)).voiceSpeed).toBe(0.9);
+  });
+
+  it("a typed speed is kept and reaches calls exactly, the limits included", async () => {
+    for (const speed of [0.5, 1.37, 2]) {
+      const a = await made(speed);
+      expect((await get(a.id)).voiceSpeed).toBe(speed);
+      expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
+      expect(lastPublished()).toBe(speed);
+    }
+  });
+
+  it("refuses a speed outside the limits, and the saved one stays", async () => {
+    for (const bad of [0.4, 2.1]) {
+      expect((await req("POST", "/api/ai-agents", { language: "en", agent: { ...AGENT, voiceSpeed: bad } })).status).toBe(400);
+    }
+    const a = await made(1.1);
+    expect((await req("PUT", `/api/ai-agents/${a.id}`, { agent: { ...AGENT, voiceSpeed: 3 } })).status).toBe(400);
+    expect((await get(a.id)).voiceSpeed).toBe(1.1);
+  });
+});
+
 describe("Kannada Autonomous AI calls are paused (until native-speaker review)", () => {
   /** An agent of `language` whose own flow already has a live autonomous version (as after a publish). */
   async function liveAgent(language: string, agent: Record<string, unknown> = AGENT) {
@@ -631,7 +702,7 @@ describe("Preview and Publish with the built-in flows a real voice backend serve
     expect(sent.sample).toEqual({ customer_name: "Raagul", gender: "male" });
     expect(sent.flow.language).toBe(lang);
     expect(sent.flow).not.toHaveProperty("language_style");
-    expect(sent.flow.autonomous).toEqual({ target_duration_sec: 60, dnc_enforce: true, natural_lines: true });
+    expect(sent.flow.autonomous).toEqual({ target_duration_sec: 60, dnc_enforce: true, natural_lines: true, voice_pace: 0.9 });
     expect(String((sent.flow.greeting as { text: string }).text)).toContain(GREETING[lang]);
     expect(sent.flow.training.knowledge.map((k) => [k.status, k.topic, k.text])).toEqual([
       ["active", "Integration", "It works alongside your software."],

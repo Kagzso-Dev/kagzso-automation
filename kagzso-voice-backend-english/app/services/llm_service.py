@@ -423,8 +423,23 @@ AGENT_IDENTITY_RULES = """
 AGENT_ADDRESS_RULES = """
 - `address_as` in the customer details is how to address the customer by name: the name, then the respectful title for their GIVEN gender (sir or madam; ji in Hindi). Without a given gender it is the name alone (ji in Hindi): then never add sir or madam. The gender is never guessed from the name, and your own voice has nothing to do with it.
 - Put the title after the name as the call's language does it: the word ending goes on the title (Tamil: "Ragul sir-கிட்ட", "Priya madam-க்கு"; Hindi: "Ragul ji से"). Never translate sir or madam word for word.
-- Use the name with the title only now and then: when you first speak to them after they confirm who they are, when you ask whether they have a minute, and when you thank them at the close. Most replies use neither, and never one in every sentence.
+- Use the name with the title only now and then, such as when you first speak to them and when you thank them at the close. Most replies use neither, and never one in every sentence.
 - If the customer asks to be addressed differently (for example only by name, or as Doctor), use that for the rest of the call. Their request takes priority over `address_as` and title_to_use."""
+
+
+# Autonomous AI Agents with natural lines: nobody is asked to confirm who they are, so the conversation is not held
+# back behind a confirmation. What is private to the customer still is. Agents published before natural_lines keep
+# AGENT_IDENTITY_RULES: their calls ask the system's identity question.
+AGENT_OPEN_IDENTITY_RULES = """
+- There is no identity check on this call: talk with whoever answered. The customer's name in the details is unverified, so never ask someone to confirm it as a routine step.
+- Until the person has shown that they are the customer, speak about the company in general terms only: never mention `follow_up_detail` or anything else specific to the customer.
+- If the person says they are not the customer or that this is the wrong number: politely ask whether the customer (by `address_as`) is available to speak. If the customer comes to the phone, greet them briefly and continue with them.
+- If the customer is not available, thank the person politely and end the call. Never pitch to them, never leave a message and never promise a callback.
+- A request not to be called again always ends the call. This replaces any wrong-person instruction above."""
+# Autonomous AI Agents: a follow-up needs a real workflow behind it (an owner, an approval), and these calls have none
+# yet, so what TEAM_FOLLOWUP_ENABLED says doesn't decide what the customer is promised.
+AGENT_NO_FOLLOW_UP = ("\n- No team follow-up is linked to this call: never say that the team or anyone else will contact "
+                      "the customer, call back or send anything.")
 
 
 def agent_call(variables: Mapping[str, Optional[str]]) -> bool:
@@ -433,14 +448,15 @@ def agent_call(variables: Mapping[str, Optional[str]]) -> bool:
 
 
 def training_block(variables: Mapping[str, Optional[str]], user_message: Optional[str] = None,
-                   last_reply: Optional[str] = None) -> str:
+                   last_reply: Optional[str] = None, recent: Optional[List[str]] = None) -> str:
     """The flow's training notes for this reply (app/flows/training.py), or "" (no training, switched
-    off, nothing Active, or anything going wrong: the call then uses the prompt without it)."""
+    off, nothing Active, or anything going wrong: the call then uses the prompt without it). `recent`: the
+    customer's earlier words on an Autonomous AI Agent's call (None on every other call)."""
     raw = variables.get("flow_training")
     if not raw:
         return ""
     try:
-        compiled = compile_training(json.loads(raw), user_message, last_reply)
+        compiled = compile_training(json.loads(raw), user_message, last_reply, recent)
         return render_prompt(compiled.text, variables)  # {{title_to_use}} is the only variable allowed
     except Exception as exc:
         log.warning("Training block left out (%s) - the prompt is used without it", type(exc).__name__)
@@ -450,11 +466,12 @@ def training_block(variables: Mapping[str, Optional[str]], user_message: Optiona
 def build_system_prompt(
     agent_prompt: str, variables: Mapping[str, Optional[str]], language: Optional[str] = None,
     user_message: Optional[str] = None, last_reply: Optional[str] = None, *, guided: bool = False,
-    position: str = "",
+    position: str = "", recent: Optional[List[str]] = None,
 ) -> str:
     """The system prompt. guided=True (guided calls only): VOICE_RULES_GUIDED instead of VOICE_RULES, the
     team follow-up line left to the system's closings, and `position` (the call's current stage, which changes
-    every turn) at the very end so the rest of the prompt stays the same from turn to turn."""
+    every turn) at the very end so the rest of the prompt stays the same from turn to turn. `recent`: the
+    customer's earlier words in this call (only an Autonomous AI Agent's natural call uses them)."""
     rendered = render_prompt(agent_prompt, variables)
     safe = safe_variables(variables)
     data = {
@@ -477,10 +494,10 @@ def build_system_prompt(
         del data["phone_number"]
     lang = language if language is not None else default_settings.CALL_LANGUAGE
     agent = agent_call(variables) and not guided
+    natural = agent and variables.get("flow_natural_lines") == "true"  # the LLM leads the whole conversation
     if agent:  # structured, every turn: the name with the title for the GIVEN gender, in the call's language
         data["address_as"] = address_as_for(safe["customer_name"], safe["gender"], lang) or None
-        if variables.get("flow_natural_lines") == "true":  # the AI opens the call itself (no fixed greeting)
-            data["time_greeting"] = safe["time_greeting"] or None
+        data["team_follow_up_configured"] = False
     brand = (
         f"\n- Our company name is spelled Kagzso but pronounced \"Kexo\". "
         f"Whenever you say it, write it exactly as {brand_spoken(lang)}."
@@ -488,20 +505,27 @@ def build_system_prompt(
     if guided:
         followup = ("\n- Never say yourself that the team will contact the customer: the system's closing line says "
                     "it when that is configured.")
+    elif agent:
+        followup = AGENT_NO_FOLLOW_UP
     elif default_settings.TEAM_FOLLOWUP_ENABLED:
         followup = ("\n- Team follow-up IS configured: when the customer is interested, your closing line MUST include "
                     "\"Our team will get in touch with you.\" (right after the kagzso.com sentence).")
     else:
         followup = "\n- Team follow-up is NOT configured: never say that the team will contact the customer."
+    if natural:
+        who = (AGENT_OPEN_IDENTITY_RULES + AGENT_ADDRESS_RULES) if safe["customer_name"] else NO_NAME_RULE
+    elif agent and safe["customer_name"]:
+        who = AGENT_IDENTITY_RULES + AGENT_ADDRESS_RULES
+    else:
+        who = identity_rules(safe["customer_name"])
     return (
         rendered + (VOICE_RULES_GUIDED if guided else VOICE_RULES) + SAFETY_RULES
         + (INTERNALS_RULES if default_settings.SAFETY_NO_INTERNALS else "")
-        + ((AGENT_IDENTITY_RULES + AGENT_ADDRESS_RULES) if agent and safe["customer_name"]
-           else identity_rules(safe["customer_name"]))
+        + who
         + brand + followup
         + language_instruction(lang, variables.get("flow_language_style"))
         # Below every rule above, above the customer data; "" for a flow without (Active) training.
-        + training_block(variables, user_message, last_reply)
+        + training_block(variables, user_message, last_reply, (recent or []) if natural else None)
         + CUSTOMER_DATA_TITLE + json.dumps(data, ensure_ascii=False)
         + call_timing(variables)
         + position
@@ -523,18 +547,20 @@ def call_timing(variables: Mapping[str, Optional[str]]) -> str:
             f"length is about {target} seconds. ")
     if limit > 0 and elapsed >= limit - CALL_TIMING_FINAL_SEC:
         return line + (f"The phone system ends the call at {limit} seconds: close now. If they are asking something, "
-                       "answer it in one short sentence, then thank them warmly and say goodbye (end the call as in "
-                       "CLOSING). Never mention the time.")
+                       "answer it in one short sentence, then thank them warmly, say goodbye and end the call. Never "
+                       "mention the time.")
     if elapsed < target:
         return line + ("Keep replies short and focused on the most useful next step. Never rush or cut off the "
                        "customer, and never mention the time.")
     return line + ("The target has passed. If the customer is interested and asking relevant questions, continue "
                    "naturally and answer them. Otherwise, move to a polite close when the conversation allows (thank "
-                   "them and end the call as in CLOSING). Never cut the customer off and never mention the time.")
+                   "them and end the call). Never cut the customer off and never mention the time.")
 
 
 # Autonomous calls: this many seconds before the hard stop, the timing line asks for the closing.
 CALL_TIMING_FINAL_SEC = 20
+# Knowledge for an Autonomous AI Agent's reply is ranked by this many of the customer's earlier messages.
+RECENT_CUSTOMER_MESSAGES = 3
 
 
 def turn_system_prompt(agent_prompt: str, history: List[Message], user_message: Optional[str],
@@ -542,7 +568,8 @@ def turn_system_prompt(agent_prompt: str, history: List[Message], user_message: 
     """The system prompt for one live reply - the same text for every provider that may answer it.
     Logs its size (estimated tokens, and the training block's share) for before / after comparisons."""
     last_reply = next((m.get("content") for m in reversed(history) if m.get("role") == "assistant"), None)
-    text = build_system_prompt(agent_prompt, variables, user_message=user_message, last_reply=last_reply)
+    recent = [m["content"] for m in history if m.get("role") == "user"][-RECENT_CUSTOMER_MESSAGES:]
+    text = build_system_prompt(agent_prompt, variables, user_message=user_message, last_reply=last_reply, recent=recent)
     start = text.find(TRAINING_HEADER_LINE)
     training = estimate_tokens(text[start:text.rfind(CUSTOMER_DATA_TITLE)]) if start >= 0 else 0
     log.info("LLM prompt ~%d tokens (training ~%d)", estimate_tokens(text), training)
@@ -552,6 +579,8 @@ def turn_system_prompt(agent_prompt: str, history: List[Message], user_message: 
 # --------------------------------------------------------------------------
 # Spoken text cleanup + sentence chunking for streaming TTS
 # --------------------------------------------------------------------------
+# The end-of-call marker, and the bracketed spellings a model sometimes writes ([END_CALL], [[END CALL]]): never spoken.
+_END_CALL_RE = re.compile(r"\[+\s*END[\s_-]*CALL\s*\]+", re.IGNORECASE)
 _EMOJI_RE = re.compile(
     "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F900-\U0001F9FF\U00002B00-\U00002BFF️‍]+"
 )
@@ -636,7 +665,7 @@ def split_pauses(text: str, pauses: Mapping[str, int]) -> List[Tuple[str, int, i
 
 def clean_spoken_text(text: str) -> str:
     text = strip_pause_markers(text)
-    text = text.replace(END_CALL_TOKEN, " ")
+    text = _END_CALL_RE.sub(" ", text)
     text = _MD_LINK_RE.sub(r"\1", text)
     text = _URL_RE.sub("", text)
     text = _EMOJI_RE.sub("", text)
@@ -660,7 +689,7 @@ def calm_spoken_text(text: str) -> str:
 
 
 def extract_end_call(text: str) -> Tuple[str, bool]:
-    return text.replace(END_CALL_TOKEN, " ").strip(), END_CALL_TOKEN in text
+    return _END_CALL_RE.sub(" ", text).strip(), bool(_END_CALL_RE.search(text))
 
 
 # --------------------------------------------------------------------------
@@ -1227,6 +1256,9 @@ class OpenAICompatibleProvider(LLMProvider):
     def _extra_body(self) -> dict:
         return {}
 
+    def _delta_text(self, delta: Mapping[str, Any]) -> Optional[str]:
+        return delta.get("content")
+
     async def _stream(self, system_text: str, messages: List[Message], model: Optional[str] = None) -> AsyncIterator[str]:
         model = model or self.model
         key = self.cfg.LLM_API_KEY.get_secret_value()
@@ -1251,7 +1283,7 @@ class OpenAICompatibleProvider(LLMProvider):
                         break
                     chunk = json.loads(data)
                     for choice in chunk.get("choices") or []:
-                        text = (choice.get("delta") or {}).get("content")
+                        text = self._delta_text(choice.get("delta") or {})
                         if text:
                             yield text
         except httpx.TimeoutException:
@@ -1293,6 +1325,13 @@ class SarvamProvider(OpenAICompatibleProvider):
     def _extra_body(self) -> dict:
         level = self.cfg.LLM_THINKING_LEVEL.strip().lower()
         return {"reasoning_effort": None if level in self._REASONING_OFF else level}
+
+    def _delta_text(self, delta: Mapping[str, Any]) -> Optional[str]:
+        """No tools are ever offered. Sarvam's server still reads a reply starting with "[" (the end-of-call marker
+        written first) as a tool call and moves the whole reply into the call's name, leaving no content: without
+        this the customer's "not interested" would be answered with "sorry, I couldn't hear you"."""
+        misread = "".join((call.get("function") or {}).get("name") or "" for call in delta.get("tool_calls") or [])
+        return (delta.get("content") or "") + misread
 
 
 class AnthropicProvider(LLMProvider):

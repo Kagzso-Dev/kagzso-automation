@@ -6,6 +6,8 @@ import {
   AI_AGENT_DEFAULT_VOICE,
   AI_AGENT_VOICE_GENDER_LABELS,
   AI_AGENT_VOICE_GENDERS,
+  AI_AGENT_VOICE_SPEED_LIMITS,
+  AI_AGENT_VOICE_SPEEDS,
   AI_CALL_LANGUAGE_NAMES,
   type AiAgentVoiceGender,
   type AiCallLanguage,
@@ -17,21 +19,87 @@ import { ErrorNote, Spinner } from "./ui";
 const isGender = (g: string | undefined): g is AiAgentVoiceGender => g === "female" || g === "male";
 
 /**
+ * How fast the voice speaks: a level, or any speed typed in the box. What's typed stays as typed while the form holds
+ * its number (a half-typed "1." or an empty box is never rewritten); picking a level replaces it.
+ */
+function VoiceSpeed({ speed, onChange, error }: { speed: number; onChange: (speed: number) => void; error?: string }) {
+  const [typed, setTyped] = useState<string | null>(null);
+  const { min, max } = AI_AGENT_VOICE_SPEED_LIMITS;
+  return (
+    <div>
+      <label className="label">Voice speed</label>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div role="radiogroup" aria-label="Voice speed" className="flex flex-wrap gap-2">
+          {AI_AGENT_VOICE_SPEEDS.map((s) => (
+            <button
+              key={s.value}
+              type="button"
+              role="radio"
+              aria-checked={speed === s.value}
+              onClick={() => {
+                setTyped(null);
+                onChange(s.value);
+              }}
+              className={`rounded-lg border px-3 py-1.5 ${speed === s.value ? "border-accent bg-tint font-semibold" : "border-line"}`}
+            >
+              {s.label}
+              <span className="ml-1 text-xs font-normal text-slate-550">({s.value.toFixed(1)})</span>
+            </button>
+          ))}
+        </div>
+        {/* The rule itself turns red when it's broken, so typing "0.85" doesn't push the page down on the way through "0". */}
+        <label className="flex items-center gap-2">
+          <span className={`text-xs ${error ? "font-semibold text-crit" : "text-slate-550"}`}>
+            {error ?? `Or enter a speed (${min.toFixed(1)} to ${max.toFixed(1)})`}
+          </span>
+          <input
+            className="input w-20"
+            type="number"
+            inputMode="decimal"
+            min={min}
+            max={max}
+            step={0.05}
+            aria-invalid={!!error}
+            value={typed ?? speed}
+            onChange={(e) => {
+              setTyped(e.target.value);
+              onChange(Number(e.target.value));
+            }}
+          />
+        </label>
+      </div>
+      <p className="mt-1 text-xs text-slate-550">
+        1.0 is the voice's ordinary speed. Every line of this agent's calls is spoken at this speed, and Listen plays it. Publish the agent for calls to
+        follow it.
+      </p>
+    </div>
+  );
+}
+
+/**
  * Settings → AI Voice (autonomous agents): the AI's own voice, from the voices the language's voice backend offers
  * with a gender (its list is the only one). Female / Male only filters the list; picking a voice changes the form,
- * saved with "Save settings". Listen plays a sample (text-to-speech only, never a call). Independent of the contact's
- * gender: the customer is addressed by the Contact section's gender whatever voice speaks.
+ * saved with "Save settings". Listen plays a sample (text-to-speech only, never a call), at the speed picked here.
+ * Independent of the contact's gender: the customer is addressed by the Contact section's gender whatever voice speaks.
  */
 export function AiAgentVoice({
   language,
   value,
   onChange,
+  speed,
+  onSpeedChange,
+  speedError,
   executiveName,
 }: {
   language: AiCallLanguage;
   /** The picked voice id ("" = none: the voice backend's default voice). */
   value: string;
   onChange: (voiceId: string) => void;
+  /** How fast the AI speaks: a level or a typed speed. */
+  speed: number;
+  onSpeedChange: (speed: number) => void;
+  /** What's wrong with a typed speed: Listen waits for a valid one, as saving does. */
+  speedError?: string;
   executiveName: string;
 }) {
   const catalog = useCallFlowCatalog(language);
@@ -95,6 +163,8 @@ export function AiAgentVoice({
           value={value || null}
           onChange={onChange}
           language={language}
+          pace={speed}
+          listenOff={!!speedError}
           missingNote={
             missing
               ? `This agent's saved voice "${value}" is not offered by ${where} any more. Pick a voice: publishing and calls are refused until you do.`
@@ -104,6 +174,7 @@ export function AiAgentVoice({
           }
         />
       )}
+      <VoiceSpeed speed={speed} onChange={onSpeedChange} error={speedError} />
       {!value && (
         <p className="text-xs text-slate-550">
           No voice picked: calls use {where}'s default voice{backendDefault ? ` (${backendDefault.name})` : ""}, as before.

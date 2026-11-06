@@ -182,6 +182,120 @@ describe("Settings → AI Voice", () => {
     expect(checked()).toEqual(["RituTamil (India) · female"]); // listening never changes the pick
   });
 
+  describe("voice speed", () => {
+    const speeds = () => within(screen.getByRole("radiogroup", { name: "Voice speed" })).getAllByRole("radio");
+    const selected = () => speeds().filter((b) => b.getAttribute("aria-checked") === "true").map((b) => b.textContent);
+    const speed = (label: RegExp) => within(screen.getByRole("radiogroup", { name: "Voice speed" })).getByRole("radio", { name: label });
+    const box = () => screen.getByRole("spinbutton", { name: /speed/ }) as HTMLInputElement;
+    const typeSpeed = (value: string) => fireEvent.change(box(), { target: { value } });
+    const saveButton = () => screen.getByRole("button", { name: "Save settings" }) as HTMLButtonElement;
+    const listen = () => screen.getByRole("button", { name: "Listen to Simran" }) as HTMLButtonElement;
+    const RULE = "Enter a speed from 0.5 to 2.0";
+
+    it("five levels; a new agent starts at the default, and the Normal level is the provider's ordinary speed", async () => {
+      form();
+      await waitFor(() => expect(names()).toHaveLength(4));
+      expect(speeds().map((b) => b.textContent)).toEqual(["Slow(0.8)", "Relaxed(0.9)", "Normal(1.0)", "Brisk(1.1)", "Fast(1.2)"]);
+      expect(selected()).toEqual(["Relaxed(0.9)"]);
+    });
+
+    it("editing restores the agent's own speed, and an agent without one shows the default", async () => {
+      form({ ...AGENT, voiceSpeed: 1.1 });
+      await waitFor(() => expect(selected()).toEqual(["Brisk(1.1)"]));
+      cleanup();
+      form(AGENT);
+      await waitFor(() => expect(selected()).toEqual(["Relaxed(0.9)"]));
+    });
+
+    it("saving sends the picked speed, and Listen plays at it", async () => {
+      form(AGENT);
+      await waitFor(() => expect(names()).toHaveLength(4));
+      fireEvent.click(speed(/^Normal/));
+      expect(selected()).toEqual(["Normal(1.0)"]);
+      fireEvent.click(screen.getByRole("button", { name: "Listen to Simran" }));
+      await waitFor(() => expect(sent.find((s) => s.url === "/api/voices/preview")).toBeTruthy());
+      expect(sent.find((s) => s.url === "/api/voices/preview")!.body).toMatchObject({ voice_id: "simran", pace: 1 });
+      fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
+      await waitFor(() => expect(sent.find((s) => s.method === "PUT")).toBeTruthy());
+      expect(sent.find((s) => s.method === "PUT")!.body).toMatchObject({ agent: { voiceSpeed: 1 } });
+    });
+
+    it("a speed can be typed: Listen plays at it, saving sends it, and no level shows as picked", async () => {
+      form(AGENT);
+      await waitFor(() => expect(names()).toHaveLength(4));
+      expect(box().value).toBe("0.9");
+      typeSpeed("1.37");
+      expect(selected()).toEqual([]);
+      expect(box().value).toBe("1.37");
+      fireEvent.click(listen());
+      await waitFor(() => expect(sent.find((s) => s.url === "/api/voices/preview")).toBeTruthy());
+      expect(sent.find((s) => s.url === "/api/voices/preview")!.body).toMatchObject({ voice_id: "simran", pace: 1.37 });
+      fireEvent.click(saveButton());
+      await waitFor(() => expect(sent.find((s) => s.method === "PUT")).toBeTruthy());
+      expect(sent.find((s) => s.method === "PUT")!.body).toMatchObject({ agent: { voiceSpeed: 1.37 } });
+    });
+
+    it("the box and the levels follow each other: a typed level shows as picked, and picking a level fills the box", async () => {
+      form(AGENT);
+      await waitFor(() => expect(names()).toHaveLength(4));
+      typeSpeed("1.10");
+      expect(selected()).toEqual(["Brisk(1.1)"]);
+      expect(box().value).toBe("1.10"); // kept as typed
+      fireEvent.click(speed(/^Fast/));
+      expect(box().value).toBe("1.2");
+      expect(selected()).toEqual(["Fast(1.2)"]);
+    });
+
+    it("editing shows a typed speed in the box, with no level picked", async () => {
+      form({ ...AGENT, voiceSpeed: 0.85 });
+      await waitFor(() => expect(box().value).toBe("0.85"));
+      expect(selected()).toEqual([]);
+    });
+
+    it("a speed outside the limits, or none, is reported, and saving and Listen wait for a valid one", async () => {
+      form(AGENT);
+      await waitFor(() => expect(names()).toHaveLength(4));
+      expect(screen.queryByText(RULE)).toBeNull();
+      for (const bad of ["0.4", "2.1", "0", ""]) {
+        typeSpeed(bad);
+        expect(screen.getByText(RULE)).toBeTruthy();
+        expect(box().getAttribute("aria-invalid")).toBe("true");
+        expect(saveButton().disabled).toBe(true);
+        expect(listen().disabled).toBe(true);
+      }
+      for (const limit of ["0.5", "2"]) {
+        typeSpeed(limit);
+        expect(screen.queryByText(RULE)).toBeNull();
+        expect(saveButton().disabled).toBe(false);
+        expect(listen().disabled).toBe(false);
+      }
+      expect(sent.some((s) => s.url === "/api/voices/preview")).toBe(false);
+    });
+
+    it("a sample already playing can still be stopped while the speed is being retyped", async () => {
+      form(AGENT);
+      await waitFor(() => expect(names()).toHaveLength(4));
+      fireEvent.click(listen());
+      const stop = await screen.findByRole("button", { name: "Stop Simran" });
+      typeSpeed("9");
+      expect((stop as HTMLButtonElement).disabled).toBe(false);
+      fireEvent.click(stop);
+      expect(listen().disabled).toBe(true);
+    });
+
+    it("switching to guided: a bad speed typed before can't block saving, and the saved speed stays", async () => {
+      form({ ...AGENT, voiceSpeed: 1.2, guidedFlowId: "flow_g" });
+      await waitFor(() => expect(names()).toHaveLength(4));
+      typeSpeed("9");
+      expect(saveButton().disabled).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: /^Guided/ }));
+      expect(saveButton().disabled).toBe(false);
+      fireEvent.click(saveButton());
+      await waitFor(() => expect(sent.find((s) => s.method === "PUT")).toBeTruthy());
+      expect(sent.find((s) => s.method === "PUT")!.body).toMatchObject({ agent: { mode: "guided", voiceSpeed: 1.2 } });
+    });
+  });
+
   it("guided agents: no AI Voice section (they call with their Call Flow's own voice)", async () => {
     form({ ...AGENT, mode: "guided", guidedFlowId: "flow_g" });
     await waitFor(() => expect(screen.getByText("Call Flow")).toBeTruthy());

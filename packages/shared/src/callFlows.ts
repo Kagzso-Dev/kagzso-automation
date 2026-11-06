@@ -210,6 +210,8 @@ export const callFlowDefinition = z
         dnc_enforce: z.literal(true).default(true),
         // The LLM says the opening and the silence lines in its own words (the voice backend's FlowAutonomous).
         natural_lines: z.boolean().optional(),
+        // The agent's speaking speed for every line of the call; absent = the voice backend's AGENT_TTS_PACE.
+        voice_pace: z.number().min(0.5).max(2).optional(),
       })
       .strict()
       .optional(),

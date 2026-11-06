@@ -305,6 +305,7 @@ export async function previewVoice(
   text: string,
   pauses?: { short_ms: number; medium_ms: number; long_ms: number },
   language: AiCallLanguage = DEFAULT_AI_CALL_LANGUAGE,
+  pace?: number,
 ): Promise<Buffer> {
   const backend = target(language);
   let res: Response;
@@ -312,7 +313,7 @@ export async function previewVoice(
     res = await fetch(`${backend.url}/api/voices/preview`, {
       method: "POST",
       headers: { "X-API-Key": backend.apiKey, "Content-Type": "application/json" },
-      body: JSON.stringify({ voice_id: voiceId, text, ...(pauses ? { pauses } : {}) }),
+      body: JSON.stringify({ voice_id: voiceId, text, ...(pauses ? { pauses } : {}), ...(pace !== undefined ? { pace } : {}) }),
       signal: AbortSignal.timeout(30_000),
     });
   } catch (err) {

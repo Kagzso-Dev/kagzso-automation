@@ -74,6 +74,8 @@ def flow_hash(flow: CallFlow) -> str:
             data.pop(optional, None)
     if isinstance(data.get("autonomous"), dict) and not data["autonomous"].get("natural_lines"):
         data["autonomous"].pop("natural_lines", None)  # agents published before it keep their hash
+    if isinstance(data.get("autonomous"), dict) and data["autonomous"].get("voice_pace") is None:
+        data["autonomous"].pop("voice_pace", None)  # likewise
     canonical = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

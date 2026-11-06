@@ -1,6 +1,5 @@
 """Autonomous AI Agents address the customer by name with the title for the contact's GIVEN gender, in every
-language: in the identity lines (Dispatch's AI_AGENT_OPENINGS, rendered here) and, as structured context
-(address_as) with rules, on every LLM turn. The AI voice's gender plays no part. Other calls (Nila, Follow-up,
+language, as structured context (address_as) with rules, on every LLM turn. The AI voice's gender plays no part. Other calls (Nila, Follow-up,
 Executive, guided) keep their prompt exactly as before.
 """
 from __future__ import annotations
@@ -12,7 +11,6 @@ import pytest
 
 from app.core.config import LANGUAGE_NAMES, settings
 from app.services import llm_service as ls
-from app.services.call_service import identity_lines
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "autonomous"
 AGENT_LANGUAGES = ("en", "ta", "hi", "kn")  # the languages AI Agents can be compiled for (AI_AGENT_OPENINGS)
@@ -31,37 +29,18 @@ def _data(prompt: str) -> dict:
     return json.loads(prompt.split(ls.CUSTOMER_DATA_TITLE, 1)[1].split("\n", 1)[0])
 
 
-# ------------------------------------------------------------------ identity lines, every agent language
-EXPECTED_IDENTITY = {
-    "en": {"male": "Am I speaking with Ragul sir?", "female": "Am I speaking with Priya madam?",
-           "unknown": "Am I speaking with Ragul?"},
-    "ta": {"male": "Ragul sir-கிட்ட தான் பேசறேனா?", "female": "Priya madam-கிட்ட தான் பேசறேனா?",
-           "unknown": "Ragul-கிட்ட தான் பேசறேனா?"},
-    "hi": {"male": "क्या मेरी बात Ragul जी से हो रही है?", "female": "क्या मेरी बात Priya जी से हो रही है?",
-           "unknown": "क्या मेरी बात Ragul जी से हो रही है?"},
-    "kn": {"male": "ನಾನು Ragul sir ಅವರ ಜೊತೆ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆಯೇ?", "female": "ನಾನು Priya madam ಅವರ ಜೊತೆ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆಯೇ?",
-           "unknown": "ನಾನು Ragul ಅವರ ಜೊತೆ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆಯೇ?"},
-}
-
-
+# ------------------------------------------------------------------ no identity lines, every agent language
 @pytest.mark.parametrize("lang", AGENT_LANGUAGES)
-@pytest.mark.parametrize("gender", ["male", "female", "unknown"])
-def test_identity_question_has_the_title_after_the_name(lang, gender):
+def test_compiled_agents_have_no_identity_question(lang):
+    """The LLM opens the call: the customer is addressed by address_as, never by a fixed identity line."""
     flow = json.loads((FIXTURES / f"{lang}.json").read_text(encoding="utf-8"))
-    name = "Priya" if gender == "female" else "Ragul"
-    question, reask = identity_lines(_vars(gender, name), flow["identity"]["question"], flow["identity"]["reask"])
-    assert question == EXPECTED_IDENTITY[lang][gender]
-    assert reask.startswith("Sorry, ") and reask.lower().endswith(question.lower())  # "Sorry, " + the same line
-    assert "  " not in question and " -" not in question
-    if gender == "unknown":
-        assert "sir" not in question and "madam" not in question  # never guessed
+    assert "identity" not in flow and flow["autonomous"]["natural_lines"] is True
 
 
 def test_the_ai_voice_never_changes_the_customers_title():
-    flow = json.loads((FIXTURES / "ta.json").read_text(encoding="utf-8"))
     # Roopa (female voice) calling a male customer: still "sir".
-    q, _ = identity_lines(_vars("male", voice="roopa"), flow["identity"]["question"], flow["identity"]["reask"])
-    assert q == "Ragul sir-கிட்ட தான் பேசறேனா?"
+    prompt = ls.build_system_prompt("# Agent", _vars("male", voice="roopa"), language="ta")
+    assert _data(prompt)["address_as"] == "Ragul sir"
 
 
 def test_an_empty_value_before_a_word_ending_takes_its_space_with_it():

@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 let server: Server;
 let voice: Server;
 let base = "";
-const voiceRequests: { path: string; body: { voice_id: string; text: string; pauses?: unknown }; key: string | undefined }[] = [];
+const voiceRequests: { path: string; body: { voice_id: string; text: string; pauses?: unknown; pace?: number }; key: string | undefined }[] = [];
 const WAV = Buffer.from("RIFF....WAVEfmt fake-audio");
 const token = (role: "ADMIN" | "EDITOR") =>
   jwt.sign({ sub: `u-${role}`, email: `${role.toLowerCase()}@test`, role }, process.env.JWT_ACCESS_SECRET!);
@@ -80,6 +80,22 @@ describe("POST /api/voices/preview", () => {
     expect(((await gone.json()) as { error: string }).error).toMatch(/roopa, ritu, simran, ishita/);
     expect((await preview({ voice_id: "roopa", text: "x".repeat(201) }, "ADMIN")).status).toBe(400);
     expect((await preview({ voice_id: "roopa", text: "   " }, "ADMIN")).status).toBe(400);
+  });
+
+  it("forwards an AI Agent's voice speed, keys the cache on it and validates it", async () => {
+    const text = "Hello, this is a sample of the speed.";
+    const before = voiceRequests.length;
+    expect((await preview({ voice_id: "roopa", text, pace: 1.37 }, "ADMIN")).status).toBe(200); // a typed speed
+    expect(voiceRequests.at(-1)!.body).toEqual({ voice_id: "roopa", text, pace: 1.37 });
+    expect((await preview({ voice_id: "roopa", text, pace: 1.37 }, "ADMIN")).status).toBe(200); // cached
+    expect((await preview({ voice_id: "roopa", text, pace: 0.5 }, "ADMIN")).status).toBe(200); // the slowest
+    expect(voiceRequests.at(-1)!.body).toEqual({ voice_id: "roopa", text, pace: 0.5 });
+    expect((await preview({ voice_id: "roopa", text }, "ADMIN")).status).toBe(200);
+    expect(voiceRequests.length - before).toBe(3); // another speed = other audio
+    expect(voiceRequests.at(-1)!.body).toEqual({ voice_id: "roopa", text }); // no speed: sent exactly as before
+    for (const bad of [0.4, 2.1, "fast"]) {
+      expect((await preview({ voice_id: "roopa", text, pace: bad }, "ADMIN")).status).toBe(400);
+    }
   });
 
   it("forwards the flow's pause lengths, keys the cache on them and validates them", async () => {

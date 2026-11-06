@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   AI_AGENT_DEFAULTS,
   AI_AGENT_OPENINGS,
+  AI_AGENT_VOICE_SPEED_LIMITS,
+  AI_AGENT_VOICE_SPEEDS,
   aiAgentInput,
   callFlowDefinition,
   knowledgeTextIssues,
@@ -16,6 +18,7 @@ import {
 import {
   AgentCompileError,
   compileAgentFlow,
+  CONVERSATION_BLOCK,
   INSTRUCTIONS_HEADER,
   NATURAL_CLOSINGS,
   VOICE_DELIVERY_BLOCK,
@@ -81,47 +84,54 @@ describe.each(["en", "ta", "hi", "kn"] as const)("compiled agent flow (%s)", (la
     expect(out.base).toBe("executive");
     expect(out.language).toBe(language);
     expect(out.limits).toEqual({ max_duration_sec: 105 });
-    expect(out.autonomous).toEqual({ target_duration_sec: 60, dnc_enforce: true, natural_lines: true });
+    expect(out.autonomous).toEqual({ target_duration_sec: 60, dnc_enforce: true, natural_lines: true, voice_pace: 0.9 });
   });
 
-  it("the agent opens the call in its own words: no fixed greeting quoted to the LLM", () => {
+  it("no fixed opening: the agent greets in its own words, with no time of day and no identity question", () => {
     const opening = text(out, "opening");
-    expect(opening).toMatch(/There is no fixed greeting: you open the call yourself, in your own words/);
-    expect(opening).toMatch(/`time_greeting`/);
+    expect(opening).toMatch(/There is no fixed greeting and no set first line/);
+    expect(opening).toMatch(/Do not open with a time-of-day greeting/);
     expect(opening).toMatch(/`address_as`/);
+    expect(opening).toMatch(/never invent a name or a gender/);
     expect(opening).toMatch(/Greet only once/);
-    expect(opening).not.toContain(out.greeting.text.slice(0, 12)); // the fixed line is not handed to the LLM
-    expect(opening).not.toMatch(/never say good morning/i);
-  });
-
-  it("opens with the agent and company, then the identity question; sir / madam only from a given gender", () => {
-    expect(out.greeting.text).toContain("Thaara");
-    expect(out.greeting.text).toContain("Kagzso Technology Services");
-    expect(out.greeting.text).toContain("{{time_greeting}}");
-    expect(out.greeting.text).toContain("{{title}}");
-    expect(out.greeting.text).not.toContain("customer_name"); // the system asks the identity question after it
-    expect(out.identity?.question).toContain("{{customer_name}}");
+    expect(opening).not.toContain(out.greeting.text.slice(0, 12)); // the unspoken greeting is not handed to the LLM
+    expect(allText(out)).not.toContain("time_greeting");
+    expect(out.greeting.text).not.toContain("time_greeting");
+    // Not even the built-in flow's own identity question comes through.
+    if (language !== "en") expect(builtinExecutive(language).identity).toBeDefined();
+    expect(out.identity).toBeUndefined();
     expect(allText(out)).not.toMatch(/\{\{\s*title_to_use\s*\}\}/);
   });
 
-  it("the identity lines address the customer by name with the title after it, as the language does", () => {
-    // {{title}} is sir / madam only from a GIVEN gender and empty otherwise (voice backend title_for); Hindi
-    // uses ji (respectful and gender-neutral) for everyone, never sir / madam after the name.
-    const after = { en: "{{customer_name}} {{title}}?", ta: "{{customer_name}} {{title}}-கிட்ட", hi: "{{customer_name}} जी", kn: "{{customer_name}} {{title}} ಅವರ" }[language];
-    for (const line of [out.identity!.question, out.identity!.reask!]) {
-      expect(line).toContain(after);
-      expect(line).not.toMatch(/\b(sir|madam)\b/i); // never fixed: only from the contact's gender
+  it("no fixed conversation: no numbered sequence, no scripted steps, no quoted line to read out", () => {
+    const blocks = out.blocks.map((b) => b.id);
+    expect(blocks).not.toContain("conversation_stages");
+    for (const b of out.blocks) {
+      if ("locked" in b || b.id === "do_not_call" || b.id === "rules" || b.id === "ai_instructions") continue;
+      expect(b.text, b.id).not.toMatch(/^\s*\d+\.\s/m); // a numbered sequence
+      expect(b.text, b.id).not.toMatch(/^> "/m); // a line to say word for word
     }
-    expect(text(out, "opening")).toMatch(/politely ask whether the person you are calling is available/);
+    expect(allText(out)).not.toMatch(/ask once whether|stage \d|permission question|interest question/i);
+    expect(text(out, "next_step")).toBe(CONVERSATION_BLOCK);
+    expect(CONVERSATION_BLOCK).toMatch(/not a script\. There are no steps, no fixed order/);
+    expect(CONVERSATION_BLOCK).toMatch(/never ask for something they have already told you/i);
+    expect(CONVERSATION_BLOCK).toMatch(/Understand first, explain relevant value second/);
+    expect(CONVERSATION_BLOCK).toMatch(/follow them/);
+    expect(CONVERSATION_BLOCK).toMatch(/A reply does not need a question/);
+    expect(CONVERSATION_BLOCK).toMatch(/ask whether they have a minute or can talk now/);
+    expect(CONVERSATION_BLOCK).toMatch(/ask how to reach them or for any contact details/);
+    expect(CONVERSATION_BLOCK).toMatch(/the marker is the very last thing you write/);
   });
 
-  it("keeps every locked safety block and the do-not-call / outcome / rules blocks of the built-in flow", () => {
+  it("keeps every locked safety block and the do-not-call / outcome blocks of the built-in flow", () => {
     const base = builtinExecutive(language);
     const locked = (d: CallFlowDefinition) => d.blocks.filter((b) => "locked" in b);
     expect(locked(out)).toEqual(locked(base));
-    for (const id of ["outcome_rules", "rules"]) {
-      expect(text(out, id)).toBe(text(base, id).replace(/\{\{\s*title_to_use\s*\}\}/g, "{{title}}"));
-    }
+    expect(text(out, "outcome_rules")).toBe(text(base, "outcome_rules").replace(/\{\{\s*title_to_use\s*\}\}/g, "{{title}}"));
+    // Every rule stays; only the one naming its own call length gives way to the agent's target and maximum.
+    const rules = (d: CallFlowDefinition) => text(d, "rules").split("\n").filter((l) => !l.startsWith("5."));
+    expect(rules(out)).toEqual(rules(base));
+    expect(text(out, "rules")).toMatch(/^5\. CALL LENGTH says/m);
     // The closings: the same situations and limits, said in the agent's own words (no fixed quoted line).
     for (const id of ["not_interested", "busy", "end_call_request"]) {
       expect(text(base, id)).toMatch(/> "/);
@@ -131,6 +141,7 @@ describe.each(["en", "ta", "hi", "kn"] as const)("compiled agent flow (%s)", (la
       expect(text(out, id)).toMatch(/Then end the call/);
     }
     expect(text(out, "busy")).toMatch(/never promise a callback/);
+    expect(text(out, "busy")).toMatch(/apologise briefly for disturbing them/);
     expect(text(out, "not_interested")).toMatch(/do not re-pitch/);
     // do_not_call: the same block, with the line the backend speaks word for word in the call's language.
     const dnc = AI_AGENT_OPENINGS[language]!.dnc;
@@ -142,7 +153,7 @@ describe.each(["en", "ta", "hi", "kn"] as const)("compiled agent flow (%s)", (la
 
   it("speaks the language's own lines (do-not-call included); Hindi lines avoid gendered verbs", () => {
     const o = AI_AGENT_OPENINGS[language]!;
-    for (const line of [o.greeting, o.identity, o.reask, o.dnc]) {
+    for (const line of [o.greeting, o.dnc]) {
       expect(line.trim()).toBe(line);
       expect(line).not.toMatch(/[\r\n]/);
       if (language !== "en") expect(line).not.toBe(AI_AGENT_OPENINGS.en!.dnc);
@@ -173,7 +184,9 @@ describe("what the compiled flow tells the AI", () => {
     expect(who).toContain("**ABC Hospital**");
     expect(who).toContain("Introduce AI and automation for hospitals");
     expect(who).toMatch(/NOT verified/);
-    expect(who).toMatch(/no fixed list of questions/i);
+    expect(who).toMatch(/no script, no fixed order and no fixed list of questions/i);
+    expect(who).toMatch(/business customer executive/);
+    expect(who).toMatch(/Your name is always written exactly as Thaara, in those letters, in every language/);
   });
 
   it("industry topics are discovery topics, not product claims; unknown answers are never invented", () => {
@@ -228,6 +241,10 @@ describe("what the compiled flow tells the AI", () => {
     expect(len).toMatch(/not to be called again ends the call at once/);
     expect(len).not.toMatch(/refuses or asks not to be called again ends the call at once/);
     expect(len).toMatch(/interested and asking relevant questions, continue naturally past the target/);
+    expect(len).toMatch(/polite closing near 90 seconds/);
+    expect(len).not.toMatch(/priority/); // no order of topics to get through
+    // A short maximum: the closing never comes before the target.
+    expect(text(compileAgentFlow(input("en", { agent: agent({ targetDurationSec: 40, maxDurationSec: 45 }) })), "call_length")).toMatch(/polite closing near 40 seconds/);
   });
 
   it("training: active profile and only the given (approved) knowledge, all active", () => {
@@ -256,6 +273,24 @@ describe("what the compiled flow tells the AI", () => {
     expect(other.greeting.text).toContain("Acme Robotics");
   });
 
+  it("voice speed: a level or any typed speed within the limits goes into the flow as it is; nothing else is accepted", () => {
+    const { min, max } = AI_AGENT_VOICE_SPEED_LIMITS;
+    // A complete agent, so a refusal below can only be about the speed.
+    const parsed = (voiceSpeed: unknown) =>
+      aiAgentInput.safeParse({ name: "x", customCategory: "c", customIndustry: "i", businessName: "b", objective: "o", voiceSpeed });
+    expect(compileAgentFlow(input("en")).autonomous?.voice_pace).toBe(AI_AGENT_DEFAULTS.voiceSpeed);
+    for (const value of [...AI_AGENT_VOICE_SPEEDS.map((s) => s.value), min, 0.85, 1.37, max]) {
+      expect(parsed(value).success).toBe(true);
+      const flow = compileAgentFlow(input("en", { agent: agent({ voiceSpeed: value }) }));
+      expect(flow.autonomous?.voice_pace).toBe(value);
+      expect(callFlowDefinition.safeParse(flow).success).toBe(true);
+    }
+    expect(AI_AGENT_VOICE_SPEEDS.map((s) => s.value)).toContain(1); // the provider's ordinary speed is one of them
+    for (const bad of [min - 0.01, max + 0.01, 0, -1, 3, "", "fast", null, Number.NaN]) {
+      expect(parsed(bad).error?.issues.map((i) => i.message)).toEqual(["Enter a speed from 0.5 to 2.0"]);
+    }
+  });
+
   it("personality sets the tone scales", () => {
     const friendly = compileAgentFlow(input("en", { agent: agent({ personality: "friendly" }) }));
     expect(friendly.training!.persona).toMatchObject({ formality: 2, warmth: 5 });
@@ -264,8 +299,42 @@ describe("what the compiled flow tells the AI", () => {
   it("no industry / topics / callback number: still valid, no topic list, website instead of a number", () => {
     const bare = compileAgentFlow(input("en", { industry: null, categoryName: null, agent: agent({ callbackNumber: null }) }));
     expect(callFlowDefinition.safeParse(bare).success).toBe(true);
-    expect(text(bare, "industry_context")).not.toMatch(/DISCOVERY/);
-    expect(text(bare, "industry_context")).toMatch(/website/);
+    expect(text(bare, "industry_context")).not.toMatch(/checklist/);
+    expect(text(bare, "industry_context")).toMatch(/visit kagzso\.com/);
+    expect(text(bare, "industry_context")).toMatch(/Understand what kind of business this is from the conversation/);
+    // Another company with no number: nothing invented to point at.
+    const other = compileAgentFlow(input("en", { industry: null, categoryName: null, agent: agent({ companyName: "Acme Foods", callbackNumber: null }) }));
+    expect(allText(other)).not.toMatch(/visit kagzso\.com/);
+  });
+
+  it("verified information only, and nothing promised that no workflow delivers", () => {
+    const situations = text(out, "objections");
+    expect(situations).toMatch(/give a price only if the approved information states it/);
+    expect(situations).toMatch(/you cannot send or book anything on this call/);
+    expect(situations).toMatch(/Understand whether any other part of their work still takes a lot of time/);
+    expect(situations).toMatch(/say honestly that you are an AI assistant/);
+    expect(situations).not.toMatch(/^> "/m);
+    expect(text(out, "interested_close")).toMatch(/Never tell the customer that anyone will contact them/);
+    expect(text(out, "industry_context")).toMatch(/needs confirmation from the Kagzso Technology Services team/);
+    expect(text(out, "industry_context")).toMatch(/not a promise that anyone will contact them/);
+    // The flag must not reach the prompt: it would make a promise depend on an environment setting.
+    expect(allText(out)).not.toContain("team_follow_up_configured");
+    expect(allText(out)).not.toMatch(/Our team will get in touch/);
+  });
+
+  it("each language has its own speaking style; none of them is a script", () => {
+    expect(text(compileAgentFlow(input("en")), "speaking_style")).toMatch(/clear, simple, professional spoken English/);
+    expect(text(compileAgentFlow(input("ta")), "speaking_style")).toMatch(/natural conversational Tamil/);
+    expect(text(compileAgentFlow(input("hi")), "speaking_style")).toMatch(/natural conversational Hindi/);
+    expect(text(compileAgentFlow(input("kn")), "speaking_style")).toMatch(/natural conversational Kannada/);
+    expect(text(compileAgentFlow(input("ta")), "speaking_style")).toMatch(/Never translate English sentences word for word/);
+    // A name typed in Latin letters stays in them; a name typed in the language's own script is never told otherwise.
+    expect(text(compileAgentFlow(input("ta")), "speaking_style")).toMatch(/Write your own name only in English letters, never in Tamil letters/);
+    expect(text(compileAgentFlow(input("hi")), "speaking_style")).toMatch(/never in Hindi letters/);
+    expect(text(compileAgentFlow(input("en")), "speaking_style")).not.toMatch(/Write your own name/);
+    const tamilName = compileAgentFlow(input("ta", { agent: agent({ executiveName: "தாரா" }) }));
+    expect(text(tamilName, "speaking_style")).not.toMatch(/Write your own name/);
+    expect(text(tamilName, "agent")).toContain("exactly as தாரா");
   });
 
   it("refuses a language without reviewed opening lines, and a base that is not executive", () => {
@@ -294,17 +363,18 @@ describe("what the compiled flow tells the AI", () => {
     const typed = compileAgentFlow(input("en", { categoryName: "Manufacturing", industry: { name: "Textile mill", discoveryTopics: "" } }));
     expect(callFlowDefinition.safeParse(typed).success).toBe(true);
     const ind = text(typed, "industry_context");
-    expect(ind).toContain("Industry: **Textile mill**");
+    expect(ind).toContain("Expected industry: **Textile mill**");
     expect(ind).toMatch(/Never assume which products or services this business offers/);
-    expect(ind).toMatch(/open questions/);
-    expect(ind).not.toMatch(/DISCOVERY/);
+    expect(ind).toMatch(/If they run a different kind of business, follow them/);
+    expect(ind).toMatch(/one short, open question/);
+    expect(ind).not.toMatch(/checklist/);
     expect(text(typed, "agent")).toContain("a business in the **Textile mill** industry, (Manufacturing)");
     expect(typed.training?.persona?.business_type).toBe("Textile mill");
     // Library industries keep their topic list (and get the same no-assumptions line).
     const lib = text(compileAgentFlow(input("en")), "industry_context");
-    expect(lib).toMatch(/DISCOVERY/);
+    expect(lib).toMatch(/NOT a checklist of questions/);
     expect(lib).toMatch(/Never assume/);
-    expect(lib).not.toMatch(/open questions/);
+    expect(lib).not.toMatch(/one short, open question/);
   });
 });
 

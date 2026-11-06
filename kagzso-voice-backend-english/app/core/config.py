@@ -131,6 +131,7 @@ class Settings(BaseSettings):
     # One voice profile for every line of such a call (greeting, replies, acknowledgements, fixed lines):
     # a relaxed, slightly slow pace (0.5-2.0), a steadier delivery (lower temperature = less variation in
     # pitch / emotion between chunks, 0.01-1.0) and longer synthesis chunks (whole sentences, 30-200 chars).
+    # An agent's own voice speed (Settings -> AI Voice, published in its flow) replaces AGENT_TTS_PACE for its calls.
     AGENT_TTS_PACE: float = 0.9
     AGENT_TTS_TEMPERATURE: float = 0.4
     AGENT_TTS_MIN_BUFFER_CHARS: int = 120

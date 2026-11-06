@@ -41,8 +41,14 @@ const PLAYED_MAX = 20;
 /** A very short silent WAV: played inside the click so the browser (iOS Safari above all) lets the same player play the real sample after it has loaded. */
 const SILENCE = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQQAAAAAAAAA";
 
-async function fetchPreview(voiceId: string, text: string, pauses: CallFlowPauses | undefined, language: AiCallLanguage): Promise<string> {
-  const key = `${language}\u0000${voiceId}\u0000${text}\u0000${pauses ? `${pauses.short_ms}/${pauses.medium_ms}/${pauses.long_ms}` : ""}`;
+async function fetchPreview(
+  voiceId: string,
+  text: string,
+  pauses: CallFlowPauses | undefined,
+  language: AiCallLanguage,
+  pace: number | undefined,
+): Promise<string> {
+  const key = `${language}\u0000${voiceId}\u0000${text}\u0000${pauses ? `${pauses.short_ms}/${pauses.medium_ms}/${pauses.long_ms}` : ""}\u0000${pace ?? ""}`;
   const hit = played.get(key);
   if (hit) return hit;
   let res: Response;
@@ -57,6 +63,7 @@ async function fetchPreview(voiceId: string, text: string, pauses: CallFlowPause
         text,
         ...(pauses ? { pauses } : {}),
         ...(language !== DEFAULT_AI_CALL_LANGUAGE ? { language } : {}),
+        ...(pace !== undefined ? { pace } : {}),
       }),
     });
   } catch {
@@ -93,6 +100,8 @@ export function VoicePicker({
   value,
   onChange,
   pauses,
+  pace,
+  listenOff,
   language = DEFAULT_AI_CALL_LANGUAGE,
   flowLine,
   languageStyle,
@@ -105,6 +114,10 @@ export function VoicePicker({
   onChange: (voiceId: string) => void;
   /** The flow's pause lengths, for {{short_delay}} etc. in the sample line (absent = the defaults). */
   pauses?: CallFlowPauses;
+  /** An AI Agent's voice speed: the sample sounds as its calls do (absent = the voice's ordinary speed). */
+  pace?: number;
+  /** Listen can't start right now (an AI Agent's typed speed isn't valid); a sample already playing can still be stopped. */
+  listenOff?: boolean;
   /** The flow's language: which voice backend speaks the sample, and the sample's line when there is no flowLine. */
   language?: AiCallLanguage;
   /** The flow's own opening as the customer hears it (from the Live preview); null while it can't be previewed. */
@@ -162,7 +175,7 @@ export function VoicePicker({
     setError(null);
     setLoading(voiceId);
     try {
-      const url = await fetchPreview(voiceId, text, pauses, language);
+      const url = await fetchPreview(voiceId, text, pauses, language, pace);
       if (mine !== request.current) return; // Stop, or another Listen, was pressed meanwhile
       el.src = url;
       el.onended = () => mine === request.current && setPlaying(null);
@@ -208,6 +221,7 @@ export function VoicePicker({
                 className="btn-ghost w-full whitespace-nowrap px-2.5 py-1 text-xs"
                 aria-label={`${playing === v.id || loading === v.id ? "Stop" : "Listen to"} ${v.name}`}
                 aria-busy={loading === v.id}
+                disabled={listenOff && playing !== v.id && loading !== v.id}
                 onClick={() => void listen(v.id)}
               >
                 {loading === v.id ? (

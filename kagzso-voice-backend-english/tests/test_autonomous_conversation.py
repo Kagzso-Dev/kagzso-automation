@@ -19,6 +19,7 @@ import pytest
 
 from app.core.config import settings
 from app.services import call_service as cs
+from app.flows.training import KNOWLEDGE_TITLE
 from tests.conftest import silence_mulaw, tone_mulaw
 from tests.test_autonomous_agent import _capture_systems
 from tests.test_call_policy import _agent_lines, _events, _finish, _rows, _say
@@ -29,13 +30,13 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "autonomous"
 ANSWER = "It works alongside the software the hospital already uses."  # approved Q&A (k2)
 ALWAYS = "Kagzso automates billing follow-ups"  # approved always-on fact (k1)
 NO_INVENTION = "never guess or invent"
-# Agents open the call in their own words (autonomous.natural_lines): the LLM answers "Hello?" with its greeting
-# and asks for the customer, then answers "Yes" with the reason for the call. The fake LLM's first two replies.
+# Agents open the call in their own words (autonomous.natural_lines): the LLM answers "Hello?" with its greeting,
+# then answers the customer's next words. The fake LLM's first two replies.
 OPENING = {
-    "en": ["Good morning sir, this is Thaara from Kagzso Technology Services. Am I speaking with Ragul sir?",
-           "Thank you Ragul sir. I'm calling about automation for your hospital."],
-    "ta": ["வணக்கம் sir, good morning. நான் Thaara, Kagzso Technology Services-ல இருந்து. Ragul sir-கிட்ட தான் பேசறேனா?",
-           "Thanks Ragul sir. உங்க hospital-க்கு automation பத்தி பேசலாம்னு call பண்ணேன்."],
+    "en": ["Hello sir, this is Thaara from Kagzso Technology Services. How are you doing today?",
+           "Thank you sir. I'm calling about automation for your hospital."],
+    "ta": ["வணக்கம் sir, நான் Thaara, Kagzso Technology Services-லிருந்து பேசுகிறேன். எப்படி இருக்கீங்க?",
+           "நன்றி sir. உங்க hospital-க்கு automation பத்தி பேசலாம்னு call பண்ணேன்."],
 }
 
 
@@ -95,11 +96,11 @@ def test_questions_objections_follow_ups_memory_and_repeats(client, auth, fakes,
     for s in systems:
         assert ALWAYS in s and NO_INVENTION in s and "don't have that detail" in s
         assert "An objection or doubt" in s and "answer that question first" in s
-    # Missing knowledge: nothing approved matches "an office in Dubai" -> no Q&A answer is given to the model.
-    assert ANSWER not in unexpected
-    # The objection turn and the repeated question get the approved answer; the turns that don't ask, don't.
-    assert ANSWER in objection and ANSWER in repeated
-    assert ANSWER not in follow_up
+    # All the approved knowledge is offered on every turn (the model reads it, whatever the language or wording),
+    # most relevant first, and the rules above say what to do when none of it answers the question.
+    first_line = lambda s: s.split(KNOWLEDGE_TITLE, 1)[1].splitlines()[0]  # noqa: E731
+    assert all(ANSWER in s for s in systems)
+    assert ANSWER in first_line(objection) and ANSWER in first_line(repeated)
 
     # Context memory: each reply is asked with the whole conversation so far, in order.
     history = [m["content"] for m in fakes.llm.seen_messages[-1]]
@@ -238,7 +239,7 @@ INTERESTED = {
     "en": ["Yes, tell me. We run a hospital.", "How do billing follow-ups work?"],
     "ta": ["ஆமா, சொல்லுங்க. நாங்க hospital நடத்துறோம்.", "Billing follow-up எப்படி வேலை செய்யும்?"],
 }
-NO_FOLLOW_UP = "Team follow-up is NOT configured: never say that the team will contact the customer."
+NO_FOLLOW_UP = "No team follow-up is linked to this call"
 
 
 @pytest.mark.parametrize("lang", ["en", "ta"])
@@ -253,6 +254,7 @@ def test_busy_customer_gets_a_polite_closing_without_a_callback(client, auth, fa
     assert _agent_lines(sync_engine, call_id)[-1] == BUSY_CLOSE[lang]
     assert fakes.plivo.hangups == ["uuid-k"]
     assert "# BUSY / NOT NOW" in systems[-1] and "never promise a callback" in systems[-1]
+    assert "apologise briefly for disturbing them" in systems[-1]
     assert "No problem. Thanks for your time. Have a nice day." not in systems[-1]  # no fixed line to copy
     assert NO_FOLLOW_UP in systems[-1] and '"team_follow_up_configured": false' in systems[-1]
     assert "do_not_call_detected" not in _events(sync_engine, call_id)

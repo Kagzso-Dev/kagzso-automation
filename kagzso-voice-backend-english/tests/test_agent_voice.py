@@ -238,9 +238,40 @@ def test_consecutive_agent_replies_keep_one_voice_and_style(client, auth, fakes,
     assert all(s.flushes >= 1 for s in replies if not any(t.startswith(("Hello", "வணக்கம்", "नमस्ते")) for t in s.texts))
 
 
+def test_the_agents_own_speed_replaces_the_pace_and_nothing_else():
+    assert agent_voice_settings(settings, 1.2) == {**agent_voice_settings(settings), "SARVAM_TTS_PACE": 1.2}
+    assert agent_voice_settings(settings, 9.0)["SARVAM_TTS_PACE"] == 2.0  # still clamped to Sarvam's range
+    base = SarvamTTS(_cfg(), voice_id="roopa")
+    assert with_agent_voice(base, 1.1)._voice_settings() == {**with_agent_voice(base)._voice_settings(), "pace": 1.1}
+    both = with_agent_voice(FallbackTTS(base, SarvamTTS(_cfg(), voice_id="roopa")), 0.8)
+    assert both.primary._voice_settings()["pace"] == both.fallback._voice_settings()["pace"] == 0.8
+
+
+def _used(recorder) -> set:
+    return {(e[2]["pace"], e[2]["temperature"], e[2]["min_buffer"]) for e in recorder.log if e[0] in ("rest", "stream")}
+
+
+@pytest.mark.parametrize("speed", [0.5, 0.8, 1.0, 1.2, 1.37, 2.0])  # the levels, a typed speed and Sarvam's limits
+def test_every_line_of_a_call_follows_the_agents_speed(client, auth, fakes, monkeypatch, recorder, speed):
+    flow = _flow("en", monkeypatch)
+    flow["autonomous"]["voice_pace"] = speed
+    _talk(client, auth, fakes, flow, ["Hello?", "Yes", "Tell me more", "Okay"], flow_id=f"agent_speed_{round(speed * 100)}")
+    assert _used(recorder) == {(speed, 0.4, 120)}  # only the speed: the steady delivery stays
+    assert not [e for e in recorder.log if e[0] == "set_pace"]  # never changed during the call
+
+
+def test_an_agent_published_before_voice_speed_keeps_the_backends_pace(client, auth, fakes, monkeypatch, recorder):
+    flow = _flow("en", monkeypatch)
+    del flow["autonomous"]["voice_pace"]
+    fakes.tts.cfg = fakes.tts.cfg.model_copy(update={"AGENT_TTS_PACE": 1.15})
+    _talk(client, auth, fakes, flow, ["Hello?", "Yes", "Tell me more", "Okay"], flow_id="agent_older")
+    assert _used(recorder) == {(1.15, 0.4, 120)}
+
+
 def test_a_normal_call_is_unchanged(client, auth, fakes, monkeypatch, recorder):
     flow = _flow("en", monkeypatch)
     flow.pop("autonomous")  # the same flow without the agent setting: an ordinary executive call
+    flow["greeting"] = {"text": "Hello, {{time_greeting}} {{title}}. This is Thaara."}  # a time-of-day opening
     _talk(client, auth, fakes, flow, ["Hello?", "Yes", "Tell me more", "Okay"], flow_id="plain_voice")
     log = recorder.log
     assert {(e[2]["pace"], e[2]["temperature"], e[2]["min_buffer"]) for e in log if e[0] == "stream"} == {(1.0, 0.6, 30)}

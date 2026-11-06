@@ -18,6 +18,7 @@ import pytest
 from app.core.config import settings
 from app.flows.loader import BUILTIN_FLOWS, flow_hash, parse_flow, FlowError
 from app.flows.schema import CallFlow
+from app.flows.training import KNOWLEDGE_TITLE
 from app.services import call_service as cs
 from app.services import llm_service as llm
 from app.services.llm_service import OUTCOME_SYSTEM
@@ -109,6 +110,28 @@ def test_timing_line_closes_before_the_hard_stop():
     assert "ends the call at 105 seconds: close now" in final and "continue naturally" not in final
     # Without the hard stop (older calls) the line is as before.
     assert "close now" not in llm.call_timing({"flow_target_sec": "60", "call_elapsed_sec": "100"})
+
+
+def test_voice_pace_is_bounded_and_agents_published_without_it_keep_their_hash(monkeypatch):
+    monkeypatch.setattr(settings, "CALL_LANGUAGE", "en")
+    raw = json.loads((FIXTURES / "en.json").read_text(encoding="utf-8"))
+    assert parse_flow(raw).autonomous.voice_pace == 0.9
+    for typed in (0.5, 1.37, 2.0):  # any typed speed within Sarvam's limits
+        assert parse_flow({**raw, "autonomous": {**raw["autonomous"], "voice_pace": typed}}).autonomous.voice_pace == typed
+    for bad in (0.4, 2.1):
+        with pytest.raises(FlowError):
+            parse_flow({**raw, "autonomous": {**raw["autonomous"], "voice_pace": bad}})
+    older = copy.deepcopy(raw)
+    del older["autonomous"]["voice_pace"]
+    flow = parse_flow(older)
+    assert flow.autonomous.voice_pace is None
+    data = flow.model_dump(mode="json")
+    for optional in ("pauses", "recording_notice", "identity", "training"):
+        if data.get(optional) is None:
+            data.pop(optional, None)
+    del data["autonomous"]["voice_pace"]  # the hash as it was before the field existed
+    assert flow_hash(flow) == hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":"),
+                                                        ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 def test_natural_lines_off_keeps_the_hash_agents_were_published_with(monkeypatch):
@@ -250,8 +273,8 @@ GREETING_WORD = {"en": "Thaara calling from", "ta": "நான் Thaara", "hi":
 
 @pytest.mark.parametrize("lang", ["en", "ta", "hi", "kn"])
 def test_compiled_agent_call_per_language(client, auth, fakes, sync_engine, monkeypatch, lang):
-    """Fake STT / LLM / TTS: the compiled flow's opening, identity question, instructions, retrieved knowledge,
-    the call's language rule, the timing line and the conversation history all reach the LLM; nothing else
+    """Fake STT / LLM / TTS: the compiled flow's opening, instructions, approved knowledge, the call's language
+    rule, the timing line and the conversation history all reach the LLM; nothing else
     about the call path changes. (Real Sarvam STT / TTS and a real LLM are NOT exercised here.)"""
     flow = json.loads((FIXTURES / f"{lang}.json").read_text(encoding="utf-8"))
     monkeypatch.setattr(settings, "CALL_LANGUAGE", lang)
@@ -260,7 +283,7 @@ def test_compiled_agent_call_per_language(client, auth, fakes, sync_engine, monk
     monkeypatch.setattr(cs, "AUTONOMOUS_CALLS_BLOCKED", {})
     systems = _capture_systems(fakes)
     # The agent opens the call in its own words (natural_lines): the LLM answers "Hello?" and "Yes, speaking" too.
-    opening = ["Hello, this is Thaara from Kagzso Technology Services. Am I speaking with Ragul sir?",
+    opening = ["Hello sir, this is Thaara from Kagzso Technology Services. How are you doing today?",
                "Thank you sir. I'm calling about automation for your hospital."]
     fakes.llm.replies = list(opening)
     fakes.llm.reply = "Thank you. We help hospitals automate billing follow-ups."
@@ -279,11 +302,12 @@ def test_compiled_agent_call_per_language(client, auth, fakes, sync_engine, monk
     # Four AI replies: "Hello?", "Yes, speaking", "Will it replace our software?" and "Okay, thank you".
     assert len(systems) == 4
     for s in systems:
-        assert "There is no fixed greeting: you open the call yourself" in s
-        assert '"time_greeting": "Good' in s and '"address_as": "Ragul' in s  # what it greets and asks with
-    question, after = systems[2:]
+        assert "There is no fixed greeting and no set first line" in s
+        assert '"address_as": "Ragul' in s and "time_greeting" not in s
+    question = systems[2]
     answer = "It works alongside the software the hospital already uses."
-    assert answer in question and answer not in after  # retrieved for the turn that asks it, per turn
+    # All the approved knowledge is offered: what the customer just asked about comes first.
+    assert answer in question.split(KNOWLEDGE_TITLE, 1)[1].splitlines()[0]
     for s in systems:
         assert "AI CONVERSATION INSTRUCTIONS" in s and "Do not talk about pricing." in s
         assert "Kagzso automates billing follow-ups" in s  # the always-on fact

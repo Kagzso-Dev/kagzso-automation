@@ -479,23 +479,24 @@ class FallbackTTS(TTSProvider):
             return await self.fallback.synthesize_preview(text)  # type: ignore[attr-defined]
 
 
-def agent_voice_settings(cfg: Settings) -> Dict[str, Any]:
-    """The Autonomous AI Agent voice profile as Sarvam TTS settings (AGENT_TTS_*, clamped to Sarvam's ranges)."""
+def agent_voice_settings(cfg: Settings, pace: Optional[float] = None) -> Dict[str, Any]:
+    """The Autonomous AI Agent voice profile as Sarvam TTS settings (AGENT_TTS_*, clamped to Sarvam's ranges).
+    pace: the agent's own voice speed, instead of AGENT_TTS_PACE."""
     return {
-        "SARVAM_TTS_PACE": min(2.0, max(0.5, cfg.AGENT_TTS_PACE)),
+        "SARVAM_TTS_PACE": min(2.0, max(0.5, cfg.AGENT_TTS_PACE if pace is None else pace)),
         "SARVAM_TTS_TEMPERATURE": min(1.0, max(0.01, cfg.AGENT_TTS_TEMPERATURE)),
         "SARVAM_TTS_MIN_BUFFER_CHARS": min(200, max(30, cfg.AGENT_TTS_MIN_BUFFER_CHARS)),
     }
 
 
-def with_agent_voice(tts: TTSProvider) -> TTSProvider:
+def with_agent_voice(tts: TTSProvider, pace: Optional[float] = None) -> TTSProvider:
     """A call's TTS with the Autonomous AI Agent voice profile: the same speaker, model and key, with the profile's
-    pace, temperature and synthesis chunk size for every request and stream; a fallback voice, once used, stays
-    for the rest of the call. Any other provider (e.g. a test double) is returned unchanged."""
+    pace (or the agent's own `pace`), temperature and synthesis chunk size for every request and stream; a fallback
+    voice, once used, stays for the rest of the call. Any other provider (e.g. a test double) is returned unchanged."""
     if isinstance(tts, FallbackTTS):
-        return FallbackTTS(with_agent_voice(tts.primary), with_agent_voice(tts.fallback), sticky=True)
+        return FallbackTTS(with_agent_voice(tts.primary, pace), with_agent_voice(tts.fallback, pace), sticky=True)
     if isinstance(tts, SarvamTTS):
-        return type(tts)(tts.cfg.model_copy(update=agent_voice_settings(tts.cfg)), voice_id=tts.voice_id,
+        return type(tts)(tts.cfg.model_copy(update=agent_voice_settings(tts.cfg, pace)), voice_id=tts.voice_id,
                          client=tts._client, exact_voice=True)
     return tts
 
