@@ -956,6 +956,7 @@ const EVENT_LABEL: Record<string, string> = {
   call_started: "Calling",
   call_cancelled: "Call cancelled before dialling",
   call_result: "Call result",
+  business_learned: "Business learned on the call",
   do_not_call: "Do not call",
   stage_changed: "Stage changed",
   approved: "Approved",

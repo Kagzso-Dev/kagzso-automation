@@ -56,7 +56,7 @@ KNOWLEDGE: List[Tuple[str, str, str, List[str]]] = [
 MONEY = r"\d|₹|rupee|ரூபாய்|லட்சம்|ஆயிரம்|\blakh\b|\bthousand\b"
 TIME_GREETING = r"good (morning|afternoon|evening)|காலை வணக்கம்|மாலை வணக்கம்"
 IDENTITY_CHECK = r"am i speaking|speaking with|பேசறேனா|பேசுகிறேனா"
-ROUTINE_PERMISSION = r"have a (minute|moment)|good time to|பேசலாமா|நிமிஷம் (கிடைக்குமா|இருக்கா)"
+ROUTINE_PERMISSION = r"have a (minute|moment)|good time to|பேசலாமா|நிமிஷம்( time)? (கிடைக்குமா|இருக்கா)"
 REACH_YOU = r"(best way|how can we|how do we) (to )?reach you|your (number|email|contact)"
 CONTACT_PROMISE = (r"(team|we|i|someone|our).{0,40}(will|shall|'ll).{0,20}(call|contact|reach|get in touch|send|whatsapp|email|mail)"
                    r"|call back|callback|கால் பண்ணுவ|call பண்ணுவ|contact பண்ணுவ|தொடர்பு கொள்வ|அனுப்பு(வ|கிற|றேன்|றோம்)|send பண்ணு(வ|றேன்|றோம்)")
@@ -74,7 +74,7 @@ SCENARIOS: Dict[str, List[Scenario]] = {
         {"name": "the example: who, what, hospital, how",
          "turns": ["Yes, tell me, who is this?", "What kind of automation?", "We are running a hospital.", "How does appointment booking work?"],
          "not": [TIME_GREETING, IDENTITY_CHECK, INVENTED], "has_last": [r"slot|book|confirm|front desk|list"]},
-        {"name": "hotel, not the configured hospital",
+        {"name": "hotel, not the configured hospital", "business": "hospital",
          "turns": ["Who is this?", "We don't run a hospital. We run a hotel.", "What can you do for us?"],
          "has_last": [r"kitchen|billing|sales"], "not_last": [r"patient"]},
         {"name": "school", "turns": ["Who's calling?", "I run a school. What can you do?"],
@@ -92,13 +92,23 @@ SCENARIOS: Dict[str, List[Scenario]] = {
         {"name": "whatsapp request", "turns": ["Who is this?", "Just send me the details on WhatsApp."], "not_last": [CONTACT_PROMISE, SENT_CLAIM]},
         {"name": "AI question", "turns": ["Are you a real person or a robot?"], "has_last": [r"\bAI\b|artificial"]},
         {"name": "wrong person", "turns": ["Sorry, there is no Ragul here, this is his driver."], "not_last": [r"patient|billing|automat"]},
+        {"name": "business on file: mentions it", "business": "hospital", "turns": ["Yes, tell me."], "has": [r"hospital"]},
+        {"name": "business on file: formatted name", "business": "SRI LAKSHMI TEXTILES PVT. LTD.", "turns": ["Yes, tell me."],
+         "has": [r"Sri Lakshmi"], "not": [r"\bPVT\b|\bLTD\b|Private Limited"]},
+        {"name": "business on file: it is wrong", "business": "hospital", "turns": ["Yes?", "No no, we run a hotel."],
+         "not_last": [r"hospital"]},
+        {"name": "business empty: asks", "business": "—", "turns": ["Yes, tell me."], "has": [r"business"], "not": [r"undefined|\bnull\b"]},
+        {"name": "business empty: adapts", "business": None, "turns": ["Yes, tell me.", "We run a textile mill.", "How can you help us?"],
+         "has_last": [r"textile|mill|production|order|stock|inventory|billing|report"]},
+        {"name": "business empty: would not say", "business": None, "turns": ["Yes, tell me.", "I would rather not say. What do you want?"],
+         "not_last": [r"what (kind of |type of )?business|your business\?"]},
     ],
     "ta": [
         {"name": "opening", "turns": [None], "not": [TIME_GREETING, IDENTITY_CHECK], "has": [r"Thaara"]},
         {"name": "the example: who, what, hospital, how",
          "turns": ["சொல்லுங்க, யார் பேசுறீங்க?", "எப்படிப்பட்ட automation?", "நாங்க hospital நடத்துறோம்.", "Appointment booking எப்படி வேலை செய்யும்?"],
          "not": [TIME_GREETING, IDENTITY_CHECK]},
-        {"name": "hotel, not the configured hospital",
+        {"name": "hotel, not the configured hospital", "business": "hospital",
          "turns": ["யார் பேசுறீங்க?", "எங்களுக்கு hospital இல்ல, நாங்க hotel நடத்துறோம்.", "எங்களுக்கு என்ன பண்ண முடியும்?"],
          "has_last": [r"kitchen|billing|sales|கிச்சன்|பில்லிங்"], "not_last": [r"patient|நோயாளி"]},
         {"name": "school", "turns": ["யாரு?", "நான் ஒரு school நடத்துறேன். என்ன பண்ண முடியும்?"],
@@ -113,6 +123,16 @@ SCENARIOS: Dict[str, List[Scenario]] = {
         {"name": "whatsapp request", "turns": ["யார் பேசுறீங்க?", "Details-ஐ WhatsApp-ல அனுப்புங்க."], "not_last": [CONTACT_PROMISE, SENT_CLAIM]},
         {"name": "AI question", "turns": ["நீங்க உண்மையான ஆளா இல்ல robot-ஆ?"], "has_last": [r"\bAI\b|ஏஐ|செயற்கை"]},
         # A real call: the customer only ever gave one word, and the agent kept pitching, then promised a team call.
+        {"name": "business on file: mentions it", "business": "hospital", "turns": ["சொல்லுங்க."], "has": [r"hospital|ஹாஸ்பிடல்|மருத்துவமனை"]},
+        {"name": "business on file: formatted name", "business": "SRI LAKSHMI TEXTILES PVT. LTD.", "turns": ["சொல்லுங்க."],
+         "has": [r"Sri Lakshmi|ஸ்ரீ லட்சுமி"], "not": [r"\bPVT\b|\bLTD\b|Private Limited"]},
+        {"name": "business on file: it is wrong", "business": "hospital", "turns": ["ஆமா, சொல்லுங்க.", "இல்ல இல்ல, நாங்க hotel நடத்துறோம்."],
+         "not_last": [r"hospital|ஹாஸ்பிடல்|மருத்துவமனை"]},
+        {"name": "business empty: asks", "business": "—", "turns": ["சொல்லுங்க."], "has": [r"business|பிசினஸ்|தொழில்"], "not": [r"undefined|\bnull\b|சரியா கேக்கல|திரும்ப சொல்ல"]},
+        {"name": "business empty: adapts", "business": None, "turns": ["சொல்லுங்க.", "நாங்க textile mill நடத்துறோம்.", "எங்களுக்கு என்ன பண்ண முடியும்?"],
+         "has_last": [r"textile|mill|production|order|stock|billing|report|உற்பத்தி"]},
+        {"name": "business empty: would not say", "business": None, "turns": ["சொல்லுங்க.", "அது சொல்ல விரும்பல. என்ன விஷயம் சொல்லுங்க."],
+         "not_last": [r"என்ன business|என்ன தொழில்|எந்த business"]},
         {"name": "short answers only", "turns": ["ஆ", "ஆமா", "சரி இல்ல sir", "சரி சரி சரி", "சரி", "ஆமா"],
          "not": [TIME_GREETING, IDENTITY_CHECK, CONTACT_PROMISE, SENT_CLAIM]},
     ],
@@ -148,7 +168,7 @@ async def run_scenario(llm, prompt: str, base: Dict[str, Optional[str]], scenari
     if turns[0] is not None and not scenario.get("first"):
         turns.insert(0, None)
     for i, customer in enumerate(turns):
-        variables = {**base, "call_elapsed_sec": str(i * 12)}
+        variables = {**base, "call_elapsed_sec": str(i * 12), "customer_business": scenario.get("business")}  # type: ignore[dict-item]
         said = AGENT_GREETING_INSTRUCTION if customer is None else customer
         text, ended = await reply(llm, prompt, history, said, variables)
         lines.append(text)
@@ -178,7 +198,8 @@ async def main() -> int:
     prompt = render_blocks(flow)
     base = dict(build_call_variables("Ragul", "male", "+919876543210"))
     base.update(flow_target_sec=str(flow.autonomous.target_duration_sec), flow_max_sec=str(flow.limits.max_duration_sec),
-                flow_natural_lines="true", flow_training=runtime_json(flow.training, flow.language, flow.language_style))
+                flow_natural_lines="true", flow_contact_business="true",
+                flow_training=runtime_json(flow.training, flow.language, flow.language_style))
     llm = create_llm_provider()
     results = []
     for scenario in scenarios:

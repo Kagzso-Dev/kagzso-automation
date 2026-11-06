@@ -246,7 +246,7 @@ export function AiAgentKnowledge({ agent }: { agent: AiAgentView }) {
                       <button type="button" className="text-left hover:underline" onClick={() => setEditing(i)}>
                         {i.text}
                       </button>
-                      {i.industryHint && <div className="text-xs text-warn">Industry in the file: {i.industryHint} (not this agent's)</div>}
+                      {i.industryHint && <div className="text-xs text-slate-550">Industry in the file: {i.industryHint}</div>}
                       {i.issues.map((x) => (
                         <div key={x} className="text-xs text-crit">
                           {x}

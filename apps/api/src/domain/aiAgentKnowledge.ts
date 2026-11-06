@@ -8,8 +8,8 @@
 //               ends. A short line that looks like a heading becomes the topic of what follows.
 //
 // Every item is checked with knowledgeTextIssues (the voice backend's training rules) and for missing fields;
-// items with issues can be edited, but not approved, until they are fixed. A row naming another industry than
-// the agent's keeps its industry in industryHint so the admin sees it before approving.
+// items with issues can be edited, but not approved, until they are fixed. A row naming an industry keeps it in
+// industryHint so the admin sees which kind of business it is about before approving.
 
 import { parse as parseCsv } from "csv-parse/sync";
 import ExcelJS from "exceljs";
@@ -117,7 +117,7 @@ function withIssues(item: Omit<ExtractedItem, "issues">): ExtractedItem {
 export type SheetRow = Record<string, string> & { __row?: string };
 
 /** Structured rows (csv / xlsx) → items. A row's `__row` is its row number in the file (else its position + 1). */
-export function rowsToItems(headers: string[], rows: SheetRow[], agentIndustry: string | null): Extraction {
+export function rowsToItems(headers: string[], rows: SheetRow[]): Extraction {
   const topicCol = pick(headers, TOPIC_COLS);
   const textCol = pick(headers, TEXT_COLS);
   const questionCol = pick(headers, QUESTION_COLS);
@@ -152,9 +152,7 @@ export function rowsToItems(headers: string[], rows: SheetRow[], agentIndustry: 
       skipped.push(rowNo);
       return;
     }
-    const industry = industryCol ? oneLine(row[industryCol] ?? "") : "";
-    const industryHint =
-      industry && (!agentIndustry || norm(industry) !== norm(agentIndustry)) ? industry.slice(0, 80) : null;
+    const industryHint = (industryCol ? oneLine(row[industryCol] ?? "") : "").slice(0, 80) || null;
     const kind = questions.length > 0 ? "qa" : "fact";
     // A text over 500 characters: a fact is split into several facts with the same topic, a Q&A keeps its
     // full answer and is flagged (an approved answer is said with its meaning kept: an admin shortens it).
@@ -388,17 +386,12 @@ export async function readSheet(buf: Buffer, format: "csv" | "xlsx"): Promise<{ 
 }
 
 /** Read one uploaded file. Throws with a readable message when the file can't be read. */
-export async function extractKnowledge(
-  buf: Buffer,
-  format: AiKnowledgeFormat,
-  fileName: string,
-  agentIndustry: string | null,
-): Promise<Extraction> {
+export async function extractKnowledge(buf: Buffer, format: AiKnowledgeFormat, fileName: string): Promise<Extraction> {
   const stem = fileName.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ");
   if (format === "csv" || format === "xlsx") {
     const sheet = await readSheet(buf, format);
     if (sheet.headers.length === 0) throw new Error("the file has no header row");
-    const out = rowsToItems(sheet.headers, sheet.rows, agentIndustry);
+    const out = rowsToItems(sheet.headers, sheet.rows);
     if (sheet.rows.length >= MAX_SHEET_ROWS) out.notes.push(`only the first ${MAX_SHEET_ROWS} rows were read`);
     return out;
   }

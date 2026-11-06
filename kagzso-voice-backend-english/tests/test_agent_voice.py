@@ -205,7 +205,7 @@ def _talk(client, auth, fakes, flow, said: List[str], replies=REPLIES, flow_id="
     original = fakes.llm._stream
 
     async def stream(system_text, messages, model=None):
-        if system_text != cs.OUTCOME_SYSTEM and queue:
+        if not system_text.startswith(cs.OUTCOME_SYSTEM) and queue:
             fakes.llm.reply = queue.pop(0)
         async for d in original(system_text, messages, model):
             yield d

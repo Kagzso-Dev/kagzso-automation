@@ -550,11 +550,20 @@ port 8010 (`VOICE_GATEWAY_PORT`; `scripts/voice-gateway.mjs`): `/ta/…` → Tam
 
 ### AI Agents (autonomous business executive, e.g. Thaara)
 
-**Calls → AI Agents** (admins; each language section has its own, `/ta/ai-agents`, …). An agent is set up once
-per business: category and industry (one shared library: **Settings → AI agent industries**), business name,
-calling objective, contact (name, gender Male / Female / Not specified, mobile), AI executive name (default
-Thaara), company (default Kagzso Technology Services), callback number, personality, the **AI Conversation
-Instructions** box, a target length (default 1 min) and a hard maximum (default 1 min 45 s).
+**Calls → AI Agents** (admins; each language section has its own, `/ta/ai-agents`, …). An agent has a calling
+objective, contact (name, gender Male / Female / Not specified, mobile), AI executive name (default Thaara), company
+(default Kagzso Technology Services), callback number, personality, the **AI Conversation Instructions** box, a
+target length (default 1 min) and a hard maximum (default 1 min 45 s).
+
+**The business comes from the contact, not the agent.** When a call is dialled, an autonomous agent gets the Business
+of that number in the language's Voicecall Contact list, as `customer_business` in the prompt's customer details. With
+one on file the AI checks it naturally and tailors the call to that type of business. With none (empty, `—`, `N/A`, …)
+the AI leads from the objective, instructions and approved knowledge, asks once what business they run, and adapts; if
+they won't say it moves on. What it learns fills the contact's **empty** Business field, never replacing an entry, and
+shows on the contact's timeline as *Business learned on the call*. An agent published before this keeps the business
+compiled into its flow until it is published again (it shows *unpublished changes*). The old agent-level category,
+industry and business name columns stay in the database unused, and nothing reads **Settings → AI agent industries**
+any more except that page.
 
 - **Autonomous** agents are compiled (`apps/api/src/domain/aiAgentCompile.ts`) into an ordinary `executive`
   Call Flow version with an `autonomous` block, and published through the same path as the Call Flows page (the

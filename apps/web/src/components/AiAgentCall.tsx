@@ -101,7 +101,7 @@ export function AiAgentCall({ agent }: { agent: AiAgentView }) {
       </div>
       <p className="text-xs text-slate-550">
         The recording, transcript and outcome appear in the call history like every AI call. To call a list, use Voicecall Contact → AI Call and
-        pick this agent's Call Flow.
+        pick this agent's Call Flow. A number in this language's Voicecall Contact list uses that contact's Business; otherwise the AI asks.
       </p>
       {start.error && <ErrorNote error={start.error} />}
       <div className="flex justify-end">

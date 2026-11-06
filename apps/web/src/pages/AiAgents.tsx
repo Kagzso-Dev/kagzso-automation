@@ -61,7 +61,7 @@ export function AiAgentsPage() {
     <div>
       <PageHeader
         title={title}
-        subtitle={`AI business executives that call in ${AI_CALL_LANGUAGE_NAMES[language]}: business details, knowledge and instructions, then the AI leads the conversation within the fixed safety rules.`}
+        subtitle={`AI business executives that call in ${AI_CALL_LANGUAGE_NAMES[language]}: objective, knowledge and instructions, then the AI leads the conversation within the fixed safety rules.`}
         action={
           <button type="button" className="btn-primary" onClick={() => setSelected("new")}>
             New AI agent
@@ -80,7 +80,7 @@ export function AiAgentsPage() {
         <ErrorNote error={agents.error} />
       ) : agents.data!.length === 0 ? (
         <EmptyState icon="phone" title="No AI agents yet">
-          Create one for each business you call: its industry, the calling objective, approved knowledge and any special instructions.
+          Create one with the calling objective, approved knowledge and any special instructions. Each call uses the contact's own business.
         </EmptyState>
       ) : (
         <ul className="grid gap-3 md:grid-cols-2">
@@ -119,9 +119,7 @@ function AgentCard({ agent: a, onOpen }: { agent: AiAgentView; onOpen: (tab: Tab
         {a.liveVersion ? <Badge tone="ok">live v{a.liveVersion}</Badge> : <Badge tone="warn">not published</Badge>}
         {a.liveVersion && a.mode === "autonomous" && a.unpublishedChanges && <Badge tone="warn">unpublished changes</Badge>}
       </div>
-      <div className="text-slate-550">
-        {[a.businessName, a.executiveName && `${a.executiveName} · ${a.companyName}`].filter(Boolean).join(" — ")}
-      </div>
+      <div className="text-slate-550">{a.executiveName && `${a.executiveName} · ${a.companyName}`}</div>
       {a.mode === "autonomous" && a.voiceDisplayName && (
         <div className="text-xs text-slate-550">
           Voice: {a.voiceDisplayName}

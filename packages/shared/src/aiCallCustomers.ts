@@ -176,6 +176,26 @@ export function checkAiCallCustomerRow(row: AiCallCustomerRowInput, defaultCount
   return { phone, gender, email, errors, warnings };
 }
 
+/* ------------------------------------------------------------------ the contact's business on a call */
+
+/** The most a call is sent (ai_call_customers.businessName's size; an imported cell can be longer). */
+export const AI_CALL_BUSINESS_MAX = 160;
+
+// A Business cell that says "nothing here": punctuation only (the list shows "—" for empty), or one of these words,
+// compared without case, spaces or punctuation ("N/A" = "na").
+const NO_BUSINESS_WORDS = new Set(["na", "nan", "nil", "none", "null", "undefined", "unknown", "tbd", "notavailable", "notapplicable"]);
+
+/**
+ * The contact's business as a call may use it, or null when there is none: empty, whitespace, "—", "N/A", "null" and
+ * the like must never reach a call. The voice backend applies the same rule (llm_service.known_business), cross-checked
+ * with tests/fixtures/business_cases.json on both sides.
+ */
+export function knownBusiness(raw: string | null | undefined): string | null {
+  const value = String(raw ?? "").replace(/\s+/g, " ").trim();
+  const key = value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  return key && !NO_BUSINESS_WORDS.has(key) ? value.slice(0, AI_CALL_BUSINESS_MAX) : null;
+}
+
 /* ------------------------------------------------------------------ outcome → stage */
 
 /**

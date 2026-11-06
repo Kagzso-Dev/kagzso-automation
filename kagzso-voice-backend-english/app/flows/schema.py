@@ -173,11 +173,15 @@ class FlowAutonomous(_Strict):
       - natural_lines: the LLM leads the whole conversation: it says the opening and the silence lines in its own
         words instead of the fixed greeting / identity question / silence lines, nobody is asked to confirm who they
         are, and all the approved knowledge is offered to it on every reply (training.tail_items). The do-not-call
-        line and the fallback lines (LLM down) stay fixed. False = the fixed lines, as before."""
+        line and the fallback lines (LLM down) stay fixed. False = the fixed lines, as before.
+      - contact_business: each call uses the contact's own business (customer_business from Dispatch), or the AI
+        asks what it is when there is none on file (llm_service.customer_business_rules), and a business learned that
+        way goes back to Dispatch. Needs natural_lines. False = an agent published before it, as before."""
     target_duration_sec: int = Field(60, ge=20, le=600)
     dnc_enforce: Literal[True] = True
     natural_lines: bool = False
     voice_pace: Optional[float] = Field(None, ge=0.5, le=2.0)  # the agent's voice speed; None = AGENT_TTS_PACE
+    contact_business: bool = False
 
 
 class FlowTransfer(_Strict):

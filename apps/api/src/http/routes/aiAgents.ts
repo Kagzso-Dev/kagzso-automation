@@ -27,6 +27,7 @@ import multer from "multer";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import {
+  AI_CALL_BUSINESS_MAX,
   AI_CALL_LANGUAGE_NAMES,
   AI_KNOWLEDGE_MAX_FILES_PER_UPLOAD,
   AI_AGENT_AUTONOMOUS_CALLS_BLOCKED,
@@ -42,6 +43,7 @@ import {
   createAiAgentInput,
   idParam,
   knowledgeFormatFromFilename,
+  knownBusiness,
   startAiCallsInput,
 } from "@dispatch/shared";
 import { logger } from "../../logger.js";
@@ -51,7 +53,6 @@ import {
   addKnowledgeFile,
   addKnowledgeItem,
   archiveAgent,
-  businessContext,
   callFlowIdFor,
   compileAgent,
   createAgent,
@@ -282,8 +283,7 @@ aiAgentsRouter.post(
     if (files.length === 0) throw badRequest("Add at least one file (multipart field 'files')");
     const replacesFileId = z.string().min(1).max(64).optional().parse(req.body?.replacesFileId || undefined);
     if (replacesFileId && files.length !== 1) throw badRequest("Replace one file at a time");
-    const agent = await guard(getAgentRow(id));
-    const { industry } = await businessContext(agent);
+    await guard(getAgentRow(id));
     const results = [];
     for (const f of files) {
       const format = knowledgeFormatFromFilename(f.originalname);
@@ -293,7 +293,7 @@ aiAgentsRouter.post(
       }
       let outcome: Parameters<typeof addKnowledgeFile>[2];
       try {
-        outcome = { extraction: await extractKnowledge(f.buffer, format, f.originalname, industry?.name ?? null) };
+        outcome = { extraction: await extractKnowledge(f.buffer, format, f.originalname) };
       } catch (err) {
         outcome = { error: `Couldn't read the file: ${err instanceof Error ? err.message : String(err)}` };
       }
@@ -394,6 +394,8 @@ const previewInput = z
   .object({
     customerName: z.string().trim().max(100).optional(),
     gender: z.enum(["male", "female", "unspecified"]).optional(),
+    /** A contact's business to preview with; empty shows the prompt of a contact without one. */
+    customerBusiness: z.string().trim().max(AI_CALL_BUSINESS_MAX).optional(),
   })
   .strict();
 
@@ -409,6 +411,7 @@ aiAgentsRouter.post(
     const sample = {
       customer_name: body.customerName ?? agent.contactName ?? null,
       gender: gender === "unspecified" ? "unknown" : gender,
+      customer_business: knownBusiness(body.customerBusiness) ?? undefined,
     };
     const preview = await previewFlow(definition, sample, language).catch(voiceError);
     res.json({ definition, preview });

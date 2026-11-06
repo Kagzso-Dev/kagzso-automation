@@ -1,6 +1,10 @@
-// AI Agents → Call Flow: an autonomous agent's settings, its industry and its APPROVED knowledge compiled into
-// an ordinary schema-1 "executive" flow definition with `autonomous` settings. Pure (no I/O): the caller
-// passes the language's built-in executive flow, exactly as its voice backend serves it.
+// AI Agents → Call Flow: an autonomous agent's settings and its APPROVED knowledge compiled into an ordinary
+// schema-1 "executive" flow definition with `autonomous` settings. Pure (no I/O): the caller passes the language's
+// built-in executive flow, exactly as its voice backend serves it.
+//
+// One flow serves every contact, so nothing about a contact's business is compiled here: the voice backend adds it to
+// each call's prompt (llm_service.customer_business_rules), with one set of rules for a known business and another
+// for none.
 //
 // An autonomous agent is LLM-driven: no fixed conversation sequence, greeting or question list. The executive flow
 // only carries what must stay the same for every call (the locked safety blocks, the do-not-call handling, the
@@ -13,12 +17,13 @@
 //   identity             none: nobody is asked to confirm who they are as a routine step
 //   blocks               "agent", "opening", "next_step", "objections", "company_facts", "interested_close",
 //                        "speaking_style" and the busy / not-interested / end closings rewritten as guidance, with
-//                        no quoted line to read out; "industry_context", "voice_delivery", "call_length" and
+//                        no quoted line to read out; "customer_business", "voice_delivery", "call_length" and
 //                        (when given) "ai_instructions" added; {{title_to_use}} → {{title}} everywhere, so a
 //                        contact without a gender gets no sir / madam (title_to_use would fall back to
 //                        CALL_DEFAULT_TITLE)
-//   training             agent profile (name, company, industry, tone) + approved knowledge, all Active
-//   limits / autonomous  max = the agent's maximum (the hard stop), target = its target, voice_pace = its voice speed
+//   training             agent profile (name, company, tone) + approved knowledge, all Active
+//   limits / autonomous  max = the agent's maximum (the hard stop), target = its target, voice_pace = its voice speed,
+//                        contact_business = each call uses the contact's own business
 // Everything the voice backend appends to every prompt (voice rules, safety rules, do-not-call, AI disclosure,
 // identity rules, language rule) still comes after these blocks and can't be overridden by them, and the backend
 // itself enforces do-not-call and the time limit whatever the LLM says.
@@ -47,8 +52,6 @@ export interface CompileKnowledgeItem {
 export interface CompileInput {
   language: AiCallLanguage;
   agent: AiAgentConfig;
-  categoryName: string | null;
-  industry: { name: string; discoveryTopics: string } | null;
   /** APPROVED items of this agent only. */
   knowledge: CompileKnowledgeItem[];
   /** The language's built-in "executive" flow (GET /api/flows/builtin of that language's voice backend). */
@@ -62,7 +65,7 @@ export interface CompileInput {
  * with an older compiler shows "unpublished changes" until an admin publishes it again: a published flow is a
  * stored copy, and compiler changes only reach it through a new publish.
  */
-export const AI_AGENT_COMPILER_VERSION = 2;
+export const AI_AGENT_COMPILER_VERSION = 3;
 
 export class AgentCompileError extends Error {
   constructor(message: string) {
@@ -93,31 +96,16 @@ function spacedNumber(e164: string): string {
   return m ? `+${m[1]} ${m[2]} ${m[3]}` : e164;
 }
 
-function topics(raw: string | null | undefined): string[] {
-  return (raw ?? "")
-    .split(/\n|;/)
-    .map((t) => oneLine(t))
-    .filter(Boolean)
-    .slice(0, 15);
-}
-
 const isKagzso = (company: string) => /kagzso/i.test(company);
 
 function agentBlock(input: CompileInput): string {
   const { agent } = input;
   const exec = oneLine(agent.executiveName);
   const company = oneLine(agent.companyName);
-  const business = oneLine(agent.businessName);
-  const industry = input.industry ? oneLine(input.industry.name) : null;
-  const category = input.categoryName ? oneLine(input.categoryName) : null;
-  const where = [business && `**${business}**`, industry && `a business in the **${industry}** industry`, category && `(${category})`]
-    .filter(Boolean)
-    .join(", ");
   return (
     "# WHO YOU ARE AND WHY YOU ARE CALLING\n\n" +
     `You are **${exec}**, an AI calling assistant working as a **professional business customer executive** for **${company}**, ` +
     "on a live outbound phone call.\n\n" +
-    (where ? `You are calling the contact person at ${where}.\n\n` : "") +
     `**Calling objective:** ${blockSafe(agent.objective) || "introduce how the company can help their business and find out whether they are interested."}\n\n` +
     "You are having a real conversation with a business owner, manager or decision-maker. You understand them, think about what " +
     "they said and decide everything you say yourself. There is no script, no fixed order and no fixed list of questions. The " +
@@ -159,29 +147,22 @@ function detailsPointer(input: CompileInput): string {
   return ways.length ? `they can ${ways.join(" or ")}` : "";
 }
 
-function industryBlock(input: CompileInput): string {
+/**
+ * What holds for every customer's business. What is known about THIS customer's business differs per call, so the
+ * voice backend adds it to each call's prompt (`customer_business` and llm_service.customer_business_rules).
+ */
+function businessBlock(input: CompileInput): string {
   const company = oneLine(input.agent.companyName);
-  const industry = input.industry ? oneLine(input.industry.name) : null;
-  const category = input.categoryName ? oneLine(input.categoryName) : null;
-  const list = topics(input.industry?.discoveryTopics);
   const pointer = detailsPointer(input);
   return (
     "# THE CUSTOMER'S BUSINESS\n\n" +
-    (industry ? `Expected industry: **${industry}**. Speak in terms that make sense for that kind of business.\n\n` : "") +
-    (industry || category
-      ? "The category and industry only say what kind of business this is expected to be. Never assume which products or " +
-        "services this business offers, how it works or what it needs because of them: find out from the customer, and " +
-        "go by what they say. If they run a different kind of business, follow them and talk about that business instead.\n\n"
-      : "Understand what kind of business this is from the conversation. Never assume it has the same problems as any other business.\n\n") +
-    (list.length
-      ? "Things that often matter to this kind of business. This is background to help you think: NOT a checklist of questions " +
-        `to work through, and NOT claims about what ${company} offers:\n` +
-        list.map((t) => `* ${t}`).join("\n") +
-        "\n\nBring one up only when what the customer has said makes it relevant, and ask how they handle it today.\n\n"
-      : industry || category
-        ? "When it helps, ask one short, open question about how they run their day-to-day work and what takes their team the " +
-          "most time, in terms that fit this kind of business. Never list several questions at once.\n\n"
-        : "") +
+    "Each customer runs a different business, and the rules further below say what is known about this one and how to use it. " +
+    "Never assume which products or services their business offers, how it works or what it needs: find out from the customer, " +
+    "and go by what they say. If they run a different kind of business from the one you were told, follow them and talk about that " +
+    "business instead. Never assume it has the same problems as any other business.\n\n" +
+    "Once you know the kind of business, speak in terms that fit it. When it helps, ask one short, open question about how they run " +
+    "their day-to-day work and what takes their team the most time, then show how automation or software could help with what they " +
+    "told you. Never list several questions at once.\n\n" +
     `**Only describe products and services that the approved company facts or the training's approved knowledge confirm.** ` +
     "Never say that a product, feature or integration exists, works in a certain way or suits them unless an approved note says so.\n\n" +
     "**A question the approved information doesn't answer:** never guess or invent. Say honestly that you don't have that detail " +
@@ -191,17 +172,24 @@ function industryBlock(input: CompileInput): string {
   );
 }
 
+// The built-in flows' line for a business field a call may carry. An agent's calls have their own rules for it
+// (llm_service.customer_business_rules), and those do ask, so the line would contradict them.
+const BUILTIN_BUSINESS_RULE = "If `business_type` or `company_name` is in the customer details, use it naturally when relevant; never ask for it. ";
+
 function companyFactsBlock(original: string, company: string): string {
   if (!isKagzso(company)) {
     // Another company: the built-in Kagzso facts don't apply. Only its approved knowledge (training) does.
     return (
       `# APPROVED COMPANY FACTS (${company})\n\n` +
-      `Use only the training's approved facts and Q&A for anything about ${company}. Never add facts that are not there.\n\n` +
-      "If `business_type` or `company_name` is in the customer details, use it naturally when relevant; never ask for it.\n\n---\n\n"
+      `Use only the training's approved facts and Q&A for anything about ${company}. Never add facts that are not there.\n\n---\n\n`
     );
+  }
+  if (!original.includes(BUILTIN_BUSINESS_RULE)) {
+    throw new AgentCompileError("The built-in Business executive flow's company facts changed — update the AI Agents compiler");
   }
   // A Kagzso company: keep the built-in facts, under the configured company name.
   return original
+    .replace(BUILTIN_BUSINESS_RULE, "")
     .replace(/Kagzso AI and Automation/g, company)
     .replace(/\n\nIf the Agent profile names a different company,[^\n]*\n/, "\n")
     .replace(/\* The website is kagzso\.com,/, "* The website is kagzso.com,");
@@ -318,6 +306,8 @@ export const CONVERSATION_BLOCK =
   "* **Interest** - understand what they need, then connect only the relevant service to it, using approved information.\n" +
   "* **Uncertainty** (\"maybe\", \"not sure\") - do not push. Offer one short relevant point, or ask what they would like to know.\n" +
   "* **Busy, not interested, or wanting to end** - close politely now.\n" +
+  "* **A short yes, okay, go ahead or tell me, in any language** - they heard you and want you to carry on. This is never unclear: " +
+  "never say you did not hear them and never repeat your question. Say in a few words what you are calling about, then continue.\n" +
   "* **Unclear or cut off** - ask them once, briefly, to repeat.\n" +
   "* **An interruption or a change of direction** - drop what you were saying and follow them. Never steer them back to a topic they left.\n\n" +
   "A reply does not need a question. Ask only when the answer would really help you understand them, one question at a time. After " +
@@ -469,7 +459,7 @@ export function compileAgentFlow(input: CompileInput): CallFlowDefinition {
     else if (b.id === "do_not_call") text = doNotCallBlock(b.text, opening.dnc);
     blocks.push({ ...b, text: swapTitle(text) });
     if (b.id === "agent") {
-      blocks.push({ id: "industry_context", group: "main_script", text: industryBlock(input) });
+      blocks.push({ id: "customer_business", group: "main_script", text: businessBlock(input) });
     }
   }
   blocks.push({ id: "voice_delivery", group: "tone", text: voiceDeliveryBlock(input.voice) });
@@ -495,7 +485,13 @@ export function compileAgentFlow(input: CompileInput): CallFlowDefinition {
     limits: { max_duration_sec: agent.maxDurationSec },
     // natural_lines: the agent opens the call and says the silence lines in its own words (the schema requires a
     // greeting, so the one above stays in the definition, but it is never spoken). Do-not-call stays fixed.
-    autonomous: { target_duration_sec: agent.targetDurationSec, dnc_enforce: true, natural_lines: true, voice_pace: agent.voiceSpeed },
+    autonomous: {
+      target_duration_sec: agent.targetDurationSec,
+      dnc_enforce: true,
+      natural_lines: true,
+      voice_pace: agent.voiceSpeed,
+      contact_business: true,
+    },
     training: {
       enabled: true,
       token_cap: TRAINING_MAX_TOKEN_CAP,
@@ -503,7 +499,7 @@ export function compileAgentFlow(input: CompileInput): CallFlowDefinition {
         status: "active",
         agent_name: exec,
         company,
-        business_type: input.industry ? oneLine(input.industry.name).slice(0, 100) : "",
+        business_type: "",
         objective: "",
         call_purpose: "",
         target_customer: "",

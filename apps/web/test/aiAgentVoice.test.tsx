@@ -72,11 +72,6 @@ const AGENT: AiAgentView = {
   language: "ta",
   name: "ABC Hospital — Thaara",
   mode: "autonomous",
-  categoryId: null,
-  customCategory: "Healthcare",
-  industryId: null,
-  customIndustry: "Hospital",
-  businessName: "ABC Hospital",
   objective: "Introduce AI for hospitals.",
   contactName: "Ragul",
   contactGender: "male",
@@ -136,16 +131,11 @@ describe("Settings → AI Voice", () => {
     fireEvent.change(contactGender(), { target: { value: "female" } }); // female customer, male voice
     expect(checked()).toEqual(["ShubhTamil (India) · male"]); // the voice doesn't follow the contact
     fill("Agent name (for your list)", "ABC Hospital — Thaara");
-    // The library is empty here: the category and industry are typed by hand ("Other – Enter manually").
-    fireEvent.change(screen.getByText("Category").parentElement!.querySelector("select")!, { target: { value: "__other__" } });
-    fill("Category name", "Healthcare");
-    fill("Industry name", "Hospital");
-    fill("Business / company name", "ABC Hospital");
     fill("Calling objective", "Introduce AI for hospitals.");
     fireEvent.click(screen.getByRole("button", { name: "Create AI agent" }));
     await waitFor(() => expect(sent.find((s) => s.url === "/api/ai-agents")).toBeTruthy());
     const { body } = sent.find((s) => s.url === "/api/ai-agents")!;
-    expect(body).toMatchObject({ language: "ta", agent: { voiceId: "shubh", contactGender: "female", customCategory: "Healthcare", customIndustry: "Hospital" } });
+    expect(body).toMatchObject({ language: "ta", agent: { voiceId: "shubh", contactGender: "female" } });
   });
 
   it("editing restores the saved voice (Ritu), and a male voice opens on Male", async () => {

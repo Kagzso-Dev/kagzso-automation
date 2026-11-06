@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { AI_AGENT_GENDER_LABELS, AI_AGENT_GENDERS, type AiAgentGender, type AiAgentView } from "@dispatch/shared";
+import { AI_AGENT_GENDER_LABELS, AI_AGENT_GENDERS, AI_CALL_BUSINESS_MAX, type AiAgentGender, type AiAgentView } from "@dispatch/shared";
 import { api, ApiError } from "../lib/api";
 import { useLanguageReady } from "../lib/aiCallLanguage";
 import { AGENT_QUERY_KEYS, type AgentPreview, type KnowledgeTest } from "../lib/aiAgents";
@@ -20,11 +20,13 @@ export function AiAgentPublish({ agent }: { agent: AiAgentView }) {
   const { ready } = useLanguageReady();
   const [name, setName] = useState(agent.contactName ?? "Ragul");
   const [gender, setGender] = useState<AiAgentGender>(agent.contactGender);
+  const [business, setBusiness] = useState("");
   const [message, setMessage] = useState("");
   const [showPrompt, setShowPrompt] = useState(false);
 
   const preview = useMutation({
-    mutationFn: () => api<AgentPreview>(`/api/ai-agents/${agent.id}/preview`, { method: "POST", json: { customerName: name, gender }, notify: false }),
+    mutationFn: () =>
+      api<AgentPreview>(`/api/ai-agents/${agent.id}/preview`, { method: "POST", json: { customerName: name, gender, customerBusiness: business }, notify: false }),
   });
   const test = useMutation({
     mutationFn: () => api<KnowledgeTest>(`/api/ai-agents/${agent.id}/knowledge-test`, { method: "POST", json: { message }, notify: false }),
@@ -82,7 +84,7 @@ export function AiAgentPublish({ agent }: { agent: AiAgentView }) {
 
       <div className="rounded-xl border border-line bg-surface p-4 shadow-sm">
         <h3 className="mb-2 font-semibold">Preview the opening</h3>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-4">
           <div>
             <label className="label">Sample contact name</label>
             <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
@@ -96,6 +98,16 @@ export function AiAgentPublish({ agent }: { agent: AiAgentView }) {
                 </option>
               ))}
             </select>
+          </div>
+          <div>
+            <label className="label">Sample business</label>
+            <input
+              className="input"
+              maxLength={AI_CALL_BUSINESS_MAX}
+              value={business}
+              placeholder="Empty: the AI asks"
+              onChange={(e) => setBusiness(e.target.value)}
+            />
           </div>
           <div className="flex items-end">
             <button type="button" className="btn btn-ghost" disabled={!ready || preview.isPending} onClick={() => preview.mutate()}>

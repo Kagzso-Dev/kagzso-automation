@@ -16,7 +16,7 @@ const pooled = (b: Buffer) => {
   const p = Buffer.from(b); // < 4 KB: allocated from the pool
   return Buffer.byteLength(p) === b.length ? p : b;
 };
-const pdf = (buf: Buffer, name = "guide.pdf") => extractKnowledge(buf, "pdf", name, null);
+const pdf = (buf: Buffer, name = "guide.pdf") => extractKnowledge(buf, "pdf", name);
 
 describe("real text PDFs", () => {
   it("normal: headings become topics, paragraphs become facts, with page numbers", async () => {

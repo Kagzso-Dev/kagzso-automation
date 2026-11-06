@@ -88,7 +88,7 @@ class FakeLLM(LLMProvider):
         self.seen_messages = []
 
     async def _stream(self, system_text, messages, model=None) -> AsyncIterator[str]:
-        if system_text == OUTCOME_SYSTEM:
+        if system_text.startswith(OUTCOME_SYSTEM):  # with or without OUTCOME_BUSINESS_RULE
             yield self.outcome_json
             return
         self.seen_messages.append(messages)

@@ -47,7 +47,7 @@ vi.mock("pdf-parse/lib/pdf-parse.js", () => ({
 
 describe("structured files (csv / xlsx)", () => {
   it("one item per row: facts, Q&A from the question column, industry hint, issues, empty rows skipped", async () => {
-    const out = await extractKnowledge(Buffer.from(CSV), "csv", "kagzso.csv", "Hospital");
+    const out = await extractKnowledge(Buffer.from(CSV), "csv", "kagzso.csv");
     expect(out.items.map((i) => [i.kind, i.topic, i.source])).toEqual([
       ["fact", "Billing automation", "row 2"],
       ["qa", "Integration", "row 3"],
@@ -59,8 +59,9 @@ describe("structured files (csv / xlsx)", () => {
     expect(billing!.issues).toEqual([]);
     expect(qa!.questions).toEqual(["Will it replace our software?", "Do we need new software?"]);
     expect(qa!.issues).toEqual([]);
-    expect(kot!.industryHint).toBe("Hotel"); // another industry than the agent's: shown before approving
-    expect(billing!.industryHint).toBeNull();
+    expect(kot!.industryHint).toBe("Hotel"); // the row's industry: shown before approving
+    expect(billing!.industryHint).toBe("Hospital");
+    expect(contact!.industryHint).toBeNull();
     expect(price!.issues.join()).toMatch(/price/);
     expect(contact!.issues.join()).toMatch(/phone number/);
     expect(out.notes.join()).toMatch(/1 empty row/);
@@ -71,13 +72,13 @@ describe("structured files (csv / xlsx)", () => {
       ["Topic", "Answer", "FAQ"],
       ["Appointments", "Patients get appointment reminders on WhatsApp.", "Do you send reminders?"],
     ]);
-    const out = await extractKnowledge(buf, "xlsx", "faq.xlsx", null);
+    const out = await extractKnowledge(buf, "xlsx", "faq.xlsx");
     expect(out.items).toHaveLength(1);
     expect(out.items[0]).toMatchObject({ kind: "qa", topic: "Appointments", questions: ["Do you send reminders?"], issues: [] });
   });
 
   it("no recognised text column: each row becomes one fact from its cells, with a note", () => {
-    const out = rowsToItems(["Module", "Benefit"], [{ Module: "HMS", Benefit: "Room booking" }], null);
+    const out = rowsToItems(["Module", "Benefit"], [{ Module: "HMS", Benefit: "Room booking" }]);
     expect(out.notes[0]).toMatch(/No text column/);
     expect(out.items[0]!.text).toBe("Module: HMS. Benefit: Room booking");
     expect(out.items[0]!.topic).toBe("General");
@@ -86,7 +87,7 @@ describe("structured files (csv / xlsx)", () => {
 
   it("a long description is split into facts of at most 500 characters", () => {
     const long = Array.from({ length: 20 }, (_, i) => `Sentence number ${i} explains one more useful detail about the product.`).join(" ");
-    const out = rowsToItems(["Topic", "Description"], [{ Topic: "HMS", Description: long }], null);
+    const out = rowsToItems(["Topic", "Description"], [{ Topic: "HMS", Description: long }]);
     expect(out.items.length).toBeGreaterThan(1);
     expect(out.items.every((i) => i.text.length <= 500 && i.topic === "HMS")).toBe(true);
     expect(out.items[0]!.source).toMatch(/row 2 \(1\/\d\)/);
@@ -96,7 +97,7 @@ describe("structured files (csv / xlsx)", () => {
 describe("free text (txt / docx / pdf)", () => {
   it("txt: headings become topics, paragraphs become facts", async () => {
     const txt = "Billing\nKagzso automates billing follow-ups.\nIt sends payment reminders.\n\nAppointments:\nPatients get reminders before visits.";
-    const out = await extractKnowledge(Buffer.from(txt), "txt", "notes.txt", null);
+    const out = await extractKnowledge(Buffer.from(txt), "txt", "notes.txt");
     expect(out.items.map((i) => [i.topic, i.text])).toEqual([
       ["Billing", "Kagzso automates billing follow-ups. It sends payment reminders."],
       ["Appointments", "Patients get reminders before visits."],
@@ -106,13 +107,13 @@ describe("free text (txt / docx / pdf)", () => {
   it("docx: paragraphs are read from word/document.xml", async () => {
     const buf = await docx(["School solutions", "Attendance is marked from the teacher's phone & synced.", "", "Timetable", "Timetables are built automatically."]);
     expect(await docxText(buf)).toContain("Attendance is marked from the teacher's phone & synced.");
-    const out = await extractKnowledge(buf, "docx", "school.docx", null);
+    const out = await extractKnowledge(buf, "docx", "school.docx");
     expect(out.items.map((i) => i.topic)).toEqual(["School solutions", "Timetable"]);
   });
 
   it("pdf: text per page, with page numbers", async () => {
     const twoPages = Buffer.from("Hotel solutions\n\nKOT orders reach the kitchen screen instantly.\fReservations\n\nRoom bookings sync with the front desk.");
-    const out = await extractKnowledge(twoPages, "pdf", "hotel.pdf", null);
+    const out = await extractKnowledge(twoPages, "pdf", "hotel.pdf");
     expect(out.items.map((i) => [i.topic, i.text, i.source])).toEqual([
       ["Hotel solutions", "KOT orders reach the kitchen screen instantly.", "page 1"],
       ["Reservations", "Room bookings sync with the front desk.", "page 2"],
@@ -120,7 +121,7 @@ describe("free text (txt / docx / pdf)", () => {
   });
 
   it("a file that is not what it says fails with a readable message", async () => {
-    await expect(extractKnowledge(Buffer.from("not a zip"), "docx", "x.docx", null)).rejects.toThrow();
+    await expect(extractKnowledge(Buffer.from("not a zip"), "docx", "x.docx")).rejects.toThrow();
   });
 
   it("an empty text file gives a note, no items", () => {
@@ -130,8 +131,8 @@ describe("free text (txt / docx / pdf)", () => {
   });
 
   it("an upload with no text is refused (never an 'extracted' file with 0 items)", async () => {
-    await expect(extractKnowledge(Buffer.from("  \n\n"), "txt", "empty.txt", null)).rejects.toThrow("the file has no text to use");
-    await expect(extractKnowledge(await docx([]), "docx", "empty.docx", null)).rejects.toThrow("the file has no text to use");
+    await expect(extractKnowledge(Buffer.from("  \n\n"), "txt", "empty.txt")).rejects.toThrow("the file has no text to use");
+    await expect(extractKnowledge(await docx([]), "docx", "empty.docx")).rejects.toThrow("the file has no text to use");
   });
 });
 
@@ -167,11 +168,11 @@ describe("upload safety", () => {
   it("a .docx or .xlsx that unpacks to more than 50 MB is refused", async () => {
     const docxBomb = await bomb("word/document.xml");
     expect(docxBomb.length).toBeLessThan(1024 * 1024);
-    await expect(extractKnowledge(docxBomb, "docx", "big.docx", null)).rejects.toThrow(/unpacks to more than 50 MB/);
-    await expect(extractKnowledge(await bomb("xl/worksheets/sheet1.xml"), "xlsx", "big.xlsx", null)).rejects.toThrow(/unpacks to more than 50 MB/);
+    await expect(extractKnowledge(docxBomb, "docx", "big.docx")).rejects.toThrow(/unpacks to more than 50 MB/);
+    await expect(extractKnowledge(await bomb("xl/worksheets/sheet1.xml"), "xlsx", "big.xlsx")).rejects.toThrow(/unpacks to more than 50 MB/);
   }, 30_000); // building the 60 MB test archives is slow under a full parallel run
   it("a .docx / .xlsx that is not a zip says so", async () => {
-    await expect(extractKnowledge(Buffer.from("plain text"), "docx", "x.docx", null)).rejects.toThrow(/not a valid Office file/);
-    await expect(extractKnowledge(Buffer.from("plain text"), "xlsx", "x.xlsx", null)).rejects.toThrow(/not a valid Office file/);
+    await expect(extractKnowledge(Buffer.from("plain text"), "docx", "x.docx")).rejects.toThrow(/not a valid Office file/);
+    await expect(extractKnowledge(Buffer.from("plain text"), "xlsx", "x.xlsx")).rejects.toThrow(/not a valid Office file/);
   });
 });

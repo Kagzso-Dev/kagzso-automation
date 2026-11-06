@@ -31,6 +31,7 @@ const callbackBody = z.object({
   hangup_cause: z.string().max(200).optional().nullable(),
   duration_seconds: z.number().int().min(0).optional().nullable(),
   ended_at: z.string().max(40).optional().nullable(),
+  learned_business: z.string().max(200).optional().nullable(),
   transcript: z
     .array(z.object({ speaker: z.string().max(20), text: z.string().max(5000) }))
     .max(500)
@@ -80,6 +81,7 @@ aiCallWebhookRouter.post(
       durationSec: body.duration_seconds,
       endedAt: parseUtc(body.ended_at),
       error: body.hangup_cause,
+      learnedBusiness: body.learned_business,
     });
     logger.debug({ logId: log.id, event: body.event, status }, "ai call callback applied");
     res.json({ ok: true, status });

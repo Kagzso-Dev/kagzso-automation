@@ -19,6 +19,7 @@ const helpers = vi.hoisted(() => ({
   pinnedFlowForRun: vi.fn(),
   markCustomerCalling: vi.fn(),
   syncCustomerFromLog: vi.fn(),
+  businessForCall: vi.fn(),
 }));
 
 vi.mock("../src/prisma.js", () => ({ prisma: db }));
@@ -35,6 +36,7 @@ vi.mock("../src/domain/callFlows.js", () => ({ pinnedFlowForRun: helpers.pinnedF
 vi.mock("../src/domain/aiCallCustomerSync.js", () => ({
   markCustomerCalling: helpers.markCustomerCalling,
   syncCustomerFromLog: helpers.syncCustomerFromLog,
+  businessForCall: helpers.businessForCall,
 }));
 
 const { processAiCallRun } = await import("../src/queue/aiCallRun.js");
@@ -179,6 +181,35 @@ describe("processAiCallRun (characterization)", () => {
   it("a run without the setting (older runs, test calls) sends no greeting delay", async () => {
     await deferredMs(processAiCallRun({ runId: "r1" }));
     expect(voice.placeVoiceCall.mock.calls[0]![0]).not.toHaveProperty("greetingDelaySec");
+  });
+
+  it("an agent's flow: the contact's business is read at dial time and sent", async () => {
+    const definition = { autonomous: { target_duration_sec: 60, natural_lines: true, contact_business: true } };
+    helpers.pinnedFlowForRun.mockResolvedValue({ flowId: "f1", version: 3, language: "ta", definition });
+    helpers.businessForCall.mockResolvedValue("Sri Lakshmi Textiles");
+    logs({});
+    await deferredMs(processAiCallRun({ runId: "r1" }));
+    expect(helpers.businessForCall).toHaveBeenCalledWith("l2", next.phone, "ta");
+    expect(voice.placeVoiceCall).toHaveBeenCalledWith(expect.objectContaining({ logId: "l2", customerBusiness: "Sri Lakshmi Textiles" }));
+  });
+
+  it("an agent's flow, nothing on file: the call goes out without a business, and the AI asks", async () => {
+    helpers.pinnedFlowForRun.mockResolvedValue({ flowId: "f1", version: 3, language: "en", definition: { autonomous: { contact_business: true } } });
+    helpers.businessForCall.mockResolvedValue(null);
+    logs({});
+    await deferredMs(processAiCallRun({ runId: "r1" }));
+    expect(voice.placeVoiceCall.mock.calls[0]![0]).not.toHaveProperty("customerBusiness");
+  });
+
+  it.each([
+    ["a Guided or ordinary Call Flow", { language: "en" }],
+    ["an agent published before contact businesses", { autonomous: { target_duration_sec: 60, natural_lines: true } }],
+  ])("%s: nothing looked up, nothing new sent", async (_name, definition) => {
+    helpers.pinnedFlowForRun.mockResolvedValue({ flowId: "f1", version: 3, language: "en", definition });
+    logs({});
+    await deferredMs(processAiCallRun({ runId: "r1" }));
+    expect(helpers.businessForCall).not.toHaveBeenCalled();
+    expect(voice.placeVoiceCall.mock.calls[0]![0]).not.toHaveProperty("customerBusiness");
   });
 
   it("no providerCallId: only voiceCallId stored", async () => {

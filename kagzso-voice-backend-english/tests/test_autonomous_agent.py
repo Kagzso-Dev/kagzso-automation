@@ -153,7 +153,7 @@ def _capture_systems(fakes):
     original = fakes.llm._stream
 
     async def stream(system_text, messages, model=None):
-        if system_text != OUTCOME_SYSTEM:
+        if not system_text.startswith(OUTCOME_SYSTEM):
             seen.append(system_text)
         async for d in original(system_text, messages, model):
             yield d

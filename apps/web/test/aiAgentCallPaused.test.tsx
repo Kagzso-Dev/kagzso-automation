@@ -27,7 +27,6 @@ const agent = (language: AiAgentView["language"], mode: AiAgentView["mode"]): Ai
     language,
     mode,
     name: "ABC Hospital - Thaara",
-    businessName: "ABC Hospital",
     contactName: "Ragul",
     contactPhone: "+919876543210",
     callFlowId: "f1",

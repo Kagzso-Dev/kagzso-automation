@@ -46,6 +46,9 @@ class OutboundCallRequest(BaseModel):
     agent_name: Optional[str] = Field(None, min_length=1, max_length=100)
     # Follow-up calls from Dispatch: the reason for the call, rendered into the prompt.
     follow_up_detail: Optional[str] = Field(None, max_length=500)
+    # An Autonomous AI Agent's call: the contact's own business from Dispatch. Used only by a flow with
+    # autonomous.contact_business, and kept on the call: never on the contact row, so a change in Dispatch always counts.
+    customer_business: Optional[str] = Field(None, max_length=200)
     # Dispatch "AI Greeting Delay": seconds after the answer before the agent greets (0 = at once).
     # Absent = the configured timing (FIRST_SPEECH_WAIT_SECONDS / GREETING_DELAY_MS), exactly as before.
     greeting_delay_sec: Optional[float] = Field(None, ge=0, le=10)
@@ -132,6 +135,8 @@ class CallDetailOut(CallOut):
     transcripts: List[TranscriptOut] = []
     latency: List[dict] = []
     events: List[dict] = []
+    # The business the customer said they run, on a call that had none on file.
+    learned_business: Optional[str] = None
 
 
 class TestTextRequest(BaseModel):

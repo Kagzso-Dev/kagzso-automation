@@ -254,6 +254,69 @@ describe("call result → stage (webhook / poll)", () => {
   });
 });
 
+describe("the contact's business on a call", () => {
+  const events = () => T("aiCallCustomerEvent").filter((e) => e.type === "business_learned");
+
+  it("read when the call is dialled, through its link: placeholders count as none", async () => {
+    const { c, log } = await calledCustomer();
+    expect(await sync.businessForCall(log.id, c.phone, "en")).toBe("Raman Textiles");
+    cust(c.id).businessName = "Fixed After The Run Started";
+    expect(await sync.businessForCall(log.id, c.phone, "en")).toBe("Fixed After The Run Started");
+    for (const none of ["—", "  ", "N/A", null]) {
+      cust(c.id).businessName = none;
+      expect(await sync.businessForCall(log.id, c.phone, "en")).toBeNull();
+    }
+  });
+
+  it("a call without a link (AI Agents → Call): the same number in that language's list, never another list's", async () => {
+    await customers.createCustomer(input({ businessName: "Tamil List Hospital" }) as any, ADMIN, "ta");
+    expect(await sync.businessForCall("no-link", "+919876543210", "ta")).toBe("Tamil List Hospital");
+    expect(await sync.businessForCall("no-link", "+919876543210", "en")).toBeNull();
+    expect(await sync.businessForCall("no-link", "+919800000000", "ta")).toBeNull();
+  });
+
+  it("what the AI learned fills an empty field, shows on the timeline and is not applied twice", async () => {
+    for (const empty of [null, "—", "N/A"]) {
+      for (const k of ["aiCallCustomer", "aiCallCustomerEvent"]) delete tables[k];
+      const { c, log } = await calledCustomer({ businessName: empty });
+      await applyVoiceUpdate(log.id, { status: "completed", outcome: "interested", learnedBusiness: "Textile mill" });
+      await applyVoiceUpdate(log.id, { status: "completed", outcome: "interested", learnedBusiness: "Textile mill" });
+      expect(cust(c.id).businessName).toBe("Textile mill");
+      expect(events()).toHaveLength(1);
+      expect(events()[0]).toMatchObject({ customerId: c.id, refId: log.id, detail: "Business from the call: Textile mill" });
+    }
+  });
+
+  it("an entry a person made is never replaced", async () => {
+    const { c, log } = await calledCustomer({ businessName: "Raman Textiles" });
+    await applyVoiceUpdate(log.id, { status: "completed", outcome: "interested", learnedBusiness: "Bakery" });
+    expect(cust(c.id).businessName).toBe("Raman Textiles");
+    expect(events()).toHaveLength(0);
+  });
+
+  it("never a placeholder, and never onto a do-not-call or removed customer", async () => {
+    const { c, log } = await calledCustomer({ businessName: null });
+    await applyVoiceUpdate(log.id, { status: "completed", learnedBusiness: "unknown" });
+    expect(cust(c.id).businessName).toBeNull();
+    for (const stop of [{ doNotCall: true }, { deletedAt: new Date() }]) {
+      Object.assign(cust(c.id), { doNotCall: false, deletedAt: null }, stop);
+      await sync.saveLearnedBusiness(log.id, "Textile mill");
+      expect(cust(c.id).businessName).toBeNull();
+    }
+    expect(events()).toHaveLength(0);
+  });
+
+  it("a call without a link fills that language's row only, through the run's flow", async () => {
+    const en = await customers.createCustomer(input({ businessName: null }) as any, ADMIN);
+    const ta = await customers.createCustomer(input({ businessName: "—" }) as any, ADMIN, "ta");
+    const log = await db.aiCallLog.create({ data: { runId: "run-ta", position: 0, phone: en.phone, status: "COMPLETED" } });
+    await db.aiCallRunFlow.create({ data: { runId: "run-ta", flowVersion: { flow: { language: "ta" } } } });
+    await sync.saveLearnedBusiness(log.id, "Hospital");
+    expect(cust(ta.id).businessName).toBe("Hospital");
+    expect(cust(en.id).businessName).toBeNull();
+  });
+});
+
 describe("confirmed Interested: no automatic follow-ups", () => {
   it("a suggested Interested (from the call) keeps its pending follow-up", async () => {
     const { c, log } = await calledCustomer();

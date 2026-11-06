@@ -57,7 +57,9 @@ from app.services.llm_service import (
     split_pauses,
     create_llm_provider,
     extract_end_call,
+    known_business,
     outcome_system,
+    parse_customer_business,
     parse_outcome,
     parse_reached,
     render_first_message,
@@ -813,6 +815,8 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
                 flow_vars["flow_max_sec"] = str(min(resolved.flow.limits.max_duration_sec, cfg.MAX_CALL_DURATION_SECONDS))
                 if autonomous.natural_lines:  # the LLM says the opening and the silence lines (load_call_context)
                     flow_vars["flow_natural_lines"] = "true"
+                if autonomous.contact_business:  # this contact's own business decides the call's rules
+                    flow_vars["flow_contact_business"] = "true"
                 flow_vars["flow_voice_profile"] = AGENT_VOICE_PROFILE  # one calm, steady voice for the whole call
                 if autonomous.voice_pace is not None:  # the agent's own speed, every line of the call
                     flow_vars["flow_voice_pace"] = str(autonomous.voice_pace)
@@ -847,6 +851,7 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
         business_type=contact.business_type or req.business_type,
         run_id=req.run_id,
         log_id=req.log_id,
+        customer_business=req.customer_business if flow_vars.get("flow_contact_business") else None,
     )
     variables.update(flow_vars)
     if req.greeting_delay_sec is not None:
@@ -3058,12 +3063,13 @@ OUTCOME_TIMEOUT_SECONDS = 15.0
 OUTCOME_RETRY_DELAY_SECONDS = 2.0
 
 
-async def classify_outcome(llm: LLMProvider, transcript: str) -> Optional[str]:
+async def classify_outcome(llm: LLMProvider, transcript: str, learn_business: bool = False) -> Optional[str]:
     """Raw classifier reply, or None. Runs after the call has ended (detached teardown),
     so the one retry on a transient failure never delays the live conversation."""
+    system = outcome_system(learn_business=learn_business)
     for attempt in range(2):
         try:
-            return await asyncio.wait_for(llm.complete_raw(outcome_system(), transcript), timeout=OUTCOME_TIMEOUT_SECONDS)
+            return await asyncio.wait_for(llm.complete_raw(system, transcript), timeout=OUTCOME_TIMEOUT_SECONDS)
         except Exception as exc:
             kind = exc.kind if isinstance(exc, LLMError) else "timeout" if isinstance(exc, asyncio.TimeoutError) else "unknown"
             retryable = kind in LLMProvider.RETRYABLE
@@ -3076,6 +3082,10 @@ async def classify_outcome(llm: LLMProvider, transcript: str) -> Optional[str]:
     return None
 
 
+# Outcomes where what was said is not the customer talking about their own business, or where they want nothing more.
+_NO_LEARNED_BUSINESS = (CallOutcome.wrong_person.value, CallOutcome.voicemail.value, CallOutcome.do_not_call.value)
+
+
 async def finalize_conversation(call_id: str, llm: LLMProvider, reason: str) -> None:
     """Classify the outcome and close out the call record. Idempotent."""
     with call_context(call_id):
@@ -3084,15 +3094,20 @@ async def finalize_conversation(call_id: str, llm: LLMProvider, reason: str) -> 
             if call is None:
                 return
             transcripts = await repo.list_transcripts(db, call_id)
-            outcome, summary, reached = None, None, None
+            outcome, summary, reached, learned = None, None, None, None
+            # A call that uses the contact's business and had none on file: what the customer said goes back to Dispatch.
+            variables = call.variables or {}
+            learn_business = (variables.get("flow_contact_business") == "true"
+                              and not known_business(variables.get("customer_business")))
             if any(t.speaker == "customer" for t in transcripts):
                 text = "\n".join(f"{'Customer' if t.speaker == 'customer' else 'Agent'}: {t.text}" for t in transcripts)
-                raw = await classify_outcome(llm, text[:12000])
+                raw = await classify_outcome(llm, text[:12000], learn_business=learn_business)
                 if raw is None:
                     outcome = CallOutcome.unknown.value
                 else:
                     outcome, summary = parse_outcome(raw)
                     reached = parse_reached(raw)
+                    learned = parse_customer_business(raw) if learn_business else None
             await db.refresh(call)  # pick up outcomes set meanwhile (e.g. voicemail webhook)
             fields: Dict[str, Any] = {}
             if call.outcome in LOCKED_OUTCOMES:
@@ -3103,6 +3118,8 @@ async def finalize_conversation(call_id: str, llm: LLMProvider, reason: str) -> 
                 fields["outcome"] = CallOutcome.completed.value  # answered, customer never spoke
             if summary:
                 fields["summary"] = summary
+            if learned and outcome not in _NO_LEARNED_BUSINESS:
+                fields["variables"] = {**(call.variables or {}), "learned_business": learned}
             if fields:
                 await repo.update_call(db, call, **fields)
             if outcome == CallOutcome.do_not_call.value:

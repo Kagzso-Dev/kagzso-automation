@@ -4,8 +4,8 @@
 // started from an uploaded file), and never throws: a problem here is logged
 // and must not disturb the call run itself.
 
-import type { AiCallCustomerStage } from "@prisma/client";
-import { maskPhone, stageForCallResult } from "@dispatch/shared";
+import type { AiCallCustomer, AiCallCustomerStage } from "@prisma/client";
+import { DEFAULT_AI_CALL_LANGUAGE, knownBusiness, maskPhone, stageForCallResult, type AiCallLanguage } from "@dispatch/shared";
 import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
 import { addCustomerEvent, cancelPendingFollowups, createFollowupDrafts } from "./aiCallFollowups.js";
@@ -51,6 +51,56 @@ export function markCustomerCalling(logId: string): Promise<void> {
       data: { stage: "CALLING", lastCallLogId: logId, lastCalledAt: new Date(), needsReview: false },
     });
     await addCustomerEvent({ customerId: link.customerId, type: "call_started", stage: "CALLING", refId: logId });
+  });
+}
+
+/**
+ * The saved customer a call is for: its link (calls from the customer list), else the same number in the language's
+ * list (AI Agents → Call, a flow's test call), which is what an admin expects from a number that is in the list.
+ */
+async function customerOfCall(logId: string, phone: string, language: string): Promise<AiCallCustomer | null> {
+  const link = await prisma.aiCallCustomerCall.findUnique({ where: { logId }, include: { customer: true } });
+  return link?.customer ?? (await prisma.aiCallCustomer.findFirst({ where: { activePhone: phone, language } }));
+}
+
+/**
+ * The contact's business, read when the call is dialled so that a fix made after the run started counts, or null with
+ * none on file ("—", "N/A", ...). Never throws: a call without the business just asks for it.
+ */
+export async function businessForCall(logId: string, phone: string, language: AiCallLanguage): Promise<string | null> {
+  try {
+    return knownBusiness((await customerOfCall(logId, phone, language))?.businessName);
+  } catch (err) {
+    logger.warn({ logId, err: err instanceof Error ? err.message : String(err) }, "ai call customer business unreadable");
+    return null;
+  }
+}
+
+/**
+ * The business the AI learned on a call goes into the customer's Business field, only when that field is empty: an
+ * entry a person made is never replaced. The call's transcript is speech recognition read by a model, so every value
+ * saved is on the customer's timeline, where an admin can see it and correct the field. Idempotent. Never throws.
+ */
+export function saveLearnedBusiness(logId: string, learned: string): Promise<void> {
+  return safely("business", logId, async () => {
+    const business = knownBusiness(learned);
+    if (!business) return;
+    const log = await prisma.aiCallLog.findUnique({ where: { id: logId }, select: { phone: true, runId: true } });
+    if (!log) return;
+    const run = await prisma.aiCallRunFlow.findUnique({
+      where: { runId: log.runId },
+      select: { flowVersion: { select: { flow: { select: { language: true } } } } },
+    });
+    const customer = await customerOfCall(logId, log.phone, run?.flowVersion.flow?.language ?? DEFAULT_AI_CALL_LANGUAGE);
+    if (!customer || customer.deletedAt || customer.doNotCall || knownBusiness(customer.businessName)) return;
+    // Only if the field is still as read: an admin may have filled it in meanwhile.
+    const saved = await prisma.aiCallCustomer.updateMany({
+      where: { id: customer.id, businessName: customer.businessName },
+      data: { businessName: business },
+    });
+    if (saved.count === 0) return;
+    await addCustomerEvent({ customerId: customer.id, type: "business_learned", detail: `Business from the call: ${business}`, refId: logId });
+    logger.info({ customerId: customer.id, logId, phone: maskPhone(customer.phone) }, "ai call customer business learned");
   });
 }
 

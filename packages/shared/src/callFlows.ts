@@ -212,6 +212,9 @@ export const callFlowDefinition = z
         natural_lines: z.boolean().optional(),
         // The agent's speaking speed for every line of the call; absent = the voice backend's AGENT_TTS_PACE.
         voice_pace: z.number().min(0.5).max(2).optional(),
+        // Each call uses the contact's own business (the voice backend's FlowAutonomous). Absent = an agent published
+        // before it: the business compiled into its flow stays, and no contact's business is sent.
+        contact_business: z.boolean().optional(),
       })
       .strict()
       .optional(),

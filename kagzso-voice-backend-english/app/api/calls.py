@@ -56,6 +56,7 @@ async def get_call(call_id: str, db: AsyncSession = Depends(get_db)) -> CallDeta
         {"type": e.event_type, "payload": e.payload, "at": e.created_at.isoformat()}
         for e in await repo.list_events(db, call_id)
     ]
+    out.learned_business = (call.variables or {}).get("learned_business")
     return out
 
 

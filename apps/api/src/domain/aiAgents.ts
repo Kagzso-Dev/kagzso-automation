@@ -11,7 +11,6 @@ import {
   AI_KNOWLEDGE_MAX_APPROVED,
   aiCallLanguage,
   callFlowDefinition,
-  matchLibraryName,
   type AiAgentConfig,
   type AiAgentView,
   type AiAgentVoiceGender,
@@ -41,15 +40,13 @@ const STATUS_DB: Record<AiKnowledgeStatus, "DRAFT" | "APPROVED" | "REJECTED"> = 
 const STATUS_VIEW = { DRAFT: "draft", APPROVED: "approved", REJECTED: "rejected" } as const;
 
 /* ------------------------------------------------------------------ agents */
+// categoryId, customCategory, industryId, customIndustry and businessName (ai_agents) are retired: an agent's calls use
+// each contact's own business. The columns and what agents saved in them stay, never read here and never written, so
+// saving an old agent leaves them as they are.
 function configFromRow(a: AiAgent): Omit<AiAgentConfig, "voiceSpeed"> {
   return {
     name: a.name,
     mode: a.mode === "GUIDED" ? "guided" : "autonomous",
-    categoryId: a.categoryId,
-    customCategory: a.customCategory ?? null,
-    industryId: a.industryId,
-    customIndustry: a.customIndustry ?? null,
-    businessName: a.businessName,
     objective: a.objective ?? "",
     contactName: a.contactName,
     contactGender: (["male", "female", "unspecified"].includes(a.contactGender) ? a.contactGender : "male") as AiAgentConfig["contactGender"],
@@ -103,12 +100,6 @@ function rowData(c: AiAgentConfig) {
   return {
     name: c.name,
     mode: c.mode === "guided" ? ("GUIDED" as const) : ("AUTONOMOUS" as const),
-    // One or the other (aiAgentInput refuses both): a library entry's id, or a name typed for this agent only.
-    categoryId: c.categoryId ?? null,
-    customCategory: c.categoryId ? null : c.customCategory || null,
-    industryId: c.industryId ?? null,
-    customIndustry: c.industryId ? null : c.customIndustry || null,
-    businessName: c.businessName,
     objective: c.objective || null,
     contactName: c.contactName || null,
     contactGender: c.contactGender,
@@ -124,37 +115,8 @@ function rowData(c: AiAgentConfig) {
   };
 }
 
-/**
- * A category / industry typed by hand that is already in the shared library (same name ignoring case, spaces and
- * punctuation, not archived) is saved as that library entry instead, so the agent gets its discovery topics and
- * no near-duplicate is stored. A typed industry is only matched within a library category. Nothing is ever
- * added to the library.
- */
-async function resolveTypedBusiness(c: AiAgentConfig): Promise<AiAgentConfig> {
-  if (!c.customCategory && !c.customIndustry) return c;
-  const out = { ...c };
-  if (out.customCategory && !out.categoryId) {
-    const hit = matchLibraryName(out.customCategory, await prisma.aiBusinessCategory.findMany({ where: { archivedAt: null } }));
-    if (hit) Object.assign(out, { categoryId: hit.id, customCategory: null });
-  }
-  if (out.customIndustry && !out.industryId && out.categoryId) {
-    const hit = matchLibraryName(out.customIndustry, await prisma.aiIndustry.findMany({ where: { categoryId: out.categoryId, archivedAt: null } }));
-    if (hit) Object.assign(out, { industryId: hit.id, customIndustry: null });
-  }
-  return out;
-}
-
-/** The category / industry exist (not archived) and belong together; a guided flow is a published flow of the language. */
+/** A guided agent's flow is a published flow of the agent's language. */
 async function checkRefs(c: AiAgentConfig, language: AiCallLanguage): Promise<void> {
-  if (c.industryId) {
-    const ind = await prisma.aiIndustry.findUnique({ where: { id: c.industryId } });
-    if (!ind || ind.archivedAt) throw new AiAgentError("Industry not found", 400);
-    if (c.categoryId && ind.categoryId !== c.categoryId) throw new AiAgentError("The industry is not in that category", 400);
-  }
-  if (c.categoryId) {
-    const cat = await prisma.aiBusinessCategory.findUnique({ where: { id: c.categoryId } });
-    if (!cat || cat.archivedAt) throw new AiAgentError("Category not found", 400);
-  }
   if (c.mode === "guided" && c.guidedFlowId) {
     const flow = await prisma.callFlow.findUnique({ where: { id: c.guidedFlowId } });
     if (!flow || flow.archivedAt || flow.language !== language) throw new AiAgentError("Pick a Call Flow of this language", 400);
@@ -213,7 +175,6 @@ export async function createAgent(
   user: { id: string; email: string },
   lookupVoice: AgentVoiceLookup,
 ): Promise<AiAgentView> {
-  c = await resolveTypedBusiness(c);
   await checkRefs(c, language);
   const voice = await voiceData(c.voiceId, null, language, lookupVoice);
   const a = await prisma.aiAgent.create({ data: { ...rowData(c), ...voice, language, createdById: user.id, createdByEmail: user.email } });
@@ -224,7 +185,6 @@ export async function createAgent(
 export async function updateAgent(id: string, c: AiAgentConfig, lookupVoice: AgentVoiceLookup): Promise<AiAgentView> {
   const before = await getAgentRow(id);
   const language = aiCallLanguage.parse(before.language);
-  c = await resolveTypedBusiness(c);
   await checkRefs(c, language);
   // The backend is asked only when the voice changed: saving other settings never needs it.
   const voice = await voiceData(c.voiceId, before.voiceId ?? null, language, lookupVoice);
@@ -461,45 +421,14 @@ async function approvedKnowledge(agentId: string): Promise<CompileKnowledgeItem[
   }));
 }
 
-/**
- * The agent's business context for the compiler: the library category / industry (with its discovery topics),
- * else the names typed for this agent (no discovery topics - the AI asks open questions instead).
- */
-export async function businessContext(a: AiAgent): Promise<{ categoryName: string | null; industry: { name: string; discoveryTopics: string } | null }> {
-  const [industry, category] = await Promise.all([
-    a.industryId ? prisma.aiIndustry.findUnique({ where: { id: a.industryId } }) : null,
-    a.categoryId ? prisma.aiBusinessCategory.findUnique({ where: { id: a.categoryId } }) : null,
-  ]);
-  return {
-    categoryName: category?.name ?? (a.categoryId ? null : a.customCategory || null),
-    industry: industry
-      ? { name: industry.name, discoveryTopics: industry.discoveryTopics ?? "" }
-      : !a.industryId && a.customIndustry
-        ? { name: a.customIndustry, discoveryTopics: "" }
-        : null,
-  };
-}
-
-/** Hash of everything a publish compiles from (compiler, settings, industry, approved knowledge): differs = unpublished changes. */
+/** Hash of everything a publish compiles from (compiler, settings, approved knowledge): differs = unpublished changes. */
 export async function agentInputsHash(a: AiAgent): Promise<string> {
-  const [knowledge, industry, category] = await Promise.all([
-    approvedKnowledge(a.id),
-    a.industryId ? prisma.aiIndustry.findUnique({ where: { id: a.industryId } }) : null,
-    a.categoryId ? prisma.aiBusinessCategory.findUnique({ where: { id: a.categoryId } }) : null,
-  ]);
-  // No voice picked / nothing typed by hand: hashed exactly as before those settings existed, so such agents
-  // don't show "unpublished changes".
-  const { voiceId, customCategory, customIndustry, ...config } = await agentConfig(a);
+  const knowledge = await approvedKnowledge(a.id);
+  // No voice picked: hashed exactly as before that setting existed.
+  const { voiceId, ...config } = await agentConfig(a);
   return definitionHash({
     compiler: AI_AGENT_COMPILER_VERSION,
-    config: {
-      ...config,
-      ...(voiceId ? { voiceId } : {}),
-      ...(customCategory ? { customCategory } : {}),
-      ...(customIndustry ? { customIndustry } : {}),
-    },
-    industry: industry ? [industry.name, industry.discoveryTopics] : null,
-    category: category?.name ?? null,
+    config: { ...config, ...(voiceId ? { voiceId } : {}) },
     knowledge: knowledge.map((k) => [k.kind, k.topic, k.text, k.questions, k.always]),
   });
 }
@@ -511,12 +440,10 @@ export async function compileAgent(a: AiAgent, builtinExecutive: unknown): Promi
   if (!base.success) {
     throw new AiAgentError(`The voice backend's built-in Business executive flow failed validation (${schemaIssues(base.error)})`, 409);
   }
-  const [knowledge, business] = await Promise.all([approvedKnowledge(a.id), businessContext(a)]);
   const compiled = compileAgentFlow({
     language,
     agent: await agentConfig(a),
-    ...business,
-    knowledge,
+    knowledge: await approvedKnowledge(a.id),
     base: base.data,
     voice: a.voiceId ? { id: a.voiceId, gender: a.voiceGender === "female" || a.voiceGender === "male" ? a.voiceGender : null } : null,
   });

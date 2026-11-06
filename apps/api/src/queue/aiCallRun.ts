@@ -10,7 +10,13 @@
 // pinned flow's; no flow = English). If an admin switches that language off, the
 // call in flight finishes and the calls still queued are cancelled.
 
-import { autonomousCallBlockedReason, DEFAULT_AI_CALL_LANGUAGE, maskPhone, type AiCallLanguage } from "@dispatch/shared";
+import {
+  autonomousCallBlockedReason,
+  DEFAULT_AI_CALL_LANGUAGE,
+  flowUsesContactBusiness,
+  maskPhone,
+  type AiCallLanguage,
+} from "@dispatch/shared";
 import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
 import { aiCallsConfig } from "../config/aiCalls.js";
@@ -22,7 +28,7 @@ import {
 } from "../domain/aiCalls.js";
 import { disabledAiCallLanguages, languageName } from "../domain/aiCallLanguages.js";
 import { pinnedFlowForRun } from "../domain/callFlows.js";
-import { markCustomerCalling, syncCustomerFromLog } from "../domain/aiCallCustomerSync.js";
+import { businessForCall, markCustomerCalling, syncCustomerFromLog } from "../domain/aiCallCustomerSync.js";
 import { getVoiceCall, placeVoiceCall, VoiceBackendError } from "../services/voiceBackend.js";
 import { DeferJobError } from "./engine.js";
 import type { AiCallRunJob } from "./queues.js";
@@ -79,6 +85,7 @@ async function pollInFlight(runId: string, language: AiCallLanguage): Promise<bo
         durationSec: d.duration_seconds,
         endedAt: parseUtc(d.ended_at),
         error: d.hangup_cause,
+        learnedBusiness: d.learned_business,
       });
     } catch (err) {
       logger.warn(
@@ -170,9 +177,12 @@ export async function processAiCallRun(payload: Record<string, unknown>): Promis
   await markCustomerCalling(next.id);
   try {
     const greetingDelaySec = greetingDelayOf(run.skipped);
+    // Only an autonomous agent's call uses the contact's business: every other call is sent exactly what it always was.
+    const customerBusiness = flow && flowUsesContactBusiness(flow.definition) ? await businessForCall(next.id, next.phone, language) : null;
     const { callId, providerCallId } = await placeVoiceCall({
       // Runs without the setting (older runs, test calls) call exactly as before.
       ...(greetingDelaySec != null ? { greetingDelaySec } : {}),
+      ...(customerBusiness ? { customerBusiness } : {}),
       customerName: next.customerName,
       gender: next.gender,
       followUpDetail: next.followUpDetail,

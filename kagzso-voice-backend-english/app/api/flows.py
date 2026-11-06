@@ -75,6 +75,7 @@ class SampleCustomer(BaseModel):
     company_name: Optional[str] = Field(None, max_length=150)
     business_type: Optional[str] = Field(None, max_length=100)
     follow_up_detail: Optional[str] = Field(None, max_length=500)
+    customer_business: Optional[str] = Field(None, max_length=200)
 
 
 class PreviewRequest(BaseModel):
@@ -113,9 +114,13 @@ class PreviewResponse(BaseModel):
 def _sample_variables(flow: Any, s: SampleCustomer, phone: str) -> Dict[str, Optional[str]]:
     variables = build_call_variables(s.customer_name, normalize_gender(s.gender), phone,
                                      follow_up_detail=s.follow_up_detail, company_name=s.company_name,
-                                     business_type=s.business_type)
+                                     business_type=s.business_type, customer_business=s.customer_business)
     if flow.language_style == "pure":  # the prompt shown follows the flow's style, as in a call
         variables["flow_language_style"] = "pure"
+    autonomous = flow.autonomous
+    if autonomous is not None and autonomous.contact_business:  # the rules shown are this sample contact's, as in a call
+        variables.update(flow_target_sec=str(autonomous.target_duration_sec), flow_contact_business="true",
+                         flow_natural_lines="true" if autonomous.natural_lines else "false")
     return variables
 
 

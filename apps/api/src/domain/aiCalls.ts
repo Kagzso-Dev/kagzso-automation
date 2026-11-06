@@ -6,7 +6,7 @@ import { createHmac, randomInt, timingSafeEqual } from "node:crypto";
 import type { AiCallStatus } from "@prisma/client";
 import { checkAiCallRow, normalizePhoneE164, type StartAiCallsInput } from "@dispatch/shared";
 import { prisma } from "../prisma.js";
-import { syncCustomerFromLog } from "./aiCallCustomerSync.js";
+import { saveLearnedBusiness, syncCustomerFromLog } from "./aiCallCustomerSync.js";
 
 /* ------------------------------------------------------------------ random selection */
 
@@ -175,6 +175,8 @@ export interface VoiceCallUpdate {
   durationSec?: number | null;
   endedAt?: Date | null;
   error?: string | null;
+  /** The business the customer said they run, on a call that had none on file (saved Voicecall Contact). */
+  learnedBusiness?: string | null;
 }
 
 export function formatTranscript(lines: { speaker: string; text: string }[]): string {
@@ -207,6 +209,7 @@ export async function applyVoiceUpdate(logId: string, u: VoiceCallUpdate): Promi
   // when the classified outcome arrives later. No-op for calls from a file.
   const outcomeChanged = !!u.outcome && u.outcome.slice(0, 32) !== log.outcome;
   if (isFinalAiCallStatus(status) && (becameFinal || outcomeChanged)) await syncCustomerFromLog(logId);
+  if (u.learnedBusiness) await saveLearnedBusiness(logId, u.learnedBusiness);
   return status;
 }
 

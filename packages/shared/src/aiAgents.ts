@@ -9,9 +9,11 @@
 //               history as every other flow. There is no separate LLM pipeline.
 //
 // Knowledge: uploaded files (CSV, XLSX, PDF, DOCX, TXT) are turned into fact / Q&A items, each Draft until an
-// admin approves it. Only approved items of that agent are compiled into that agent's flow, so one business's
-// knowledge never reaches another agent's calls. The category / industry library is shared by every language;
-// a category or industry typed by hand ("Other – Enter manually") is stored on that one agent only.
+// admin approves it. Only approved items of that agent are compiled into that agent's flow, so one agent's
+// knowledge never reaches another agent's calls.
+//
+// An agent has no business of its own: each call uses the business of the contact it is calling (Voicecall Contact),
+// and with none on file the AI asks. The old agent-level fields stay in the database, unused (`retired` below).
 
 import { z } from "zod";
 import { aiCallLanguage, type AiCallLanguage } from "./aiCallLanguages.js";
@@ -96,42 +98,21 @@ const line = (max: number) => z.string().trim().max(max).regex(SINGLE_LINE_RE, "
 // eslint-disable-next-line no-control-regex
 const multiline = (max: number) => z.string().max(max).refine((v) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(v), "Contains control characters");
 
-/** Collapses runs of spaces inside a typed name ("  IT   company " → "IT company"). */
-export const collapseSpaces = (v: string) => v.replace(/\s+/g, " ").trim();
-
 /**
- * How two category / industry names are compared: case, spaces and punctuation ignored, so "IT company",
- * "it-company" and "IT  Company" are the same entry, as are "Hotel / Restaurant" and "hotel restaurant".
+ * The agent-level business fields the form no longer has. Still accepted, so a browser tab left open or an older API
+ * client can save, but never checked further, stored or compiled: an agent's calls use each contact's own business.
  */
-export function businessNameKey(v: string): string {
-  return v.toLowerCase().normalize("NFKC").replace(/[^\p{L}\p{N}]+/gu, "");
-}
-
-/**
- * The library entry a typed name matches (businessNameKey), or undefined. Used when an admin picks
- * "Other – Enter manually" and types a name that is already in the shared library: the agent is then saved with
- * that entry's id instead of a duplicate custom value (the library itself never changes).
- */
-export function matchLibraryName<T extends { name: string; archivedAt?: string | Date | null }>(typed: string, entries: readonly T[]): T | undefined {
-  const key = businessNameKey(typed);
-  return key ? entries.find((e) => !e.archivedAt && businessNameKey(e.name) === key) : undefined;
-}
-
-export const AI_AGENT_CUSTOM_NAME_MAX = 80;
-/** A category / industry typed by hand for one agent (never added to the shared library). "" = Other picked, nothing typed yet. */
-const customName = line(AI_AGENT_CUSTOM_NAME_MAX).transform(collapseSpaces).nullable().optional();
+const retired = (max: number) => z.string().max(max).nullable().optional();
 
 export const aiAgentInput = z
   .object({
     name: line(100).min(1, "Give the agent a name"),
     mode: z.enum(AI_AGENT_MODES).default("autonomous"),
-    // Business. Each of category and industry is EITHER a library entry (…Id) OR typed by hand for this agent
-    // (custom…), never both. A typed industry can sit under a library category or under a typed category.
-    categoryId: z.string().min(1).max(64).nullable().optional(),
-    customCategory: customName,
-    industryId: z.string().min(1).max(64).nullable().optional(),
-    customIndustry: customName,
-    businessName: line(160).transform(collapseSpaces).default(""),
+    categoryId: retired(64),
+    customCategory: retired(80),
+    industryId: retired(64),
+    customIndustry: retired(80),
+    businessName: retired(160),
     objective: multiline(AI_AGENT_OBJECTIVE_MAX).default(""),
     // Contact
     contactName: line(100).nullable().optional(),
@@ -177,22 +158,6 @@ export const aiAgentInput = z
     if (a.mode === "guided" && !a.guidedFlowId) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["guidedFlowId"], message: "Pick the Call Flow a guided agent uses" });
     }
-    const issue = (path: string, message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
-    // Never both a library entry and a typed name (any mode: what is stored must be unambiguous).
-    if (a.categoryId && a.customCategory != null) issue("customCategory", "Pick a category from the list or enter one, not both");
-    if (a.industryId && a.customIndustry != null) issue("customIndustry", "Pick an industry from the list or enter one, not both");
-    // A library industry belongs to a library category, so a typed category needs a typed industry.
-    if (a.customCategory != null && a.industryId) issue("industryId", "Enter the industry for a category you typed in");
-    if (a.mode === "autonomous") {
-      // The Business section is required for autonomous agents (guided ones call with their Call Flow as it is).
-      if (a.customCategory === "") issue("customCategory", "Enter the category");
-      else if (!a.categoryId && a.customCategory == null) issue("categoryId", "Pick a category");
-      if (a.customIndustry === "") issue("customIndustry", "Enter the industry");
-      else if (!a.industryId && a.customIndustry == null) issue("industryId", "Pick an industry");
-    }
-    if (a.mode === "autonomous" && !a.businessName.trim()) {
-      issue("businessName", "Enter the business name");
-    }
     if (a.mode === "autonomous" && !a.objective.trim()) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["objective"], message: "Enter the calling objective" });
     }
@@ -215,6 +180,7 @@ export const aiAgentCallInput = z
 export type AiAgentCallInput = z.input<typeof aiAgentCallInput>;
 
 /* ------------------------------------------------------------------ category / industry library */
+// Settings → AI agent industries. No agent and no call reads it any more: only that page does.
 export const aiCategoryInput = z.object({ name: line(80).min(1) }).strict();
 export const aiIndustryInput = z
   .object({
@@ -390,6 +356,14 @@ export const AI_AGENT_AUTONOMOUS_CALLS_BLOCKED: Partial<Record<AiCallLanguage, s
     "Guided agents call as usual.",
 };
 
+/**
+ * Does this flow version call with each contact's own business? Agents published since compiler 3. An agent published
+ * earlier keeps the business compiled into its stored flow until it is published again, and is sent no contact's business.
+ */
+export function flowUsesContactBusiness(definition: unknown): boolean {
+  return (definition as { autonomous?: { contact_business?: unknown } } | null)?.autonomous?.contact_business === true;
+}
+
 /** Why live calls with this flow version are paused (an autonomous flow of a blocked language), or null. */
 export function autonomousCallBlockedReason(language: string, definition: unknown): string | null {
   const autonomous = !!definition && typeof definition === "object" && !!(definition as { autonomous?: unknown }).autonomous;
@@ -454,6 +428,6 @@ export interface AiKnowledgeItemView {
   issues: string[];
   /** Where it came from, e.g. "row 4" or "page 2". */
   source: string | null;
-  /** The industry a structured row names, when it is not the agent's own. */
+  /** The industry a structured row names. */
   industryHint: string | null;
 }

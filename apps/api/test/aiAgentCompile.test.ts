@@ -7,10 +7,12 @@ import {
   AI_AGENT_OPENINGS,
   AI_AGENT_VOICE_SPEED_LIMITS,
   AI_AGENT_VOICE_SPEEDS,
+  AI_CALL_BUSINESS_MAX,
   aiAgentInput,
   callFlowDefinition,
+  flowUsesContactBusiness,
   knowledgeTextIssues,
-  matchLibraryName,
+  knownBusiness,
   type AiAgentConfig,
   type AiCallLanguage,
   type CallFlowDefinition,
@@ -48,9 +50,6 @@ function builtinExecutive(language: AiCallLanguage): CallFlowDefinition {
 const agent = (over: Partial<AiAgentConfig> = {}): AiAgentConfig =>
   aiAgentInput.parse({
     name: "ABC Hospital - Thaara",
-    categoryId: "aicat_healthcare",
-    industryId: "aiind_hospital",
-    businessName: "ABC Hospital",
     objective: "Introduce AI and automation for hospitals and find out whether they want a follow-up from our team.",
     contactName: "Ragul",
     contactGender: "male",
@@ -64,8 +63,6 @@ const agent = (over: Partial<AiAgentConfig> = {}): AiAgentConfig =>
 const input = (language: AiCallLanguage, over: Partial<CompileInput> = {}): CompileInput => ({
   language,
   agent: agent(),
-  categoryName: "Healthcare",
-  industry: { name: "Hospital", discoveryTopics: "Hospital administration\nPatient workflows\nBilling\nAppointments" },
   knowledge: [
     { id: "a", kind: "fact", topic: "Hospital billing", text: "Kagzso automates billing follow-ups and payment reminders for hospitals.", questions: [], always: true },
     { id: "b", kind: "qa", topic: "Integration", text: "It works alongside the software the hospital already uses.", questions: ["Will it replace our software?"], always: false },
@@ -85,7 +82,7 @@ describe.each(["en", "ta", "hi", "kn"] as const)("compiled agent flow (%s)", (la
     expect(out.base).toBe("executive");
     expect(out.language).toBe(language);
     expect(out.limits).toEqual({ max_duration_sec: 105 });
-    expect(out.autonomous).toEqual({ target_duration_sec: 60, dnc_enforce: true, natural_lines: true, voice_pace: 0.9 });
+    expect(out.autonomous).toEqual({ target_duration_sec: 60, dnc_enforce: true, natural_lines: true, voice_pace: 0.9, contact_business: true });
   });
 
   it("no fixed opening: the agent greets in its own words, with no time of day and no identity question", () => {
@@ -119,6 +116,9 @@ describe.each(["en", "ta", "hi", "kn"] as const)("compiled agent flow (%s)", (la
     expect(CONVERSATION_BLOCK).toMatch(/Understand first, explain relevant value second/);
     expect(CONVERSATION_BLOCK).toMatch(/follow them/);
     expect(CONVERSATION_BLOCK).toMatch(/A reply does not need a question/);
+    // A customer's "go ahead" (சொல்லுங்க) came back as "sorry, I couldn't hear you" on real Tamil calls.
+    expect(CONVERSATION_BLOCK).toMatch(/A short yes, okay, go ahead or tell me, in any language.*This is never unclear/);
+    expect(CONVERSATION_BLOCK.indexOf("go ahead or tell me")).toBeLessThan(CONVERSATION_BLOCK.indexOf("**Unclear or cut off**"));
     expect(CONVERSATION_BLOCK).toMatch(/ask whether they have a minute or can talk now/);
     expect(CONVERSATION_BLOCK).toMatch(/ask how to reach them or for any contact details/);
     expect(CONVERSATION_BLOCK).toMatch(/the marker is the very last thing you write/);
@@ -178,11 +178,10 @@ describe.each(["en", "ta", "hi", "kn"] as const)("compiled agent flow (%s)", (la
 describe("what the compiled flow tells the AI", () => {
   const out = compileAgentFlow(input("en"));
 
-  it("who calls, for which business and why - and that the entered details are not verified", () => {
+  it("who calls and why - and that the entered details are not verified", () => {
     const who = text(out, "agent");
     expect(who).toContain("**Thaara**");
     expect(who).toContain("**Kagzso Technology Services**");
-    expect(who).toContain("**ABC Hospital**");
     expect(who).toContain("Introduce AI and automation for hospitals");
     expect(who).toMatch(/NOT verified/);
     expect(who).toMatch(/no script, no fixed order and no fixed list of questions/i);
@@ -190,14 +189,28 @@ describe("what the compiled flow tells the AI", () => {
     expect(who).toMatch(/Your name is always written exactly as Thaara, in those letters, in every language/);
   });
 
-  it("industry topics are discovery topics, not product claims; unknown answers are never invented", () => {
-    const ind = text(out, "industry_context");
-    expect(ind).toContain("* Billing");
-    expect(ind).toMatch(/NOT claims/);
-    expect(ind).toMatch(/Only describe products and services that the approved/);
-    expect(ind).toMatch(/never guess or invent/);
-    expect(ind).toContain("+91 98000 12345"); // the callback number, only when asked
-    expect(ind).toMatch(/Never promise a callback/);
+  it("the customer's business: nothing assumed, nothing compiled for one contact; unknown answers are never invented", () => {
+    const biz = text(out, "customer_business");
+    expect(biz).toMatch(/Never assume which products or services their business offers/);
+    expect(biz).toMatch(/If they run a different kind of business from the one you were told, follow them/);
+    expect(biz).toMatch(/one short, open question/);
+    expect(biz).toMatch(/Only describe products and services that the approved/);
+    expect(biz).toMatch(/never guess or invent/);
+    expect(biz).toContain("+91 98000 12345"); // the callback number, only when asked
+    expect(biz).toMatch(/Never promise a callback/);
+  });
+
+  it("the old agent-level fields never reach a flow, whatever an old agent has saved", () => {
+    const old = compileAgentFlow(input("en", { agent: agent({ businessName: "Old Name Hospital", customCategory: "Old Category", customIndustry: "Old Industry" }) }));
+    expect(JSON.stringify(old)).not.toMatch(/Old Name Hospital|Old Category|Old Industry/);
+    expect(old).toEqual(out);
+    expect(old.training?.persona?.business_type).toBe("");
+  });
+
+  it("no compiled text says never to ask for the business: the call's own rules do ask", () => {
+    const other = compileAgentFlow(input("en", { agent: agent({ companyName: "Acme Robotics" }) }));
+    for (const flow of [out, other]) expect(text(flow, "company_facts")).not.toMatch(/never ask for it|business_type/);
+    expect(text(out, "company_facts")).toContain("`follow_up_detail`"); // the rest of that line stays
   });
 
   it("the admin's instructions: priority order first, variables and the end-call marker removed", () => {
@@ -251,7 +264,7 @@ describe("what the compiled flow tells the AI", () => {
   it("training: active profile and only the given (approved) knowledge, all active", () => {
     const t = out.training!;
     expect(t.enabled).toBe(true);
-    expect(t.persona).toMatchObject({ status: "active", agent_name: "Thaara", company: "Kagzso Technology Services", business_type: "Hospital" });
+    expect(t.persona).toMatchObject({ status: "active", agent_name: "Thaara", company: "Kagzso Technology Services", business_type: "" });
     expect(t.knowledge.map((k) => [k.kind, k.status, k.text])).toEqual([
       ["fact", "active", "Kagzso automates billing follow-ups and payment reminders for hospitals."],
       ["qa", "active", "It works alongside the software the hospital already uses."],
@@ -278,7 +291,7 @@ describe("what the compiled flow tells the AI", () => {
     const { min, max } = AI_AGENT_VOICE_SPEED_LIMITS;
     // A complete agent, so a refusal below can only be about the speed.
     const parsed = (voiceSpeed: unknown) =>
-      aiAgentInput.safeParse({ name: "x", customCategory: "c", customIndustry: "i", businessName: "b", objective: "o", voiceSpeed });
+      aiAgentInput.safeParse({ name: "x", objective: "o", voiceSpeed });
     expect(compileAgentFlow(input("en")).autonomous?.voice_pace).toBe(AI_AGENT_DEFAULTS.voiceSpeed);
     for (const value of [...AI_AGENT_VOICE_SPEEDS.map((s) => s.value), min, 0.85, 1.37, max]) {
       expect(parsed(value).success).toBe(true);
@@ -298,7 +311,7 @@ describe("what the compiled flow tells the AI", () => {
     expect(maxMax).toBe(180); // 3 minutes at most
     // A complete agent, so a refusal below can only be about the maximum.
     const parsed = (maxDurationSec: unknown, targetDurationSec = 45) =>
-      aiAgentInput.safeParse({ name: "x", customCategory: "c", customIndustry: "i", businessName: "b", objective: "o", targetDurationSec, maxDurationSec });
+      aiAgentInput.safeParse({ name: "x", objective: "o", targetDurationSec, maxDurationSec });
     for (const value of [minMax, 105, 147, maxMax]) {
       expect(parsed(value).success).toBe(true);
       const flow = compileAgentFlow(input("en", { agent: agent({ targetDurationSec: 45, maxDurationSec: value }) }));
@@ -317,14 +330,12 @@ describe("what the compiled flow tells the AI", () => {
     expect(friendly.training!.persona).toMatchObject({ formality: 2, warmth: 5 });
   });
 
-  it("no industry / topics / callback number: still valid, no topic list, website instead of a number", () => {
-    const bare = compileAgentFlow(input("en", { industry: null, categoryName: null, agent: agent({ callbackNumber: null }) }));
+  it("no callback number: still valid, website instead of a number", () => {
+    const bare = compileAgentFlow(input("en", { agent: agent({ callbackNumber: null }) }));
     expect(callFlowDefinition.safeParse(bare).success).toBe(true);
-    expect(text(bare, "industry_context")).not.toMatch(/checklist/);
-    expect(text(bare, "industry_context")).toMatch(/visit kagzso\.com/);
-    expect(text(bare, "industry_context")).toMatch(/Understand what kind of business this is from the conversation/);
+    expect(text(bare, "customer_business")).toMatch(/visit kagzso\.com/);
     // Another company with no number: nothing invented to point at.
-    const other = compileAgentFlow(input("en", { industry: null, categoryName: null, agent: agent({ companyName: "Acme Foods", callbackNumber: null }) }));
+    const other = compileAgentFlow(input("en", { agent: agent({ companyName: "Acme Foods", callbackNumber: null }) }));
     expect(allText(other)).not.toMatch(/visit kagzso\.com/);
   });
 
@@ -336,8 +347,8 @@ describe("what the compiled flow tells the AI", () => {
     expect(situations).toMatch(/say honestly that you are an AI assistant/);
     expect(situations).not.toMatch(/^> "/m);
     expect(text(out, "interested_close")).toMatch(/Never tell the customer that anyone will contact them/);
-    expect(text(out, "industry_context")).toMatch(/needs confirmation from the Kagzso Technology Services team/);
-    expect(text(out, "industry_context")).toMatch(/not a promise that anyone will contact them/);
+    expect(text(out, "customer_business")).toMatch(/needs confirmation from the Kagzso Technology Services team/);
+    expect(text(out, "customer_business")).toMatch(/not a promise that anyone will contact them/);
     // The flag must not reach the prompt: it would make a promise depend on an environment setting.
     expect(allText(out)).not.toContain("team_follow_up_configured");
     expect(allText(out)).not.toMatch(/Our team will get in touch/);
@@ -365,7 +376,7 @@ describe("what the compiled flow tells the AI", () => {
   });
 
   it("defaults: Thaara, Kagzso Technology Services, 60 s target, 1 min 45 s maximum, Male", () => {
-    const min = { name: "x", categoryId: "c", industryId: "i", businessName: "b", objective: "o" };
+    const min = { name: "x", objective: "o" };
     const d = aiAgentInput.parse(min);
     expect(d).toMatchObject({
       executiveName: AI_AGENT_DEFAULTS.executiveName,
@@ -379,69 +390,42 @@ describe("what the compiled flow tells the AI", () => {
     expect(aiAgentInput.safeParse({ name: "x", mode: "guided" }).success).toBe(false); // needs its Call Flow
     expect(aiAgentInput.safeParse({ ...min, executiveName: "Thaara2" }).success).toBe(false);
   });
-
-  it("typed industries without discovery topics: open questions instead, and never assumptions from the category", () => {
-    const typed = compileAgentFlow(input("en", { categoryName: "Manufacturing", industry: { name: "Textile mill", discoveryTopics: "" } }));
-    expect(callFlowDefinition.safeParse(typed).success).toBe(true);
-    const ind = text(typed, "industry_context");
-    expect(ind).toContain("Expected industry: **Textile mill**");
-    expect(ind).toMatch(/Never assume which products or services this business offers/);
-    expect(ind).toMatch(/If they run a different kind of business, follow them/);
-    expect(ind).toMatch(/one short, open question/);
-    expect(ind).not.toMatch(/checklist/);
-    expect(text(typed, "agent")).toContain("a business in the **Textile mill** industry, (Manufacturing)");
-    expect(typed.training?.persona?.business_type).toBe("Textile mill");
-    // Library industries keep their topic list (and get the same no-assumptions line).
-    const lib = text(compileAgentFlow(input("en")), "industry_context");
-    expect(lib).toMatch(/NOT a checklist of questions/);
-    expect(lib).toMatch(/Never assume/);
-    expect(lib).not.toMatch(/one short, open question/);
-  });
 });
 
-describe("Business section validation (library entry or typed by hand)", () => {
-  const base = { name: "x", businessName: "b", objective: "o" };
+describe("the agent form's retired business fields", () => {
+  const base = { name: "x", objective: "o" };
   const issues = (v: Record<string, unknown>) => {
     const r = aiAgentInput.safeParse({ ...base, ...v });
     return r.success ? [] : r.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`);
   };
 
-  it("an autonomous agent needs a category, an industry and a business name", () => {
-    expect(issues({})).toEqual(["categoryId: Pick a category", "industryId: Pick an industry"]);
-    expect(issues({ categoryId: "c", industryId: "i", businessName: "   " })).toEqual(["businessName: Enter the business name"]);
-    expect(issues({ categoryId: "c", industryId: "i" })).toEqual([]);
-    // Guided agents call with their Call Flow as it is: no Business section needed.
+  it("an autonomous agent needs no category, industry or business name: the objective stays required", () => {
+    expect(issues({})).toEqual([]);
+    expect(issues({ objective: "  " })).toEqual(["objective: Enter the calling objective"]);
     expect(aiAgentInput.safeParse({ name: "g", mode: "guided", guidedFlowId: "f" }).success).toBe(true);
   });
 
-  it("typed names: trimmed and spaces collapsed; empty after trimming = still to be entered", () => {
-    const d = aiAgentInput.parse({ ...base, customCategory: "  Manufacturing  ", customIndustry: " Textile    mill ", businessName: "  ABC   Mills " });
-    expect(d).toMatchObject({ customCategory: "Manufacturing", customIndustry: "Textile mill", businessName: "ABC Mills" });
-    expect(issues({ customCategory: "   ", customIndustry: "Textile mill" })).toEqual(["customCategory: Enter the category"]);
-    expect(issues({ categoryId: "c", customIndustry: "" })).toEqual(["customIndustry: Enter the industry"]);
-    expect(issues({ categoryId: "c", customIndustry: "x".repeat(81) })).toHaveLength(1);
-    expect(issues({ categoryId: "c", customIndustry: "Textile\nmill" })).toHaveLength(1);
+  it("a tab left open or an older client that still sends them can save, whatever they hold", () => {
+    expect(issues({ categoryId: "c", customCategory: "X", industryId: "i", customIndustry: "  ", businessName: "" })).toEqual([]);
+    expect(issues({ categoryId: null, customCategory: null, industryId: null, customIndustry: null })).toEqual([]);
+  });
+});
+
+describe("a contact's Business field (same rule as the voice backend)", () => {
+  const cases: { value: string | null; known: string | null }[] = JSON.parse(read("kagzso-voice-backend-english/tests/fixtures/business_cases.json"));
+  it.each(cases)("$value → $known", ({ value, known }) => {
+    expect(knownBusiness(value)).toBe(known);
   });
 
-  it("never both a library entry and a typed name; a typed category needs a typed industry", () => {
-    expect(issues({ categoryId: "c", customCategory: "X", industryId: "i" })).toContain("customCategory: Pick a category from the list or enter one, not both");
-    expect(issues({ categoryId: "c", industryId: "i", customIndustry: "Y" })).toContain("customIndustry: Pick an industry from the list or enter one, not both");
-    expect(issues({ customCategory: "X", industryId: "i" })).toEqual(["industryId: Enter the industry for a category you typed in"]);
-    expect(issues({ categoryId: "c", customIndustry: "Y" })).toEqual([]); // typed industry under a library category
-    expect(issues({ customCategory: "X", customIndustry: "Y" })).toEqual([]);
+  it("is capped to what the voice backend accepts", () => {
+    expect(knownBusiness("x".repeat(300))).toHaveLength(AI_CALL_BUSINESS_MAX);
   });
 
-  it("names match the library ignoring case, spaces and punctuation; archived entries never match", () => {
-    const lib = [
-      { id: "1", name: "IT company", archivedAt: null },
-      { id: "2", name: "Hotel / Restaurant", archivedAt: null },
-      { id: "3", name: "School", archivedAt: "2026-01-01T00:00:00.000Z" },
-    ];
-    expect(matchLibraryName("it-Company", lib)?.id).toBe("1");
-    expect(matchLibraryName("  hotel restaurant ", lib)?.id).toBe("2");
-    expect(matchLibraryName("school", lib)).toBeUndefined();
-    expect(matchLibraryName("Software company", lib)).toBeUndefined();
-    expect(matchLibraryName("--", lib)).toBeUndefined();
+  it("only a compiled agent's flow takes a contact's business: never an older agent, a Call Flow or no flow", () => {
+    expect(flowUsesContactBusiness(compileAgentFlow(input("ta")))).toBe(true);
+    expect(flowUsesContactBusiness({ autonomous: { target_duration_sec: 60, natural_lines: true } })).toBe(false);
+    expect(flowUsesContactBusiness(builtinExecutive("en"))).toBe(false);
+    expect(flowUsesContactBusiness(null)).toBe(false);
   });
 });
 

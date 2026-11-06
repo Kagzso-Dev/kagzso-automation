@@ -37,6 +37,8 @@ export interface PlaceCallInput {
   customerName: string | null;
   gender: string | null;
   followUpDetail: string | null;
+  /** The contact's own business, for a flow that uses it (flowUsesContactBusiness). Absent = none known. */
+  customerBusiness?: string | null;
   phone: string; // E.164
   runId: string;
   logId: string;
@@ -65,6 +67,8 @@ export interface VoiceCallDetail {
   duration_seconds: number | null;
   ended_at: string | null;
   transcripts?: { speaker: string; text: string }[];
+  /** The business the customer said they run, on a call that had none on file. */
+  learned_business?: string | null;
 }
 
 /** FastAPI errors: {"detail": "msg"} or {"detail": [{"loc": [...], "msg": "..."}]}. */
@@ -199,6 +203,7 @@ export async function placeVoiceCall(input: PlaceCallInput): Promise<{ callId: s
       customer_name: input.customerName || undefined,
       gender: input.gender || undefined,
       follow_up_detail: input.followUpDetail || undefined,
+      customer_business: input.customerBusiness || undefined,
       run_id: input.runId,
       log_id: input.logId,
       ...(input.greetingDelaySec != null ? { greeting_delay_sec: input.greetingDelaySec } : {}),
