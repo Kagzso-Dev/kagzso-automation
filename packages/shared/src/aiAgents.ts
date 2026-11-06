@@ -52,11 +52,8 @@ export const AI_AGENT_DEFAULTS = {
   /** How fast the AI speaks (a level of AI_AGENT_VOICE_SPEEDS, or typed within AI_AGENT_VOICE_SPEED_LIMITS). */
   voiceSpeed: 0.9,
 } as const;
-/**
- * maxMax is the flow format's own limit (limits.max_duration_sec). An agent or a Call Flow can be saved above the voice
- * backend's MAX_CALL_DURATION_SECONDS, but that server limit always wins when a call is placed.
- */
-export const AI_AGENT_DURATION_LIMITS = { minTarget: 30, maxTarget: 105, minMax: 45, maxMax: 600 } as const;
+/** maxMax: 3 minutes at most, on the slider or typed. The voice backend's MAX_CALL_DURATION_SECONDS still wins when a call is placed. */
+export const AI_AGENT_DURATION_LIMITS = { minTarget: 30, maxTarget: 105, minMax: 45, maxMax: 180 } as const;
 const MAX_DURATION_RULE = `Enter whole seconds from ${AI_AGENT_DURATION_LIMITS.minMax} to ${AI_AGENT_DURATION_LIMITS.maxMax}`;
 
 /**
@@ -173,7 +170,7 @@ export const aiAgentInput = z
   })
   .strict()
   .superRefine((a, ctx) => {
-    // A maximum out of range has its own error: no reason to blame the target while "345" is being typed.
+    // A maximum out of range has its own error: no reason to blame the target while "150" is being typed.
     if (a.targetDurationSec > a.maxDurationSec && a.maxDurationSec >= AI_AGENT_DURATION_LIMITS.minMax) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["targetDurationSec"], message: "The target must not exceed the maximum" });
     }

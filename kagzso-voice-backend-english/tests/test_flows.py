@@ -237,13 +237,6 @@ def test_flow_duration_is_capped_by_the_server_limit(client, auth, fakes, monkey
     assert fakes.plivo.time_limits == [120]
 
 
-def test_a_flows_own_maximum_is_followed_up_to_the_server_limit(client, auth, fakes, monkeypatch):
-    monkeypatch.setattr(settings, "MAX_CALL_DURATION_SECONDS", 600)
-    assert _outbound(client, auth, flow_id="flow_d", flow_version=1,
-                     flow=nila_copy(limits={"max_duration_sec": 345})).status_code == 200
-    assert fakes.plivo.time_limits == [345]
-
-
 def test_version_is_pinned_and_published_versions_are_immutable(client, auth, sync_engine):
     v1 = nila_copy(name="Pinned")
     assert _outbound(client, auth, flow_id="flow_d", flow_version=1, flow=v1).status_code == 200

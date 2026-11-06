@@ -645,7 +645,7 @@ describe("Maximum duration (Call settings): typed by hand, followed by the agent
   const lastPublished = () => (previews.at(-1)!.flow as { limits: { max_duration_sec: number } }).limits.max_duration_sec;
 
   it("a typed maximum is kept and published exactly, the limits included", async () => {
-    for (const max of [45, 345, 600]) {
+    for (const max of [45, 147, 180]) {
       const a = await made(max);
       expect((await get(a.id)).maxDurationSec).toBe(max);
       expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
@@ -656,19 +656,19 @@ describe("Maximum duration (Call settings): typed by hand, followed by the agent
   it("a new maximum reaches calls with the next publish, and shows as unpublished until then", async () => {
     const a = await made(105);
     expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
-    await req("PUT", `/api/ai-agents/${a.id}`, { agent: { ...AGENT, targetDurationSec: 45, maxDurationSec: 345 } });
-    expect(await get(a.id)).toMatchObject({ maxDurationSec: 345, unpublishedChanges: true });
+    await req("PUT", `/api/ai-agents/${a.id}`, { agent: { ...AGENT, targetDurationSec: 45, maxDurationSec: 180 } });
+    expect(await get(a.id)).toMatchObject({ maxDurationSec: 180, unpublishedChanges: true });
     expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
-    expect(lastPublished()).toBe(345);
+    expect(lastPublished()).toBe(180);
   });
 
   it("refuses a maximum outside the limits, and the saved one stays", async () => {
-    for (const bad of [44, 601]) {
+    for (const bad of [44, 181, 345]) {
       expect((await req("POST", "/api/ai-agents", { language: "en", agent: { ...AGENT, targetDurationSec: 45, maxDurationSec: bad } })).status).toBe(400);
     }
-    const a = await made(345);
-    expect((await req("PUT", `/api/ai-agents/${a.id}`, { agent: { ...AGENT, targetDurationSec: 45, maxDurationSec: 900 } })).status).toBe(400);
-    expect((await get(a.id)).maxDurationSec).toBe(345);
+    const a = await made(147);
+    expect((await req("PUT", `/api/ai-agents/${a.id}`, { agent: { ...AGENT, targetDurationSec: 45, maxDurationSec: 345 } })).status).toBe(400);
+    expect((await get(a.id)).maxDurationSec).toBe(147);
   });
 });
 

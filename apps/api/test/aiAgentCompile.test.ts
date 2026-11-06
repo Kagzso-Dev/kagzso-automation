@@ -295,18 +295,19 @@ describe("what the compiled flow tells the AI", () => {
   it("maximum duration: any whole seconds within the limits go into the flow and the prompt; nothing else is accepted", () => {
     const { minMax, maxMax } = AI_AGENT_DURATION_LIMITS;
     expect(AI_AGENT_DEFAULTS.maxDurationSec).toBe(105); // a new agent, and every existing one, keeps today's hard stop
+    expect(maxMax).toBe(180); // 3 minutes at most
     // A complete agent, so a refusal below can only be about the maximum.
     const parsed = (maxDurationSec: unknown, targetDurationSec = 45) =>
       aiAgentInput.safeParse({ name: "x", customCategory: "c", customIndustry: "i", businessName: "b", objective: "o", targetDurationSec, maxDurationSec });
-    for (const value of [minMax, 105, 345, 347, maxMax]) {
+    for (const value of [minMax, 105, 147, maxMax]) {
       expect(parsed(value).success).toBe(true);
       const flow = compileAgentFlow(input("en", { agent: agent({ targetDurationSec: 45, maxDurationSec: value }) }));
       expect(flow.limits.max_duration_sec).toBe(value);
       expect(text(flow, "call_length")).toContain(`cut off by the phone system at ${value} seconds`);
       expect(callFlowDefinition.safeParse(flow).success).toBe(true);
     }
-    for (const bad of [minMax - 1, maxMax + 1, 0, 345.5, "", "long", null, Number.NaN]) {
-      expect(parsed(bad).error?.issues.map((i) => i.message)).toEqual(["Enter whole seconds from 45 to 600"]);
+    for (const bad of [minMax - 1, maxMax + 1, 345, 0, 120.5, "", "long", null, Number.NaN]) {
+      expect(parsed(bad).error?.issues.map((i) => i.message)).toEqual(["Enter whole seconds from 45 to 180"]);
     }
     expect(parsed(50, 60).error?.issues.map((i) => i.message)).toEqual(["The target must not exceed the maximum"]);
   });

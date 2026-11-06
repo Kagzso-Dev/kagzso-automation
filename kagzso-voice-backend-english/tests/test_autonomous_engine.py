@@ -213,7 +213,7 @@ def test_the_time_limit_does_not_depend_on_the_conversation(client, auth, fakes,
     assert flow["limits"]["max_duration_sec"] == 105 and fakes.plivo.time_limits[-1] == 105
 
 
-@pytest.mark.parametrize("typed, server, stops_at", [(345, 600, 345), (345, 345, 345), (345, 180, 180), (600, 600, 600)])
+@pytest.mark.parametrize("typed, server, stops_at", [(147, 180, 147), (180, 180, 180), (180, 120, 120)])
 def test_a_typed_maximum_is_the_hard_stop_up_to_the_servers_limit(client, auth, fakes, monkeypatch, sync_engine, typed, server, stops_at):
     monkeypatch.setattr(settings, "MAX_CALL_DURATION_SECONDS", server)
     flow = _flow("en", monkeypatch)

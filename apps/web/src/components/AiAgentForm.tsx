@@ -423,7 +423,7 @@ function ContactFields({ f, set }: { f: Form; set: <K extends keyof Form>(k: K, 
 
 /**
  * The agent's hard stop: the slider, or any seconds typed in the box. What's typed stays as typed while the form holds
- * its number, and the rule turns red in place, so typing "345" doesn't move the page. The voice backend's own limit
+ * its number, and the rule turns red in place, so typing "150" doesn't move the page. The voice backend's own limit
  * wins when a call is placed, so a higher value is reported here instead of the call just stopping early.
  */
 function MaxDuration({ language, value, onChange, error }: { language: AiCallLanguage; value: number; onChange: (sec: number) => void; error?: string }) {

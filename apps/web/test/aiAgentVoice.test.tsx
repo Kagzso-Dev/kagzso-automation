@@ -303,43 +303,43 @@ describe("Settings → AI Voice", () => {
     const slider = () => screen.getByRole("slider", { name: "Maximum duration" }) as HTMLInputElement;
     const typeMax = (value: string) => fireEvent.change(box(), { target: { value } });
     const saveButton = () => screen.getByRole("button", { name: "Save settings" }) as HTMLButtonElement;
-    const RULE = "Enter whole seconds from 45 to 600";
+    const RULE = "Enter whole seconds from 45 to 180";
     const BLAME = "The target must not exceed the maximum";
 
     it("opens on the agent's own maximum; typed seconds show in minutes, move the slider and are saved", async () => {
       form(AGENT);
       await waitFor(() => expect(box().value).toBe("105"));
       expect(screen.getByText("Maximum duration (1 min 45 s, hard stop)")).toBeTruthy();
-      typeMax("345");
-      expect(screen.getByText("Maximum duration (5 min 45 s, hard stop)")).toBeTruthy();
-      expect(slider().value).toBe("345");
+      typeMax("180");
+      expect(screen.getByText("Maximum duration (3 min, hard stop)")).toBeTruthy();
+      expect(slider().value).toBe("180");
       fireEvent.click(saveButton());
       await waitFor(() => expect(sent.find((s) => s.method === "PUT")).toBeTruthy());
-      expect(sent.find((s) => s.method === "PUT")!.body).toMatchObject({ agent: { maxDurationSec: 345 } });
+      expect(sent.find((s) => s.method === "PUT")!.body).toMatchObject({ agent: { maxDurationSec: 180 } });
     });
 
     it("the slider fills the box, and editing restores a typed maximum", async () => {
       form(AGENT);
       await waitFor(() => expect(box().value).toBe("105"));
-      fireEvent.change(slider(), { target: { value: "300" } });
-      expect(box().value).toBe("300");
+      fireEvent.change(slider(), { target: { value: "150" } });
+      expect(box().value).toBe("150");
       cleanup();
-      form({ ...AGENT, maxDurationSec: 347 });
-      await waitFor(() => expect(box().value).toBe("347"));
+      form({ ...AGENT, maxDurationSec: 147 });
+      await waitFor(() => expect(box().value).toBe("147"));
     });
 
     it("a maximum outside the limits, not whole, or empty is reported in place and can't be saved; the target isn't blamed", async () => {
       form(AGENT);
       await waitFor(() => expect(box().value).toBe("105"));
       expect(screen.queryByText(RULE)).toBeNull();
-      for (const bad of ["3", "44", "601", "12.5", ""]) {
+      for (const bad of ["3", "44", "181", "345", "12.5", ""]) {
         typeMax(bad);
         expect(screen.getByText(RULE)).toBeTruthy();
         expect(box().getAttribute("aria-invalid")).toBe("true");
         expect(saveButton().disabled).toBe(true);
         expect(screen.queryByText(BLAME)).toBeNull();
       }
-      for (const limit of ["60", "600"]) {
+      for (const limit of ["60", "180"]) {
         typeMax(limit);
         expect(screen.queryByText(RULE)).toBeNull();
         expect(saveButton().disabled).toBe(false);
@@ -355,16 +355,16 @@ describe("Settings → AI Voice", () => {
     });
 
     it("says so when the voice backend stops calls earlier, and only then", async () => {
-      serverMax = 180;
+      serverMax = 120; // a backend set lower than 3 minutes
       form(AGENT);
       await waitFor(() => expect(box().value).toBe("105"));
       await waitFor(() => expect(names()).toHaveLength(4));
-      const warned = () => screen.queryByText(/voice backend stops every call at 3 min/);
+      const warned = () => screen.queryByText(/voice backend stops every call at 2 min/);
       expect(warned()).toBeNull();
-      typeMax("180");
+      typeMax("120");
       expect(warned()).toBeNull();
-      typeMax("345");
-      expect(warned()!.textContent).toMatch(/Tamil voice backend stops every call at 3 min \(MAX_CALL_DURATION_SECONDS\)/);
+      typeMax("150");
+      expect(warned()!.textContent).toMatch(/Tamil voice backend stops every call at 2 min \(MAX_CALL_DURATION_SECONDS\)/);
       expect(saveButton().disabled).toBe(false); // it can still be saved: raising the server's limit is a separate step
       typeMax("9000");
       expect(warned()).toBeNull(); // the value itself is wrong: one message at a time

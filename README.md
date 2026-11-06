@@ -573,11 +573,10 @@ Instructions** box, a target length (default 1 min) and a hard maximum (default 
   speed fits fewer words. An agent published before this setting uses the voice backend's `AGENT_TTS_PACE` until it is
   published again.
 - **Maximum duration** is the agent's hard stop: 1 min 45 s by default, set in **Call settings** with the slider or by
-  typing seconds (45 to 600). A Call Flow has its own typed value. Both are followed up to the voice backend's
-  `MAX_CALL_DURATION_SECONDS` (180 in `.env.example`), which always wins and is the same phone-system time limit: to go
-  past it, raise it in that language's `.env` and restart the backend. Agent and Call Flow forms warn when a value is
-  above it. Raising it also lengthens calls placed with no flow. The target doesn't change with the maximum: after the
-  target the AI moves to a close unless the customer is engaged.
+  typing seconds (45 to 180, so 3 minutes at most). A Call Flow has its own typed value. Both are followed up to the
+  voice backend's `MAX_CALL_DURATION_SECONDS` (180 in `.env.example`), which always wins; the agent and Call Flow forms
+  warn when a value is above it. The target doesn't change with the maximum: after the target the AI moves to a close
+  unless the customer is engaged.
 - **A published agent is a stored copy.** Compiler changes reach it only through a new publish, so an agent published
   with an older compiler shows "unpublished changes" (`AI_AGENT_COMPILER_VERSION`, bump it with any such change).
 - **Checking real conversations:** `scripts/autonomous_conversation_check.py --language en|ta --run` in the voice
