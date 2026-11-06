@@ -503,6 +503,10 @@ Dispatch (the email-automation-platform in the parent folder) places calls throu
   `learned_business` on the final callback and on `GET /api/calls/{id}`. The default agent, ordinary flows and guided
   flows get it as `business_type` for that call, ahead of any value kept on the contact row. An AI Agent published
   before `contact_business` ignores it.
+- `voice_tuning` is Dispatch's voice response tuning (Settings → Voice response tuning), Tamil only. It applies to that
+  one call through a private copy of the settings (`app/services/turn_tuning.py`); a backend in any other language
+  ignores it, and without it a call runs on this backend's own settings. Each Tamil reply logs one `Turn timing ta:` line
+  (numbers and decisions, never the customer's words), with or without tuning, and each call one `Turn timing ta call:` line.
 - **Status callbacks:** when `STATUS_CALLBACK_URL` and `STATUS_CALLBACK_SECRET` are set, any call
   that has a `log_id` POSTs `{event, call_id, run_id, log_id, provider_call_id, status, outcome,
   summary, hangup_cause, duration_seconds, ended_at}` on every status change. A final

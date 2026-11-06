@@ -548,6 +548,21 @@ port 8010 (`VOICE_GATEWAY_PORT`; `scripts/voice-gateway.mjs`): `/ta/…` → Tam
 `.env` and redeploy; `pm2 delete kagzso_orchestrator_voice_ta` stops just that backend. The migration
 `0029_ai_call_languages` only adds two `language` columns (default `en`); its `down.sql` removes them.
 
+### Voice response tuning (Tamil)
+
+**Settings → Voice response tuning** (admins) sets how a Tamil call waits for the customer: Fast, Balanced (the default),
+Patient, or **Current behavior**, which sends nothing and is an instant rollback. Values are read when each call is
+dialled, for Call Flows and AI Agents alike. With tuning the AI replies quickly after a clearly finished sentence, waits
+longer after an unfinished one (never past the hard cap), and never starts a reply over the customer: a reply that is
+ready waits, and new words join the same turn. A lone sound or stray letter ("aaa", "ம்ம்", "a") never reaches the LLM:
+over the AI it is ignored, and after the AI has finished it gets one fixed, pre-rendered check-in line, at most once in a
+row. Replies stop at two sentences, on a whole sentence, and a one- or two-word acknowledgement doesn't count.
+
+The word lists are at the top of `kagzso-voice-backend-english/app/services/turn_tuning.py` and **need a native
+speaker's review**. Every other language is untouched: it has no rules entry, so Dispatch sends it nothing and the voice
+backend would ignore it anyway. Adding one = a rules entry there and its code in `VOICE_TUNING_LANGUAGES`
+(`packages/shared/src/aiCallVoiceTuning.ts`).
+
 ### AI Agents (autonomous business executive, e.g. Thaara)
 
 **Calls → AI Agents** (admins; each language section has its own, `/ta/ai-agents`, …). An agent has a calling
