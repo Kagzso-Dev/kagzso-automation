@@ -180,7 +180,7 @@ export const aiAgentCallInput = z
 export type AiAgentCallInput = z.input<typeof aiAgentCallInput>;
 
 /* ------------------------------------------------------------------ category / industry library */
-// Settings → AI agent industries. No agent and no call reads it any more: only that page does.
+// No agent, call or screen reads it any more. The API and its tables stay, so nothing already saved is lost.
 export const aiCategoryInput = z.object({ name: line(80).min(1) }).strict();
 export const aiIndustryInput = z
   .object({

@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import type {
   AiAgentView,
   AiCallLanguage,
-  AiCategoryView,
   AiKnowledgeFileView,
   AiKnowledgeItemView,
   CallFlowDefinition,
@@ -11,7 +10,7 @@ import type {
 import { api } from "./api";
 import { withLanguage } from "./aiCallLanguage";
 
-/** One language's AI agents (each language section has its own; the industry library is shared). */
+/** One language's AI agents (each language section has its own). */
 export function useAiAgents(language: AiCallLanguage) {
   return useQuery({
     queryKey: ["ai-agents", language],
@@ -24,14 +23,6 @@ export function useAiAgent(id: string | null) {
     queryKey: ["ai-agent", id],
     queryFn: () => api<AiAgentView>(`/api/ai-agents/${id}`),
     enabled: !!id,
-  });
-}
-
-export function useAiLibrary(archived = false) {
-  return useQuery({
-    queryKey: ["ai-agent-library", archived],
-    queryFn: () => api<AiCategoryView[]>(`/api/ai-agents/library${archived ? "?archived=true" : ""}`),
-    staleTime: 60_000,
   });
 }
 
