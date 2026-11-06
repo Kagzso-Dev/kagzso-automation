@@ -14,6 +14,7 @@ import { ChangePasswordSection, UsersSection } from "../components/UserAdminSect
 import { BrandingSection } from "../components/BrandingSection";
 import { CallRecordingsSection } from "../components/CallRecordingsSection";
 import { AiCallLanguagesSection } from "../components/AiCallLanguagesSection";
+import { VoiceResponseTuningSection } from "../components/VoiceResponseTuningSection";
 import { Switch } from "../components/Switch";
 
 interface ApiKey {
@@ -187,6 +188,8 @@ export function SettingsPage() {
       {isAdmin && <AiProvidersLink />}
 
       {isAdmin && <AiCallLanguagesSection />}
+
+      {isAdmin && <VoiceResponseTuningSection />}
 
       {isAdmin && <CallRecordingsSection />}
 

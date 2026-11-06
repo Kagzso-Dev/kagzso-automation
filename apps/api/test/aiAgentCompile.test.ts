@@ -10,7 +10,6 @@ import {
   AI_CALL_BUSINESS_MAX,
   aiAgentInput,
   callFlowDefinition,
-  flowUsesContactBusiness,
   knowledgeTextIssues,
   knownBusiness,
   type AiAgentConfig,
@@ -421,11 +420,8 @@ describe("a contact's Business field (same rule as the voice backend)", () => {
     expect(knownBusiness("x".repeat(300))).toHaveLength(AI_CALL_BUSINESS_MAX);
   });
 
-  it("only a compiled agent's flow takes a contact's business: never an older agent, a Call Flow or no flow", () => {
-    expect(flowUsesContactBusiness(compileAgentFlow(input("ta")))).toBe(true);
-    expect(flowUsesContactBusiness({ autonomous: { target_duration_sec: 60, natural_lines: true } })).toBe(false);
-    expect(flowUsesContactBusiness(builtinExecutive("en"))).toBe(false);
-    expect(flowUsesContactBusiness(null)).toBe(false);
+  it("a compiled agent says it uses the contact's business, which is what the voice backend goes by", () => {
+    expect(compileAgentFlow(input("ta")).autonomous?.contact_business).toBe(true);
   });
 });
 

@@ -202,14 +202,39 @@ describe("processAiCallRun (characterization)", () => {
   });
 
   it.each([
-    ["a Guided or ordinary Call Flow", { language: "en" }],
-    ["an agent published before contact businesses", { autonomous: { target_duration_sec: 60, natural_lines: true } }],
-  ])("%s: nothing looked up, nothing new sent", async (_name, definition) => {
-    helpers.pinnedFlowForRun.mockResolvedValue({ flowId: "f1", version: 3, language: "en", definition });
+    ["a Guided or ordinary Call Flow", { flowId: "f1", version: 3, language: "en", definition: { language: "en" } }],
+    ["an agent published before contact businesses", { flowId: "f1", version: 3, language: "en", definition: { autonomous: { natural_lines: true } } }],
+    ["the default flow", null],
+  ])("%s: the contact's details all go with the call (the voice backend decides how they are used)", async (_name, flow) => {
+    helpers.pinnedFlowForRun.mockResolvedValue(flow);
+    helpers.businessForCall.mockResolvedValue("hospital");
     logs({});
     await deferredMs(processAiCallRun({ runId: "r1" }));
-    expect(helpers.businessForCall).not.toHaveBeenCalled();
-    expect(voice.placeVoiceCall.mock.calls[0]![0]).not.toHaveProperty("customerBusiness");
+    expect(helpers.businessForCall).toHaveBeenCalledWith("l2", next.phone, "en");
+    expect(voice.placeVoiceCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        logId: "l2",
+        phone: next.phone,
+        customerName: next.customerName,
+        gender: next.gender,
+        followUpDetail: next.followUpDetail,
+        customerBusiness: "hospital",
+      }),
+    );
+  });
+
+  it("voice response tuning: a Tamil call carries it, read at dial time", async () => {
+    helpers.pinnedFlowForRun.mockResolvedValue({ flowId: "f1", version: 3, language: "ta" });
+    logs({});
+    await deferredMs(processAiCallRun({ runId: "r1" }));
+    expect(voice.placeVoiceCall.mock.calls[0]![0].voiceTuning).toMatchObject({ preset: "balanced", end_of_speech_silence_ms: 900 });
+  });
+
+  it.each([undefined, "hi", "te", "kn"])("voice response tuning: a call in %s is sent nothing new", async (language) => {
+    helpers.pinnedFlowForRun.mockResolvedValue({ flowId: "f1", version: 3, language });
+    logs({});
+    await deferredMs(processAiCallRun({ runId: "r1" }));
+    expect(voice.placeVoiceCall.mock.calls[0]![0]).not.toHaveProperty("voiceTuning");
   });
 
   it("no providerCallId: only voiceCallId stored", async () => {

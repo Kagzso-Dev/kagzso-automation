@@ -16,6 +16,7 @@ import {
   type AiProviderSettingsView,
   type AiProviderUpdateInput,
   type TrainingTestResult,
+  type VoiceTuningPayload,
 } from "@dispatch/shared";
 import { aiCallsConfig, isAiCallsConfigured, voiceBackendFor, type VoiceBackendTarget } from "../config/aiCalls.js";
 
@@ -37,8 +38,10 @@ export interface PlaceCallInput {
   customerName: string | null;
   gender: string | null;
   followUpDetail: string | null;
-  /** The contact's own business, for a flow that uses it (flowUsesContactBusiness). Absent = none known. */
+  /** The contact's own business, from Voicecall Contact. Absent = none known. */
   customerBusiness?: string | null;
+  /** Voice response tuning for this call. Absent for every language without tuning, and for "Current behavior". */
+  voiceTuning?: VoiceTuningPayload | null;
   phone: string; // E.164
   runId: string;
   logId: string;
@@ -204,6 +207,7 @@ export async function placeVoiceCall(input: PlaceCallInput): Promise<{ callId: s
       gender: input.gender || undefined,
       follow_up_detail: input.followUpDetail || undefined,
       customer_business: input.customerBusiness || undefined,
+      voice_tuning: input.voiceTuning || undefined,
       run_id: input.runId,
       log_id: input.logId,
       ...(input.greetingDelaySec != null ? { greeting_delay_sec: input.greetingDelaySec } : {}),

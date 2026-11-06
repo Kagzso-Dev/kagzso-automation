@@ -30,6 +30,7 @@ from app.core.logging import get_logger
 from app.flows.loader import BUILTIN_FLOWS
 from app.flows.schema import render_blocks
 from app.flows.training import HEADER_LINE as TRAINING_HEADER_LINE, compile_training, estimate_tokens
+from app.services import turn_tuning
 from app.services.tts import brand_spoken
 
 log = get_logger("llm")
@@ -45,6 +46,16 @@ _TEMPERATURE: ContextVar[Optional[float]] = ContextVar("llm_temperature", defaul
 def request_temperature(cfg: Settings) -> float:
     t = _TEMPERATURE.get()
     return cfg.LLM_TEMPERATURE if t is None else t
+
+
+# The token cap of replies in the current task (a tuned call, app/services/turn_tuning.py). A context variable for the
+# same reason: one provider serves every live call. Unset = LLM_MAX_OUTPUT_TOKENS, as always.
+MAX_REPLY_TOKENS: ContextVar[Optional[int]] = ContextVar("llm_max_reply_tokens", default=None)
+
+
+def request_max_tokens(cfg: Settings) -> int:
+    n = MAX_REPLY_TOKENS.get()
+    return cfg.LLM_MAX_OUTPUT_TOKENS if n is None else n
 
 
 # A dict the caller sets before streaming a live reply; filled with {"model", "failover"} once a
@@ -616,6 +627,7 @@ def build_system_prompt(
         + business_rules
         + brand + followup
         + language_instruction(lang, variables.get("flow_language_style"))
+        + turn_tuning.reply_rule(variables, lang)  # "" unless the call has voice response tuning
         # Below every rule above, above the customer data; "" for a flow without (Active) training.
         + training_block(variables, user_message, last_reply, (recent or []) if natural else None)
         + CUSTOMER_DATA_TITLE + json.dumps(data, ensure_ascii=False)
@@ -1362,7 +1374,7 @@ class OpenAICompatibleProvider(LLMProvider):
             "messages": [{"role": "system", "content": system_text}, *messages],
             "stream": True,
             "temperature": request_temperature(self.cfg),
-            self.TOKEN_PARAM: self.cfg.LLM_MAX_OUTPUT_TOKENS,
+            self.TOKEN_PARAM: request_max_tokens(self.cfg),
             **self._extra_body(),
         }
         headers = self._headers(key)

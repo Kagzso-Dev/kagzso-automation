@@ -561,7 +561,15 @@ one on file the AI checks it naturally and tailors the call to that type of busi
 the AI leads from the objective, instructions and approved knowledge, asks once what business they run, and adapts; if
 they won't say it moves on. What it learns fills the contact's **empty** Business field, never replacing an entry, and
 shows on the contact's timeline as *Business learned on the call*. An agent published before this keeps the business
-compiled into its flow until it is published again (it shows *unpublished changes*). The old agent-level category,
+compiled into its flow until it is published again (it shows *unpublished changes*).
+
+Every other call follows the contact too: the default flow, Voice Call Flows and guided agents get the same Business
+as `business_type` in the customer details, and their scripts decide when it is useful. Nothing is asked or learned on
+those calls, and an empty Business leaves them as they were. Customer name, gender, phone and follow-up detail go with
+every call. The business stays on the call and is never saved on the voice backend's contact, so a fix or a cleared
+field counts on the next call.
+
+The old agent-level category,
 industry and business name columns stay in the database unused. So do the shared category and industry library's
 tables and API: no screen, agent or call uses them, and nothing saved in them is lost.
 

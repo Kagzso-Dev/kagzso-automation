@@ -356,14 +356,6 @@ export const AI_AGENT_AUTONOMOUS_CALLS_BLOCKED: Partial<Record<AiCallLanguage, s
     "Guided agents call as usual.",
 };
 
-/**
- * Does this flow version call with each contact's own business? Agents published since compiler 3. An agent published
- * earlier keeps the business compiled into its stored flow until it is published again, and is sent no contact's business.
- */
-export function flowUsesContactBusiness(definition: unknown): boolean {
-  return (definition as { autonomous?: { contact_business?: unknown } } | null)?.autonomous?.contact_business === true;
-}
-
 /** Why live calls with this flow version are paused (an autonomous flow of a blocked language), or null. */
 export function autonomousCallBlockedReason(language: string, definition: unknown): string | null {
   const autonomous = !!definition && typeof definition === "object" && !!(definition as { autonomous?: unknown }).autonomous;

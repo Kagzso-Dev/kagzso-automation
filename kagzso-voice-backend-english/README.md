@@ -497,10 +497,12 @@ Dispatch (the email-automation-platform in the parent folder) places calls throu
   or just "Ragul" when gender is unknown; gender is never guessed. The agent then uses
   `follow_up_detail` as the call context: *"I'm calling regarding: …"*.
 - `follow_up_detail` is sanitized like every other customer field and capped at 300 characters.
-- `customer_business` is the contact's own business, sent by Dispatch for an AI Agent's flow with
-  `autonomous.contact_business` and ignored by every other call. It stays on the call, never on the contact row.
-  With one, the AI checks it and tailors the call; without one, the AI leads, asks once and adapts, and what the
-  customer says comes back as `learned_business` on the final callback and on `GET /api/calls/{id}`.
+- `customer_business` is the contact's own business, sent by Dispatch with every call. It stays on the call, never on
+  the contact row. An AI Agent's flow with `autonomous.contact_business` uses it directly: with one, the AI checks it
+  and tailors the call; without one, the AI leads, asks once and adapts, and what the customer says comes back as
+  `learned_business` on the final callback and on `GET /api/calls/{id}`. The default agent, ordinary flows and guided
+  flows get it as `business_type` for that call, ahead of any value kept on the contact row. An AI Agent published
+  before `contact_business` ignores it.
 - **Status callbacks:** when `STATUS_CALLBACK_URL` and `STATUS_CALLBACK_SECRET` are set, any call
   that has a `log_id` POSTs `{event, call_id, run_id, log_id, provider_call_id, status, outcome,
   summary, hangup_cause, duration_seconds, ended_at}` on every status change. A final

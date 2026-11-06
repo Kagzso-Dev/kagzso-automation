@@ -1,7 +1,8 @@
 """Autonomous AI Agents use each contact's own business (Dispatch's Voicecall Contact list), not one kept on the agent.
 
 * the prompt builder  what the AI is told with a business on file and with none, in every agent language
-* other calls         Nila, Follow-up, Executive, Guided and agents published earlier keep their prompt, word for word
+* other calls         Nila, Follow-up, Executive, Guided and agents published earlier never get the agent's rules
+* every flow          the default flow, Call Flows and guided calls get the business as business_type, for that call only
 * the name            how it reads aloud, and what counts as no business (the same rule as Dispatch's knownBusiness)
 * a live call         the business travels from the request to every reply of the call, and to the preview
 * learned             what the customer says about their business goes back to Dispatch, and only when it is safe
@@ -15,7 +16,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import text
 
-from app.flows.loader import flow_hash, parse_flow
+from app.flows.loader import flow_hash, load_builtin, parse_flow
 from app.flows.schema import render_blocks
 from app.services import call_service as cs
 from app.services import llm_service as llm
@@ -24,6 +25,7 @@ from tests.test_autonomous_agent import _capture_systems
 from tests.test_autonomous_conversation import OPENING, _converse, _dial, _flow
 from tests.test_call_policy import _rows
 from tests.test_followup_calls import callbacks  # noqa: F401  (a fixture)
+from tests.test_nila_flow import _call
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 AGENT_LANGUAGES = ("en", "ta", "hi", "kn")
@@ -149,7 +151,7 @@ def test_the_business_never_enters_the_rules():
     assert "{{" not in _data(prompt)["customer_business"] and "[[" not in _data(prompt)["customer_business"]
 
 
-# ------------------------------------------------------------------ every other call: not one word changes
+# ------------------------------------------------------------------ every other call: none of the agent's rules
 def test_a_call_without_the_setting_never_sees_the_business():
     plain = llm.build_system_prompt("# Agent", _vars(flow_contact_business=None))
     told = llm.build_system_prompt("# Agent", _vars("hospital", flow_contact_business=None))
@@ -240,17 +242,80 @@ def test_an_older_agents_call_ignores_a_business_sent_to_it(client, auth, fakes,
     flow = _flow("en", monkeypatch)
     flow["autonomous"].pop("contact_business")
     call_id, _ = _dial(client, auth, flow, flow_id="agent_old", customer_business="hospital")
-    stored = _rows(sync_engine, "select variables from calls where id = :id", call_id)[0][0]
-    variables = json.loads(stored) if isinstance(stored, str) else stored
+    variables = _stored(sync_engine, call_id)
     assert "customer_business" not in variables and "flow_contact_business" not in variables
+    assert not variables.get("business_type")  # its compiled business could contradict the contact's
 
 
 def test_the_voice_database_never_keeps_it_on_the_contact(client, auth, fakes, monkeypatch, sync_engine):
     """company_name and business_type stick to the phone number: a value fixed in Dispatch would never reach a call."""
     call_id, _ = _dial(client, auth, _flow("en", monkeypatch), customer_business="hospital")
-    row = _rows(sync_engine, "select c.company_name, c.business_type from contacts c join calls k on k.contact_id = c.id "
-                             "where k.id = :id", call_id)[0]
-    assert tuple(row) == (None, None)
+    assert _contact_row(sync_engine, call_id) == (None, None)
+
+
+# ------------------------------------------------------------------ the default flow and ordinary Call Flows
+def _stored(sync_engine, call_id) -> dict:
+    stored = _rows(sync_engine, "select variables from calls where id = :id", call_id)[0][0]
+    return json.loads(stored) if isinstance(stored, str) else stored
+
+
+def _contact_row(sync_engine, call_id) -> tuple:
+    return tuple(_rows(sync_engine, "select c.company_name, c.business_type from contacts c join calls k "
+                                    "on k.contact_id = c.id where k.id = :id", call_id)[0])
+
+
+def _ordinary_call(kind: str) -> dict:
+    if kind == "the default flow":
+        return {}
+    return {"flow_id": "flow_t", "flow_version": 1, "flow": load_builtin(kind).model_dump(mode="json", exclude_none=True)}
+
+
+@pytest.mark.parametrize("kind", ["the default flow", "nila", "followup", "executive"])
+def test_every_other_call_gets_the_business_for_that_call_only(client, auth, fakes, sync_engine, kind):
+    call_id, _ = _call(client, auth, gender="male", customer_business="SRI LAKSHMI TEXTILES PVT. LTD.", **_ordinary_call(kind))
+    variables = _stored(sync_engine, call_id)
+    assert variables["business_type"] == "Sri Lakshmi Textiles"
+    assert "customer_business" not in variables and "flow_contact_business" not in variables  # not the agent's rules
+    assert _contact_row(sync_engine, call_id) == (None, None)
+
+
+def test_a_guided_call_gets_the_business_for_that_call_only(client, auth, fakes, sync_engine, monkeypatch):
+    monkeypatch.setattr(cs.default_settings, "FLOW_GUIDED_ENABLED", True)
+    flow = json.loads((FIXTURES.parents[1] / "app/flows/guided_examples/business_executive.en.json").read_text(encoding="utf-8"))
+    call_id, _ = _call(client, auth, gender="male", customer_business="hospital", flow_id="flow_g", flow_version=1, flow=flow)
+    variables = _stored(sync_engine, call_id)
+    assert variables["business_type"] == "hospital" and "customer_business" not in variables
+    assert _contact_row(sync_engine, call_id) == (None, None)
+
+
+@pytest.mark.parametrize("guided", [False, True])
+def test_the_script_sees_it_in_the_customer_details_and_nothing_else_changes(guided):
+    script = llm.NILA_AGENT["system_prompt"]
+    without = llm.build_system_prompt(script, llm.build_call_variables("Ragul", "male", "+919876543210"), guided=guided)
+    told = llm.build_system_prompt(script, llm.build_call_variables("Ragul", "male", "+919876543210", business_type="hospital"), guided=guided)
+    assert _data(told)["business_type"] == "hospital" and _data(without)["business_type"] is None
+    assert ASKS not in told and CHECKS not in told
+    assert told.replace('"business_type": "hospital"', '"business_type": null') == without
+
+
+@pytest.mark.parametrize("empty", ["", "   ", "—", "N/A", "null"])
+def test_an_empty_business_leaves_every_other_call_as_it_was(client, auth, fakes, sync_engine, empty):
+    call_id, _ = _call(client, auth, gender="male", customer_business=empty)
+    assert not _stored(sync_engine, call_id).get("business_type")
+
+
+def test_voicecall_contact_wins_over_anything_kept_for_the_number(client, auth, fakes, sync_engine):
+    first, _ = _call(client, auth, gender="male", business_type="Old Bakery")  # set directly through the API
+    assert _contact_row(sync_engine, first)[1] == "Old Bakery"
+    second, _ = _call(client, auth, gender="male", customer_business="hospital")
+    assert _stored(sync_engine, second)["business_type"] == "hospital"
+    assert _contact_row(sync_engine, second)[1] == "Old Bakery"  # still not written over
+
+
+def test_a_business_cleared_in_voicecall_contact_is_gone_on_the_next_call(client, auth, fakes, sync_engine):
+    _call(client, auth, gender="male", customer_business="hospital")
+    call_id, _ = _call(client, auth, gender="male")
+    assert not _stored(sync_engine, call_id).get("business_type")
 
 
 @pytest.mark.parametrize("sample, expected, rule", [

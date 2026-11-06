@@ -1,0 +1,26 @@
+{
+  "fast": {
+    "preset": "fast",
+    "finished_silence_ms": 350,
+    "end_of_speech_silence_ms": 750,
+    "extra_wait_if_incomplete_ms": 300,
+    "hard_cap_ms": 1200,
+    "min_words_before_reply": 1
+  },
+  "balanced": {
+    "preset": "balanced",
+    "finished_silence_ms": 450,
+    "end_of_speech_silence_ms": 900,
+    "extra_wait_if_incomplete_ms": 500,
+    "hard_cap_ms": 1600,
+    "min_words_before_reply": 1
+  },
+  "patient": {
+    "preset": "patient",
+    "finished_silence_ms": 600,
+    "end_of_speech_silence_ms": 1100,
+    "extra_wait_if_incomplete_ms": 800,
+    "hard_cap_ms": 2000,
+    "min_words_before_reply": 1
+  }
+}

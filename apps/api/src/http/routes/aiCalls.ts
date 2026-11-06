@@ -11,6 +11,9 @@
 //   PUT  /api/ai-calls/languages/:code  ADMIN: { enabled } switch a language (not English) on or off;
 //                                       switching on also starts its voice backend when it is down
 //   POST /api/ai-calls/languages/:code/run  ADMIN: start that language's voice backend (services/voiceProcess)
+//   GET  /api/ai-calls/voice-tuning     ADMIN: voice response tuning, one row per tuned language (Tamil)
+//   PUT  /api/ai-calls/voice-tuning/:code     ADMIN: save it
+//   DELETE /api/ai-calls/voice-tuning/:code   ADMIN: reset to default
 
 import { Router, type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
@@ -25,6 +28,8 @@ import {
   maskPhone,
   setAiCallLanguageInput,
   startAiCallsInput,
+  VOICE_TUNING_LANGUAGES,
+  voiceTuningSetting,
   type AiCallLanguage,
   type AiCallLanguageInfo,
   type StartAiCallsInput,
@@ -44,6 +49,7 @@ import {
 } from "../../domain/aiCallLanguages.js";
 import { aiCallFormatFromFilename, readAiCallSheet } from "../../domain/aiCallImport.js";
 import { callsCountedTowardDailyCap, loadDoNotCallPhones, planAiCallRun } from "../../domain/aiCalls.js";
+import { listVoiceTuning, resetVoiceTuning, saveVoiceTuning } from "../../domain/aiCallVoiceTuning.js";
 import { enqueueAiCallRun } from "../../queue/queues.js";
 import { linkCustomersToRun, syncCustomerFromLog } from "../../domain/aiCallCustomerSync.js";
 import { getVoiceReady, languageMismatch, voiceCallsBlockedReason } from "../../services/voiceBackend.js";
@@ -303,6 +309,41 @@ aiCallsRouter.post(
     for (const l of queued) await syncCustomerFromLog(l.id);
     logger.info({ runId: id, by: req.user!.email }, "ai call run cancelled");
     res.json({ ok: true });
+  }),
+);
+
+/* ------------------------------------------------------------------ voice response tuning (Settings, admins) */
+
+const tuningParam = z.object({ code: z.enum(VOICE_TUNING_LANGUAGES) }); // any other language: 400
+
+aiCallsRouter.get(
+  "/voice-tuning",
+  requireRole("ADMIN"),
+  readLimiter,
+  wrap(async (_req, res) => {
+    res.json({ items: await listVoiceTuning() });
+  }),
+);
+
+aiCallsRouter.put(
+  "/voice-tuning/:code",
+  requireRole("ADMIN"),
+  wrap(async (req, res) => {
+    const { code } = tuningParam.parse(req.params);
+    const row = await saveVoiceTuning(code, voiceTuningSetting.parse(req.body));
+    logger.info({ language: code, preset: row.tuning.preset, by: req.user!.email }, "voice tuning saved");
+    res.json(row);
+  }),
+);
+
+aiCallsRouter.delete(
+  "/voice-tuning/:code",
+  requireRole("ADMIN"),
+  wrap(async (req, res) => {
+    const { code } = tuningParam.parse(req.params);
+    const row = await resetVoiceTuning(code);
+    logger.info({ language: code, by: req.user!.email }, "voice tuning reset to default");
+    res.json(row);
   }),
 );
 

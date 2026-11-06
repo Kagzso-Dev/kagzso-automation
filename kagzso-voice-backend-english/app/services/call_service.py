@@ -44,11 +44,13 @@ from app.services.public_url import check_public_url
 from app.services.sarvam_tts import SarvamTTS
 from app.services.tts import TTSError, TTSProvider, create_tts_provider
 from app.services.llm_service import (
+    MAX_REPLY_TOKENS,
     OUTCOME_SYSTEM,
     TURN_INFO,
     LLMError,
     LLMProvider,
     SentenceChunker,
+    agent_call,
     build_call_variables,
     calm_spoken_text,
     clean_spoken_text,
@@ -65,12 +67,14 @@ from app.services.llm_service import (
     render_first_message,
     reply_issues,
     safe_variables,
+    spoken_business,
 )
 from app.services.plivo_service import PlivoError, PlivoService, get_plivo_service
 from app.services.twilio_service import TwilioService, get_twilio_service
 from app.services.sarvam_stt import SarvamSTT, STTError, STTProvider, STTStream, create_stt_provider
 from app.services.session_store import SessionStore, get_session_store
 from app.services import reply_speed as rs
+from app.services import turn_tuning
 from app.services import voice_focus as vf
 
 log = get_logger("voice.pipeline")
@@ -841,6 +845,10 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
     )
 
     name = contact.name or req.name
+    # The default flow, Call Flows and guided calls get the contact's business as business_type, which their scripts
+    # already read. An autonomous agent gets it as customer_business below; one published before that gets neither,
+    # because the business compiled into its prompt could contradict it.
+    contact_business = "" if agent_call(flow_vars) else spoken_business(req.customer_business)
     # Only an explicitly provided gender is used; never inferred.
     variables = build_call_variables(
         name,
@@ -848,12 +856,15 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
         req.phone_number,
         follow_up_detail=req.follow_up_detail,
         company_name=contact.company_name or req.company_name,
-        business_type=contact.business_type or req.business_type,
+        business_type=contact_business or contact.business_type or req.business_type,
         run_id=req.run_id,
         log_id=req.log_id,
         customer_business=req.customer_business if flow_vars.get("flow_contact_business") else None,
     )
     variables.update(flow_vars)
+    tuning = turn_tuning.call_variable(req.voice_tuning.model_dump() if req.voice_tuning else None, cfg)
+    if tuning:  # only this backend's tuned language; anywhere else it is ignored
+        variables[turn_tuning.VARIABLE] = tuning
     if req.greeting_delay_sec is not None:
         variables["greeting_delay_sec"] = str(req.greeting_delay_sec)
     rotation = cfg.voice_rotation
@@ -1256,6 +1267,9 @@ class _TurnState:
     spoken: List[str] = field(default_factory=list)
     audio_started: bool = False
     hold_until: Optional[float] = None  # RHYTHM_GAP: the reply's audio starts no sooner than this
+    decision: Optional[str] = None  # turn timing log: real_word | sound | checkin
+    held_ms: int = 0  # turn timing log: how long the ready reply waited for the customer
+    merged: bool = False  # turn timing log: this reply also answers earlier unanswered words
     first_sound: Optional[float] = None  # when its first audio went to the line
     audio_ms: float = 0.0  # audio sent for it so far
     heard: Optional[int] = None  # BARGE_EARLY_STOP: sentences (roughly) heard before an interruption
@@ -1281,7 +1295,13 @@ class CallSession:
         self.ctx = ctx
         self.call_id = ctx.call_id
         self.sender = sender
+        # Voice response tuning: a private copy of the settings for a tuned call; every other call keeps `cfg` itself.
+        cfg, self._tuning = turn_tuning.for_session(cfg, ctx.variables)
         self.cfg = cfg
+        self._rules = turn_tuning.rules_for(cfg.call_language)  # only for the timing logs when there is no tuning
+        self._checkin_streak = 0  # check-in lines since the customer's last real word (at most one in a row)
+        self._checkin_next = 0  # which check-in line is next
+        self._turn_counts = {"sound": 0, "checkin": 0, "quiet": 0, "replies": 0, "sentences": 0}  # the call's timing log
         self.providers = providers or get_providers()
         self.agent_voice = ctx.variables.get("flow_voice_profile") == AGENT_VOICE_PROFILE
         picked = ctx.variables.get("flow_agent_voice")  # an AI Agent's saved voice (Settings → AI Voice)
@@ -1422,6 +1442,11 @@ class CallSession:
         ACTIVE_SESSIONS.pop(self.call_id, None)
         if self._latency_rows:
             log.info(latency_summary(self._latency_rows, slow_speaker=self._slow_speaker))
+        if self._rules is not None:
+            c = self._turn_counts
+            log.info("Turn timing %s call: preset=%s replies=%d avg_sentences=%.1f sounds=%d checkins=%d stayed_quiet=%d",
+                     self.cfg.call_language, self._tuning.preset if self._tuning else "current", c["replies"],
+                     c["sentences"] / c["replies"] if c["replies"] else 0, c["sound"], c["checkin"], c["quiet"])
         if self.cleaner is not None and self.cleaner.frames:
             frames, avg, peak = self.cleaner.stats()
             log.info("Noise suppression for this call: %d chunks, %.2f ms avg / %.2f ms max per 20 ms chunk%s",
@@ -1544,6 +1569,8 @@ class CallSession:
             lines += self.ack_lines()
         if self.dnc_enforced and self.ctx.dnc_line:
             lines.append(self.ctx.dnc_line)
+        if self._tuning is not None:
+            lines += list(self._tuning.rules.checkin_lines)  # ready to play at once
         return list(dict.fromkeys(line for line in lines if line))
 
     @property
@@ -1680,7 +1707,8 @@ class CallSession:
         t0 = time.monotonic() - ev.silence_ms / 1000
         log.info("Customer audio received (%dms)", ev.duration_ms)
         opening, self._opening_speech = self._opening_speech, False
-        focus = None if opening else self._turn_audio(ev, agent_speaking=candidate or self.ai_busy)
+        agent_speaking = (candidate or self.ai_busy) and not self._reply_on_hold()
+        focus = None if opening else self._turn_audio(ev, agent_speaking=agent_speaking)
         if self._focus_rejects_audio(focus):  # not real customer speech: no STT, no turn
             self._drop_stt_stream(stt_stream)
             self._drop_early_stt(early)
@@ -1752,7 +1780,8 @@ class CallSession:
             failed = task.cancelled() or task.exception() is not None
             text = "" if failed else task.result()["text"]
             last = self._last_assistant_line()
-            early["kind"] = rs.utterance_kind(text, bool(last) and vf.asks_question(last or ""))
+            early["kind"] = (self._tuning.utterance_kind(text) if self._tuning is not None
+                             else rs.utterance_kind(text, bool(last) and vf.asks_question(last or "")))
             if early["kind"] == "trailing":
                 ep.hold_frames = max(1, self.cfg.ADAPTIVE_EOS_LONG_MS // audio.FRAME_MS)
                 log.info("Adaptive end of speech: the sentence trails off - waiting %d ms of silence",
@@ -1910,6 +1939,12 @@ class CallSession:
             if self.cfg.ECHO_TEXT_FILTER and self._is_agent_echo(result["text"]):
                 log.info("Agent's own voice came back (echo) - ignored, agent keeps talking")
                 self._event("echo_ignored", {"turn": self.turn_index})
+                return
+            if self.ai_busy and self._tuning is not None and self._tuning.rules.is_sound(result["text"]):
+                # Over the AI's voice, or over a reply waiting to start: never an interruption and never a reply.
+                self._turn_counts["sound"] += 1
+                log.info("Turn decision: sound while the agent is busy - ignored")
+                self._event("barge_in_ignored", {"turn": self.turn_index, "reason": "sound"})
                 return
             if self.ai_busy and self._silence_line_playing():
                 # A silence-triggered repeat / re-prompt never plays on top of the customer.
@@ -2081,10 +2116,21 @@ class CallSession:
         return None
 
     async def _hold_for_gap(self, until: float) -> None:
-        """RHYTHM_GAP: wait until the reply's gap has passed and the customer is not speaking."""
-        deadline = time.monotonic() + 10.0
-        while time.monotonic() < deadline and (time.monotonic() < until or self.endpointer.in_speech):
+        """RHYTHM_GAP: wait until the reply's gap has passed and the customer is not speaking. A tuned call waits for as
+        long as one utterance can last, and for the check of those words: real words replace this reply with one that
+        answers everything said, so it must not start and then stop."""
+        deadline = time.monotonic() + (10.0 if self._tuning is None else self.cfg.MAX_UTTERANCE_SECONDS + 5.0)
+        while time.monotonic() < deadline and (time.monotonic() < until or self.endpointer.in_speech
+                                               or self._words_being_checked()):
             await asyncio.sleep(max(0.005, min(0.02, until - time.monotonic())))
+
+    def _words_being_checked(self) -> bool:
+        return self._tuning is not None and self._barge_check_task is not None and not self._barge_check_task.done()
+
+    def _reply_on_hold(self) -> bool:
+        """A tuned call's reply is being prepared and none of it has played: the customer is not talking over the AI."""
+        return (self._tuning is not None and self._turn_task is not None and not self._turn_task.done()
+                and time.monotonic() >= self._playback_until)
 
     # ------------------------------------------------------------------ playback callbacks
     async def on_played(self, name: str) -> None:
@@ -2477,7 +2523,8 @@ class CallSession:
                         log.info("STT returned no speech - ignoring")
                         self._after_noise()
                         return
-                    if self.cfg.STT_DROP_NOISE_TEXT and is_noise_text(text):
+                    sound = self._rules is not None and self._rules.is_sound(text)  # the logs, and a tuned call's check-in
+                    if self.cfg.STT_DROP_NOISE_TEXT and is_noise_text(text) and not (sound and self._tuning is not None):
                         log.info("STT heard only non-word sounds - ignoring")
                         self._event("noise_ignored", {"turn": turn})
                         self._after_noise()
@@ -2496,6 +2543,13 @@ class CallSession:
                         if self._focus_enforce:
                             self._after_noise()
                             return
+                    if self._rules is not None:
+                        st.decision = "sound" if sound else "real_word"
+                        log.info("Turn decision: classified as %s", st.decision)
+                    if sound and self._tuning is not None and self._agent_spoke and not (
+                            self._should_ask_identity(text) or self._should_reask_identity(text)):
+                        await self._answer_sound(text, result.get("confidence"), st, m, tts_connect, turn)
+                        return
                     if self._focus is not None and vf.is_lone_filler(text) and resume is None:
                         if not self._focus_enforce:
                             log.info("Voice focus: lone filler sound -> would drop (filler)")
@@ -2519,6 +2573,8 @@ class CallSession:
                     elif self._focus is not None:
                         self._filler_notes = 0  # a real answer
                     self._confirm_customer_speech()
+                    self._checkin_streak = 0  # a real word
+                    st.merged = bool(self._pending_user_text)  # the timing log
                     self._customer_texts.append(text)
                     log.info("Customer said: %s", text[:200])
                     self._persist(lambda db, t=stored, c=result.get("confidence"): repo.add_transcript(db, self.call_id, "customer", t, confidence=c))
@@ -2560,6 +2616,9 @@ class CallSession:
                             self.cfg.RHYTHM_GAP_LONG_MS, self.cfg.RHYTHM_GAP_JITTER, self.cfg.RHYTHM_GAP_MIN_MS, self._rng)
                         st.hold_until = t0 + m.gap_target / 1000
 
+                if self._tuning is not None and st.hold_until is None and not st.is_greeting:
+                    st.hold_until = time.monotonic()  # no gap, but it never starts over the customer (_hold_for_gap)
+
                 # ---------------- LLM -> TTS (streamed) ----------------
                 cached = (take_greeting_audio(self.call_id, st.scripted, self.greeting_pace(), self.pauses)
                           if st.is_greeting and st.scripted else None)
@@ -2599,6 +2658,7 @@ class CallSession:
                     row.update(m.detail_row())
                     self._latency_rows.append(dict(row))
                 log.info(m.log_line(turn))
+                self._log_turn_timing(turn, m, st)
                 self._persist(lambda db, row=row: repo.add_latency_metric(db, self.call_id, turn, **row))
                 await self._after_reply()
             except asyncio.CancelledError:
@@ -2645,6 +2705,55 @@ class CallSession:
                 if st.audio_started or m.ack is not None:  # THINKING_ACK: never two replies in a row
                     self._ack_last_turn = m.ack is not None
                 self._warm_up_tts()
+
+    async def _answer_sound(self, text: str, confidence: Optional[float], st: _TurnState, m: TurnMetrics,
+                            tts_connect: "asyncio.Task", turn: int) -> None:
+        """A tuned call, the AI has finished and the customer made only a sound ("aaa", "ம்ம்", "a"): one fixed check-in
+        line, never the LLM and never the pitch again. Never two in a row: after that the AI stays quiet, and the
+        existing silence handling takes over. The sound is kept in the transcript but not in the LLM's history."""
+        self._turn_counts["sound"] += 1
+        self._persist(lambda db, t=f"[filler] {text}", c=confidence: repo.add_transcript(
+            db, self.call_id, "customer", t, confidence=c))
+        if self._checkin_streak:
+            self._turn_counts["quiet"] += 1
+            log.info("Turn decision: sound right after a check-in - staying quiet")
+            self._event("checkin_skipped", {"turn": turn})
+            self._after_noise()
+            return
+        lines = self._tuning.rules.checkin_lines  # type: ignore[union-attr]
+        line = lines[self._checkin_next % len(lines)]
+        self._checkin_next += 1
+        self._checkin_streak += 1
+        self._turn_counts["checkin"] += 1
+        st.scripted, st.record_user, st.decision, st.hold_until = line, False, "checkin", time.monotonic()
+        log.info("Turn decision: sound - check-in line sent")
+        self._event("checkin_sent", {"turn": turn})
+        line_audio = self._line_audio.get(line)
+        m.source = "prerendered" if line_audio else "scripted"
+        if line_audio:
+            m.t5 = m.t6 = time.monotonic()
+            st.spoken.append(clean_spoken_text(line))
+            await self._play(line_audio, st)
+        else:  # the pre-render hasn't finished or failed: TTS says it live
+            await self._speak_streaming(st, m, tts_connect)
+        self._commit_turn(st, interrupted=False)
+        self._log_turn_timing(turn, m, st)
+        await self._after_reply()
+
+    def _log_turn_timing(self, turn: int, m: TurnMetrics, st: _TurnState) -> None:
+        """One grep-able line per reply of a language with turn rules, tuned or not ("Current behavior" logs too), for
+        comparing real calls. Numbers and decisions only: never the customer's words."""
+        if self._rules is None:
+            return
+        sentences = turn_tuning.sentence_count(" ".join(st.spoken))
+        if st.scripted is None:
+            self._turn_counts["replies"] += 1
+            self._turn_counts["sentences"] += sentences
+        log.info("Turn timing %s: turn=%d preset=%s decision=%s eos=%s silence_wait=%s stt=%s llm_first=%s first_audio=%s "
+                 "held=%d reply_delay=%s sentences=%d merged=%s source=%s", self.cfg.call_language, turn,
+                 self._tuning.preset if self._tuning else "current", st.decision or "scripted", m.eos or "normal",
+                 _ms(m.t0, m.t1), _ms(m.t1, m.t2), _ms(m.t3, m.t3_first_token), _ms(m.t5, m.t6), st.held_ms,
+                 _ms(m.t0 if m.t0 is not None else m.t1, m.t6), sentences, "yes" if st.merged else "no", m.source)
 
     def _open_tts(self) -> "asyncio.Task":
         """The TTS connection for this reply: the one opened after the last reply (TTS_WARM_STREAM)
@@ -2768,6 +2877,7 @@ class CallSession:
             m.t3 = time.monotonic()
             # REPEAT_QUESTION_GUARD: questions the agent already asked in this call.
             asked = asked_questions([h["content"] for h in self.history if h["role"] == "assistant"])
+            held_back: List[str] = []  # a tuned call: sentences past the reply's limit
 
             async def push(sentence: str) -> None:
                 sentence, end = extract_end_call(sentence)
@@ -2776,7 +2886,12 @@ class CallSession:
                 sentence = clean_spoken_text(sentence)
                 if self.agent_voice:
                     sentence = calm_spoken_text(sentence)
+                if end and not sentence and held_back:
+                    sentence = held_back[-1]  # the marker came alone: what it followed is the goodbye, so that is said
                 if not sentence:
+                    return
+                if self._tuning is not None and st.scripted is None and not end and self._tuning.reply_is_full(st.spoken):
+                    held_back.append(sentence)  # enough said: the rest is read for the marker, never spoken or remembered
                     return
                 if (st.scripted is None and self.cfg.REPEAT_QUESTION_GUARD and st.spoken
                         and is_repeated_question(sentence, asked + asked_questions(st.spoken))):
@@ -2820,11 +2935,17 @@ class CallSession:
                             thinking_ack(index, lines[index], self._line_audio[lines[index]], long_answer))
                 info: Dict[str, Any] = {}
                 TURN_INFO.set(info)  # this task only: which model answered
+                if self._tuning is not None:
+                    MAX_REPLY_TOKENS.set(self._tuning.rules.max_reply_tokens)  # this task only: this call's replies
                 guard = self.cfg.REPLY_GUARD == "log"
                 raw_parts: List[str] = []  # REPLY_GUARD: the model's text as sent, only read afterwards
+                # A tuned call's short-reply reminder goes with this request only: the history keeps the customer's words.
+                user_text = st.user_text
+                if self._tuning is not None and user_text:
+                    user_text += self._tuning.rules.reply_reminder
                 try:
                     async for delta in self.providers.llm.stream_response(
-                        self.ctx.agent_prompt, self.history, st.user_text, self.turn_variables()
+                        self.ctx.agent_prompt, self.history, user_text, self.turn_variables()
                     ):
                         if guard:
                             raw_parts.append(delta)
@@ -2915,7 +3036,9 @@ class CallSession:
 
     async def _play(self, mulaw: bytes, st: Optional[_TurnState] = None) -> None:
         if st is not None and not st.audio_started and st.hold_until is not None:
-            await self._hold_for_gap(st.hold_until)  # RHYTHM_GAP
+            held = time.monotonic()
+            await self._hold_for_gap(st.hold_until)  # RHYTHM_GAP, and a tuned call's reply
+            st.held_ms = int((time.monotonic() - held) * 1000)
         self._agent_spoke = True
         if st is not None and not st.audio_started:
             st.audio_started = True

@@ -13,7 +13,6 @@
 import {
   autonomousCallBlockedReason,
   DEFAULT_AI_CALL_LANGUAGE,
-  flowUsesContactBusiness,
   maskPhone,
   type AiCallLanguage,
 } from "@dispatch/shared";
@@ -27,6 +26,7 @@ import {
   parseUtc,
 } from "../domain/aiCalls.js";
 import { disabledAiCallLanguages, languageName } from "../domain/aiCallLanguages.js";
+import { voiceTuningForCall } from "../domain/aiCallVoiceTuning.js";
 import { pinnedFlowForRun } from "../domain/callFlows.js";
 import { businessForCall, markCustomerCalling, syncCustomerFromLog } from "../domain/aiCallCustomerSync.js";
 import { getVoiceCall, placeVoiceCall, VoiceBackendError } from "../services/voiceBackend.js";
@@ -177,12 +177,15 @@ export async function processAiCallRun(payload: Record<string, unknown>): Promis
   await markCustomerCalling(next.id);
   try {
     const greetingDelaySec = greetingDelayOf(run.skipped);
-    // Only an autonomous agent's call uses the contact's business: every other call is sent exactly what it always was.
-    const customerBusiness = flow && flowUsesContactBusiness(flow.definition) ? await businessForCall(next.id, next.phone, language) : null;
+    // Every call carries the contact's business: the voice backend decides how each kind of flow uses it.
+    const customerBusiness = await businessForCall(next.id, next.phone, language);
+    // Null for every language without tuning (nothing is read), and for "Current behavior".
+    const voiceTuning = await voiceTuningForCall(language);
     const { callId, providerCallId } = await placeVoiceCall({
       // Runs without the setting (older runs, test calls) call exactly as before.
       ...(greetingDelaySec != null ? { greetingDelaySec } : {}),
       ...(customerBusiness ? { customerBusiness } : {}),
+      ...(voiceTuning ? { voiceTuning } : {}),
       customerName: next.customerName,
       gender: next.gender,
       followUpDetail: next.followUpDetail,

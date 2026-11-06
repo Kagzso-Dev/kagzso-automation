@@ -30,6 +30,20 @@ def normalize_gender(value: Optional[str]) -> Optional[str]:
     return {"m": "male", "male": "male", "f": "female", "female": "female"}.get(v, "unknown")
 
 
+class VoiceTuning(BaseModel):
+    """Voice response tuning from Dispatch (Settings → Voice response tuning; the same limits are in
+    packages/shared/src/aiCallVoiceTuning.ts). Used only on a backend whose language has rules in
+    app/services/turn_tuning.py: everywhere else it is ignored."""
+    model_config = ConfigDict(extra="forbid")
+
+    preset: str = Field("custom", max_length=16)
+    finished_silence_ms: int = Field(..., ge=300, le=2000)
+    end_of_speech_silence_ms: int = Field(..., ge=300, le=2000)
+    extra_wait_if_incomplete_ms: int = Field(..., ge=0, le=2000)
+    hard_cap_ms: int = Field(..., ge=0, le=5000)  # 0 = no cap
+    min_words_before_reply: int = Field(1, ge=1, le=5)
+
+
 class OutboundCallRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -46,8 +60,9 @@ class OutboundCallRequest(BaseModel):
     agent_name: Optional[str] = Field(None, min_length=1, max_length=100)
     # Follow-up calls from Dispatch: the reason for the call, rendered into the prompt.
     follow_up_detail: Optional[str] = Field(None, max_length=500)
-    # An Autonomous AI Agent's call: the contact's own business from Dispatch. Used only by a flow with
-    # autonomous.contact_business, and kept on the call: never on the contact row, so a change in Dispatch always counts.
+    # The contact's own business from Dispatch, sent with every call. Kept on the call, never on the contact row, so a
+    # change in Dispatch always counts. An autonomous agent's flow uses it as customer_business, every other call as
+    # business_type, and an agent published before autonomous.contact_business ignores it.
     customer_business: Optional[str] = Field(None, max_length=200)
     # Dispatch "AI Greeting Delay": seconds after the answer before the agent greets (0 = at once).
     # Absent = the configured timing (FIRST_SPEECH_WAIT_SECONDS / GREETING_DELAY_MS), exactly as before.
@@ -64,6 +79,8 @@ class OutboundCallRequest(BaseModel):
     # 2 = a guided flow is requested (app/services/guided_call.py): run exactly that version or refuse the call,
     # never another flow or agent. A definition with schema_version 2 counts as a request too. None = as before.
     flow_schema: Optional[int] = Field(None, ge=1, le=2)
+    # Absent = the call uses this backend's own settings, exactly as before.
+    voice_tuning: Optional[VoiceTuning] = None
 
     @model_validator(mode="after")
     def _agent(self) -> "OutboundCallRequest":

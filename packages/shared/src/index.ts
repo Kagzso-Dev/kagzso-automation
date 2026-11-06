@@ -1,6 +1,7 @@
 export * from "./schemas.js";
 export * from "./aiCalls.js";
 export * from "./aiCallLanguages.js";
+export * from "./aiCallVoiceTuning.js";
 export * from "./callFlows.js";
 export * from "./callFlowTraining.js";
 export * from "./guidedFlows.js";
