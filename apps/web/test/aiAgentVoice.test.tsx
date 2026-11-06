@@ -19,15 +19,17 @@ const TA = (id: string, name: string, gender?: string) => ({ id, name, ...(gende
 const VOICES = [TA("ishita", "Ishita", "female"), TA("roopa", "Roopa", "female"), TA("ritu", "Ritu", "female"), TA("simran", "Simran", "female"), TA("priya", "Priya"), TA("shubh", "Shubh", "male")];
 
 const sent: { url: string; method: string; body: Record<string, unknown> }[] = [];
+let serverMax: number | undefined; // the voice backend's MAX_CALL_DURATION_SECONDS, as its catalog reports it
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
 beforeEach(() => {
   sent.length = 0;
+  serverMax = undefined;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init: { method?: string; body?: string } = {}) => {
       if (init.body) sent.push({ url, method: init.method ?? "GET", body: JSON.parse(init.body) });
-      if (url.startsWith("/api/call-flows/builtin")) return json({ flows: {}, locked_blocks: {}, variables: [], limits: {}, voices: VOICES, default_voice: "ishita", language: "ta" });
+      if (url.startsWith("/api/call-flows/builtin")) return json({ flows: {}, locked_blocks: {}, variables: [], limits: serverMax ? { max_duration_sec: serverMax } : {}, voices: VOICES, default_voice: "ishita", language: "ta" });
       if (url.startsWith("/api/call-flows")) return json({ items: [] });
       if (url.startsWith("/api/ai-agents/library")) return json([]);
       if (url === "/api/voices/preview") return new Response(new Uint8Array([82, 73, 70, 70]), { headers: { "Content-Type": "audio/wav" } });
@@ -293,6 +295,79 @@ describe("Settings → AI Voice", () => {
       fireEvent.click(saveButton());
       await waitFor(() => expect(sent.find((s) => s.method === "PUT")).toBeTruthy());
       expect(sent.find((s) => s.method === "PUT")!.body).toMatchObject({ agent: { mode: "guided", voiceSpeed: 1.2 } });
+    });
+  });
+
+  describe("Call settings: maximum duration", () => {
+    const box = () => screen.getByRole("spinbutton", { name: "Maximum duration in seconds" }) as HTMLInputElement;
+    const slider = () => screen.getByRole("slider", { name: "Maximum duration" }) as HTMLInputElement;
+    const typeMax = (value: string) => fireEvent.change(box(), { target: { value } });
+    const saveButton = () => screen.getByRole("button", { name: "Save settings" }) as HTMLButtonElement;
+    const RULE = "Enter whole seconds from 45 to 600";
+    const BLAME = "The target must not exceed the maximum";
+
+    it("opens on the agent's own maximum; typed seconds show in minutes, move the slider and are saved", async () => {
+      form(AGENT);
+      await waitFor(() => expect(box().value).toBe("105"));
+      expect(screen.getByText("Maximum duration (1 min 45 s, hard stop)")).toBeTruthy();
+      typeMax("345");
+      expect(screen.getByText("Maximum duration (5 min 45 s, hard stop)")).toBeTruthy();
+      expect(slider().value).toBe("345");
+      fireEvent.click(saveButton());
+      await waitFor(() => expect(sent.find((s) => s.method === "PUT")).toBeTruthy());
+      expect(sent.find((s) => s.method === "PUT")!.body).toMatchObject({ agent: { maxDurationSec: 345 } });
+    });
+
+    it("the slider fills the box, and editing restores a typed maximum", async () => {
+      form(AGENT);
+      await waitFor(() => expect(box().value).toBe("105"));
+      fireEvent.change(slider(), { target: { value: "300" } });
+      expect(box().value).toBe("300");
+      cleanup();
+      form({ ...AGENT, maxDurationSec: 347 });
+      await waitFor(() => expect(box().value).toBe("347"));
+    });
+
+    it("a maximum outside the limits, not whole, or empty is reported in place and can't be saved; the target isn't blamed", async () => {
+      form(AGENT);
+      await waitFor(() => expect(box().value).toBe("105"));
+      expect(screen.queryByText(RULE)).toBeNull();
+      for (const bad of ["3", "44", "601", "12.5", ""]) {
+        typeMax(bad);
+        expect(screen.getByText(RULE)).toBeTruthy();
+        expect(box().getAttribute("aria-invalid")).toBe("true");
+        expect(saveButton().disabled).toBe(true);
+        expect(screen.queryByText(BLAME)).toBeNull();
+      }
+      for (const limit of ["60", "600"]) {
+        typeMax(limit);
+        expect(screen.queryByText(RULE)).toBeNull();
+        expect(saveButton().disabled).toBe(false);
+      }
+    });
+
+    it("a valid maximum below the target is reported under the target", async () => {
+      form(AGENT); // target 60
+      await waitFor(() => expect(box().value).toBe("105"));
+      typeMax("50");
+      expect(screen.getByText(BLAME)).toBeTruthy();
+      expect(saveButton().disabled).toBe(true);
+    });
+
+    it("says so when the voice backend stops calls earlier, and only then", async () => {
+      serverMax = 180;
+      form(AGENT);
+      await waitFor(() => expect(box().value).toBe("105"));
+      await waitFor(() => expect(names()).toHaveLength(4));
+      const warned = () => screen.queryByText(/voice backend stops every call at 3 min/);
+      expect(warned()).toBeNull();
+      typeMax("180");
+      expect(warned()).toBeNull();
+      typeMax("345");
+      expect(warned()!.textContent).toMatch(/Tamil voice backend stops every call at 3 min \(MAX_CALL_DURATION_SECONDS\)/);
+      expect(saveButton().disabled).toBe(false); // it can still be saved: raising the server's limit is a separate step
+      typeMax("9000");
+      expect(warned()).toBeNull(); // the value itself is wrong: one message at a time
     });
   });
 

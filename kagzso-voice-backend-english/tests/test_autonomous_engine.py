@@ -22,6 +22,7 @@ from app.services import llm_service as llm
 from tests.test_autonomous_agent import _capture_systems
 from tests.test_autonomous_conversation import _dial, _flow, _opening_then, _converse
 from tests.test_call_policy import _agent_lines, _events
+from tests.test_flows import _call_row
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "autonomous"
 LANGUAGES = ("en", "ta", "hi", "kn")
@@ -210,6 +211,17 @@ def test_the_time_limit_does_not_depend_on_the_conversation(client, auth, fakes,
     flow = _flow("en", monkeypatch)
     _dial(client, auth, flow, flow_id="engine_limit")
     assert flow["limits"]["max_duration_sec"] == 105 and fakes.plivo.time_limits[-1] == 105
+
+
+@pytest.mark.parametrize("typed, server, stops_at", [(345, 600, 345), (345, 345, 345), (345, 180, 180), (600, 600, 600)])
+def test_a_typed_maximum_is_the_hard_stop_up_to_the_servers_limit(client, auth, fakes, monkeypatch, sync_engine, typed, server, stops_at):
+    monkeypatch.setattr(settings, "MAX_CALL_DURATION_SECONDS", server)
+    flow = _flow("en", monkeypatch)
+    flow["limits"]["max_duration_sec"] = typed
+    _dial(client, auth, flow, flow_id=f"engine_max_{typed}_{server}")
+    assert fakes.plivo.time_limits[-1] == stops_at  # the phone system's time limit
+    # The AI is told the real limit, so it says goodbye before a cap lower than the agent's own maximum cuts it off.
+    assert _call_row(sync_engine)[-1][1]["flow_max_sec"] == str(stops_at)
 
 
 def test_the_prompt_stays_a_size_a_live_turn_can_afford():

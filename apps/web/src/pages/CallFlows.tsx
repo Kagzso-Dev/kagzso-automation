@@ -945,7 +945,13 @@ function CallFlowEditor({
               value={form.limits.max_duration_sec}
               onChange={(e) => update((f) => void (f.limits.max_duration_sec = Number(e.target.value) || 0))}
             />
-            <span className="mt-1 block text-xs text-slate-550">Server maximum {catalog.limits.max_duration_sec}s.</span>
+            {form.limits.max_duration_sec > catalog.limits.max_duration_sec ? (
+              <span className="mt-1 block text-xs text-warn">
+                Above the server maximum: calls stop at {catalog.limits.max_duration_sec}s (MAX_CALL_DURATION_SECONDS in the voice backend's .env).
+              </span>
+            ) : (
+              <span className="mt-1 block text-xs text-slate-550">Server maximum {catalog.limits.max_duration_sec}s.</span>
+            )}
           </div>
           <div className="min-w-0">
             <div className="grid grid-cols-3 gap-2">

@@ -52,7 +52,12 @@ export const AI_AGENT_DEFAULTS = {
   /** How fast the AI speaks (a level of AI_AGENT_VOICE_SPEEDS, or typed within AI_AGENT_VOICE_SPEED_LIMITS). */
   voiceSpeed: 0.9,
 } as const;
-export const AI_AGENT_DURATION_LIMITS = { minTarget: 30, maxTarget: 105, minMax: 45, maxMax: 105 } as const;
+/**
+ * maxMax is the flow format's own limit (limits.max_duration_sec). An agent or a Call Flow can be saved above the voice
+ * backend's MAX_CALL_DURATION_SECONDS, but that server limit always wins when a call is placed.
+ */
+export const AI_AGENT_DURATION_LIMITS = { minTarget: 30, maxTarget: 105, minMax: 45, maxMax: 600 } as const;
+const MAX_DURATION_RULE = `Enter whole seconds from ${AI_AGENT_DURATION_LIMITS.minMax} to ${AI_AGENT_DURATION_LIMITS.maxMax}`;
 
 /**
  * The AI's own voice (Settings → AI Voice, autonomous agents). It has nothing to do with the contact's gender:
@@ -150,10 +155,10 @@ export const aiAgentInput = z
       .max(AI_AGENT_DURATION_LIMITS.maxTarget)
       .default(AI_AGENT_DEFAULTS.targetDurationSec),
     maxDurationSec: z.coerce
-      .number()
-      .int()
-      .min(AI_AGENT_DURATION_LIMITS.minMax)
-      .max(AI_AGENT_DURATION_LIMITS.maxMax)
+      .number({ invalid_type_error: MAX_DURATION_RULE })
+      .int(MAX_DURATION_RULE)
+      .min(AI_AGENT_DURATION_LIMITS.minMax, MAX_DURATION_RULE)
+      .max(AI_AGENT_DURATION_LIMITS.maxMax, MAX_DURATION_RULE)
       .default(AI_AGENT_DEFAULTS.maxDurationSec),
     /** Guided mode: the published Call Flow (of the agent's language) it calls with. */
     guidedFlowId: z.string().min(1).max(64).nullable().optional(),
@@ -168,7 +173,8 @@ export const aiAgentInput = z
   })
   .strict()
   .superRefine((a, ctx) => {
-    if (a.targetDurationSec > a.maxDurationSec) {
+    // A maximum out of range has its own error: no reason to blame the target while "345" is being typed.
+    if (a.targetDurationSec > a.maxDurationSec && a.maxDurationSec >= AI_AGENT_DURATION_LIMITS.minMax) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["targetDurationSec"], message: "The target must not exceed the maximum" });
     }
     if (a.mode === "guided" && !a.guidedFlowId) {

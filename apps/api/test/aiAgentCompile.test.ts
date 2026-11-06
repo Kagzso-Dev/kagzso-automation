@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   AI_AGENT_DEFAULTS,
+  AI_AGENT_DURATION_LIMITS,
   AI_AGENT_OPENINGS,
   AI_AGENT_VOICE_SPEED_LIMITS,
   AI_AGENT_VOICE_SPEEDS,
@@ -289,6 +290,25 @@ describe("what the compiled flow tells the AI", () => {
     for (const bad of [min - 0.01, max + 0.01, 0, -1, 3, "", "fast", null, Number.NaN]) {
       expect(parsed(bad).error?.issues.map((i) => i.message)).toEqual(["Enter a speed from 0.5 to 2.0"]);
     }
+  });
+
+  it("maximum duration: any whole seconds within the limits go into the flow and the prompt; nothing else is accepted", () => {
+    const { minMax, maxMax } = AI_AGENT_DURATION_LIMITS;
+    expect(AI_AGENT_DEFAULTS.maxDurationSec).toBe(105); // a new agent, and every existing one, keeps today's hard stop
+    // A complete agent, so a refusal below can only be about the maximum.
+    const parsed = (maxDurationSec: unknown, targetDurationSec = 45) =>
+      aiAgentInput.safeParse({ name: "x", customCategory: "c", customIndustry: "i", businessName: "b", objective: "o", targetDurationSec, maxDurationSec });
+    for (const value of [minMax, 105, 345, 347, maxMax]) {
+      expect(parsed(value).success).toBe(true);
+      const flow = compileAgentFlow(input("en", { agent: agent({ targetDurationSec: 45, maxDurationSec: value }) }));
+      expect(flow.limits.max_duration_sec).toBe(value);
+      expect(text(flow, "call_length")).toContain(`cut off by the phone system at ${value} seconds`);
+      expect(callFlowDefinition.safeParse(flow).success).toBe(true);
+    }
+    for (const bad of [minMax - 1, maxMax + 1, 0, 345.5, "", "long", null, Number.NaN]) {
+      expect(parsed(bad).error?.issues.map((i) => i.message)).toEqual(["Enter whole seconds from 45 to 600"]);
+    }
+    expect(parsed(50, 60).error?.issues.map((i) => i.message)).toEqual(["The target must not exceed the maximum"]);
   });
 
   it("personality sets the tone scales", () => {

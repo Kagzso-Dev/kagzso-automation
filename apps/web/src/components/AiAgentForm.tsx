@@ -22,7 +22,7 @@ import {
 import { api } from "../lib/api";
 import { useAiCallLanguage } from "../lib/aiCallLanguage";
 import { AGENT_QUERY_KEYS, useAiLibrary } from "../lib/aiAgents";
-import { useCallFlows } from "../lib/callFlows";
+import { useCallFlowCatalog, useCallFlows } from "../lib/callFlows";
 import { AiAgentVoice } from "./AiAgentVoice";
 import { PhoneInput, phoneInputOk } from "./PhoneInput";
 import { useConfirm } from "./confirm";
@@ -341,15 +341,7 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
                 />
               </Field>
               <Field label={`Maximum duration (${fmt(f.maxDurationSec)}, hard stop)`}>
-                <input
-                  type="range"
-                  className="w-full"
-                  min={AI_AGENT_DURATION_LIMITS.minMax}
-                  max={AI_AGENT_DURATION_LIMITS.maxMax}
-                  step={5}
-                  value={f.maxDurationSec}
-                  onChange={(e) => set("maxDurationSec", Number(e.target.value))}
-                />
+                <MaxDuration language={language} value={f.maxDurationSec} onChange={(v) => set("maxDurationSec", v)} error={fieldError("maxDurationSec")} />
               </Field>
             </div>
             <p className="text-xs text-slate-550">
@@ -426,6 +418,58 @@ function ContactFields({ f, set }: { f: Form; set: <K extends keyof Form>(k: K, 
         <PhoneInput value={f.contactPhone} onChange={(v) => set("contactPhone", v)} />
       </Field>
     </div>
+  );
+}
+
+/**
+ * The agent's hard stop: the slider, or any seconds typed in the box. What's typed stays as typed while the form holds
+ * its number, and the rule turns red in place, so typing "345" doesn't move the page. The voice backend's own limit
+ * wins when a call is placed, so a higher value is reported here instead of the call just stopping early.
+ */
+function MaxDuration({ language, value, onChange, error }: { language: AiCallLanguage; value: number; onChange: (sec: number) => void; error?: string }) {
+  const [typed, setTyped] = useState<string | null>(null);
+  const { minMax: min, maxMax: max } = AI_AGENT_DURATION_LIMITS;
+  const serverMax = useCallFlowCatalog(language).data?.limits?.max_duration_sec;
+  return (
+    <>
+      <div className="flex items-center gap-3">
+        <input
+          type="range"
+          className="min-w-0 flex-1"
+          aria-label="Maximum duration"
+          min={min}
+          max={max}
+          step={5}
+          value={value}
+          onChange={(e) => {
+            setTyped(null);
+            onChange(Number(e.target.value));
+          }}
+        />
+        <input
+          type="number"
+          inputMode="numeric"
+          className="input w-20"
+          aria-label="Maximum duration in seconds"
+          aria-invalid={!!error}
+          min={min}
+          max={max}
+          step={5}
+          value={typed ?? value}
+          onChange={(e) => {
+            setTyped(e.target.value);
+            onChange(Number(e.target.value));
+          }}
+        />
+      </div>
+      <p className={`mt-1 text-xs ${error ? "font-semibold text-crit" : "text-slate-550"}`}>{error ?? `Or type the seconds (${min} to ${max})`}</p>
+      {!error && serverMax !== undefined && value > serverMax && (
+        <p className="mt-1 text-xs text-warn">
+          The {AI_CALL_LANGUAGE_NAMES[language]} voice backend stops every call at {fmt(serverMax)} (MAX_CALL_DURATION_SECONDS), so this agent's calls stop
+          there. Raise that value in its .env to go longer.
+        </p>
+      )}
+    </>
   );
 }
 

@@ -635,6 +635,43 @@ describe("Voice speed (Settings → AI Voice): each agent's own, followed by its
   });
 });
 
+describe("Maximum duration (Call settings): typed by hand, followed by the agent's flow", () => {
+  let n = 0;
+  beforeEach(() => void (adminSub = `u-admin-max-${++n}`));
+  afterAll(() => void (adminSub = "u-ADMIN"));
+  const made = async (max: number) =>
+    (await createAgent("en", { ...AGENT, targetDurationSec: 45, maxDurationSec: max })) as unknown as { id: string; maxDurationSec: number };
+  const get = async (id: string) => (await (await req("GET", `/api/ai-agents/${id}`)).json()) as { maxDurationSec: number; unpublishedChanges: boolean };
+  const lastPublished = () => (previews.at(-1)!.flow as { limits: { max_duration_sec: number } }).limits.max_duration_sec;
+
+  it("a typed maximum is kept and published exactly, the limits included", async () => {
+    for (const max of [45, 345, 600]) {
+      const a = await made(max);
+      expect((await get(a.id)).maxDurationSec).toBe(max);
+      expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
+      expect(lastPublished()).toBe(max);
+    }
+  });
+
+  it("a new maximum reaches calls with the next publish, and shows as unpublished until then", async () => {
+    const a = await made(105);
+    expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
+    await req("PUT", `/api/ai-agents/${a.id}`, { agent: { ...AGENT, targetDurationSec: 45, maxDurationSec: 345 } });
+    expect(await get(a.id)).toMatchObject({ maxDurationSec: 345, unpublishedChanges: true });
+    expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
+    expect(lastPublished()).toBe(345);
+  });
+
+  it("refuses a maximum outside the limits, and the saved one stays", async () => {
+    for (const bad of [44, 601]) {
+      expect((await req("POST", "/api/ai-agents", { language: "en", agent: { ...AGENT, targetDurationSec: 45, maxDurationSec: bad } })).status).toBe(400);
+    }
+    const a = await made(345);
+    expect((await req("PUT", `/api/ai-agents/${a.id}`, { agent: { ...AGENT, targetDurationSec: 45, maxDurationSec: 900 } })).status).toBe(400);
+    expect((await get(a.id)).maxDurationSec).toBe(345);
+  });
+});
+
 describe("Kannada Autonomous AI calls are paused (until native-speaker review)", () => {
   /** An agent of `language` whose own flow already has a live autonomous version (as after a publish). */
   async function liveAgent(language: string, agent: Record<string, unknown> = AGENT) {
