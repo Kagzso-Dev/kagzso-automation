@@ -112,6 +112,9 @@ SCENARIOS: Dict[str, List[Scenario]] = {
         {"name": "busy", "turns": ["நான் இப்போ meeting-ல இருக்கேன், அப்புறம் பேசலாம்."], "end": True, "not_last": [CONTACT_PROMISE]},
         {"name": "whatsapp request", "turns": ["யார் பேசுறீங்க?", "Details-ஐ WhatsApp-ல அனுப்புங்க."], "not_last": [CONTACT_PROMISE, SENT_CLAIM]},
         {"name": "AI question", "turns": ["நீங்க உண்மையான ஆளா இல்ல robot-ஆ?"], "has_last": [r"\bAI\b|ஏஐ|செயற்கை"]},
+        # A real call: the customer only ever gave one word, and the agent kept pitching, then promised a team call.
+        {"name": "short answers only", "turns": ["ஆ", "ஆமா", "சரி இல்ல sir", "சரி சரி சரி", "சரி", "ஆமா"],
+         "not": [TIME_GREETING, IDENTITY_CHECK, CONTACT_PROMISE, SENT_CLAIM]},
     ],
 }
 
