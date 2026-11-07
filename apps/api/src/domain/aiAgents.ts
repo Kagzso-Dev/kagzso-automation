@@ -23,6 +23,7 @@ import {
 import { prisma } from "../prisma.js";
 import { AI_AGENT_COMPILER_VERSION, compileAgentFlow, type CompileKnowledgeItem } from "./aiAgentCompile.js";
 import { itemIssues, type Extraction } from "./aiAgentKnowledge.js";
+import { agentReplySpeed, saveAgentReplySpeed } from "./aiCallVoiceTuning.js";
 import { definitionHash, latestPublished, schemaIssues } from "./callFlows.js";
 import { getSetting, setSetting } from "./settings.js";
 
@@ -43,7 +44,7 @@ const STATUS_VIEW = { DRAFT: "draft", APPROVED: "approved", REJECTED: "rejected"
 // categoryId, customCategory, industryId, customIndustry and businessName (ai_agents) are retired: an agent's calls use
 // each contact's own business. The columns and what agents saved in them stay, never read here and never written, so
 // saving an old agent leaves them as they are.
-function configFromRow(a: AiAgent): Omit<AiAgentConfig, "voiceSpeed"> {
+function configFromRow(a: AiAgent): Omit<AiAgentConfig, "voiceSpeed" | "replySpeed"> {
   return {
     name: a.name,
     mode: a.mode === "GUIDED" ? "guided" : "autonomous",
@@ -67,7 +68,11 @@ function configFromRow(a: AiAgent): Omit<AiAgentConfig, "voiceSpeed"> {
 const voiceSpeedKey = (agentId: string) => `aiAgentVoiceSpeed:${agentId}`;
 
 async function agentConfig(a: AiAgent): Promise<AiAgentConfig> {
-  return { ...configFromRow(a), voiceSpeed: await getSetting(voiceSpeedKey(a.id), AI_AGENT_DEFAULTS.voiceSpeed) };
+  return {
+    ...configFromRow(a),
+    voiceSpeed: await getSetting(voiceSpeedKey(a.id), AI_AGENT_DEFAULTS.voiceSpeed),
+    replySpeed: await agentReplySpeed(a.id, a.language),
+  };
 }
 
 /** The AI's voice as the agent's voice backend lists it (resolved by the caller from GET /api/flows/builtin). */
@@ -179,6 +184,7 @@ export async function createAgent(
   const voice = await voiceData(c.voiceId, null, language, lookupVoice);
   const a = await prisma.aiAgent.create({ data: { ...rowData(c), ...voice, language, createdById: user.id, createdByEmail: user.email } });
   await setSetting(voiceSpeedKey(a.id), c.voiceSpeed);
+  await saveAgentReplySpeed(a.id, language, c.replySpeed);
   return view(a);
 }
 
@@ -190,6 +196,7 @@ export async function updateAgent(id: string, c: AiAgentConfig, lookupVoice: Age
   const voice = await voiceData(c.voiceId, before.voiceId ?? null, language, lookupVoice);
   const a = await prisma.aiAgent.update({ where: { id }, data: { ...rowData(c), ...voice } });
   await setSetting(voiceSpeedKey(a.id), c.voiceSpeed);
+  await saveAgentReplySpeed(a.id, language, c.replySpeed);
   return view(a);
 }
 
@@ -424,8 +431,9 @@ async function approvedKnowledge(agentId: string): Promise<CompileKnowledgeItem[
 /** Hash of everything a publish compiles from (compiler, settings, approved knowledge): differs = unpublished changes. */
 export async function agentInputsHash(a: AiAgent): Promise<string> {
   const knowledge = await approvedKnowledge(a.id);
-  // No voice picked: hashed exactly as before that setting existed.
-  const { voiceId, ...config } = await agentConfig(a);
+  // No voice picked: hashed exactly as before that setting existed. The reply speed is read when a call is dialled, not
+  // published, so it stays out: hashing it would show every published agent as changed.
+  const { voiceId, replySpeed: _dialTimeOnly, ...config } = await agentConfig(a);
   return definitionHash({
     compiler: AI_AGENT_COMPILER_VERSION,
     config: { ...config, ...(voiceId ? { voiceId } : {}) },

@@ -368,3 +368,66 @@ describe("Settings → AI Voice", () => {
     expect(screen.queryByRole("radiogroup", { name: "Voice" })).toBeNull();
   });
 });
+
+describe("Reply speed", () => {
+  const speeds = () => screen.getByRole("radiogroup", { name: "Reply speed" });
+  const checked = () => within(speeds()).getAllByRole("radio").filter((r) => r.getAttribute("aria-checked") === "true").map((r) => r.textContent);
+  const save = () => fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
+  const savedBody = async () => {
+    await waitFor(() => expect(sent.some((s) => s.url.startsWith("/api/ai-agents"))).toBe(true));
+    return sent.find((s) => s.url.startsWith("/api/ai-agents"))!.body.agent as Record<string, unknown>;
+  };
+
+  it("a Tamil agent is offered Use Settings and the presets, right after Voice speed, and starts on Use Settings", async () => {
+    form({ ...AGENT, replySpeed: null, voiceSpeed: 0.9 });
+    await waitFor(() => screen.getByRole("radiogroup", { name: "Voice speed" }));
+    expect(within(speeds()).getAllByRole("radio").map((r) => r.textContent)).toEqual(["Use Settings", "Fast", "Balanced", "Patient", "Current behavior"]);
+    expect(checked()).toEqual(["Use Settings"]);
+    expect(screen.getByRole("radiogroup", { name: "Voice speed" }).compareDocumentPosition(speeds()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText(/This agent follows Settings > Voice response tuning\./)).toBeTruthy();
+  });
+
+  it("saving an untouched agent sends null, so nothing changes for it", async () => {
+    form({ ...AGENT, voiceSpeed: 0.9 }); // saved before this setting: the field is absent
+    await waitFor(() => speeds());
+    save();
+    expect((await savedBody()).replySpeed).toBeNull();
+  });
+
+  it("a pick is saved, says what it does, and the saved one is shown again", async () => {
+    form({ ...AGENT, replySpeed: "patient", voiceSpeed: 0.9 });
+    await waitFor(() => speeds());
+    expect(checked()).toEqual(["Patient"]);
+    fireEvent.click(within(speeds()).getByRole("radio", { name: "Fast" }));
+    expect(checked()).toEqual(["Fast"]);
+    expect(screen.getByText(/Replies soonest\./)).toBeTruthy();
+    save();
+    expect((await savedBody()).replySpeed).toBe("fast");
+  });
+
+  it("Use Settings takes a pick back to null", async () => {
+    form({ ...AGENT, replySpeed: "fast", voiceSpeed: 0.9 });
+    await waitFor(() => speeds());
+    fireEvent.click(within(speeds()).getByRole("radio", { name: "Use Settings" }));
+    save();
+    expect((await savedBody()).replySpeed).toBeNull();
+  });
+
+  it("stays on screen, and saves, when the voice backend can't list its voices", async () => {
+    const real = fetch;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { method?: string; body?: string }) =>
+      url.startsWith("/api/call-flows/builtin") ? json({ message: "The voice backend is not reachable" }, 502) : real(url, init as never),
+    ));
+    form({ ...AGENT, replySpeed: null, voiceSpeed: 0.9 });
+    await waitFor(() => speeds());
+    fireEvent.click(within(speeds()).getByRole("radio", { name: "Patient" }));
+    save();
+    expect((await savedBody()).replySpeed).toBe("patient");
+  });
+
+  it("a language without voice response tuning isn't offered it", async () => {
+    form({ ...AGENT, language: "en", voiceSpeed: 0.9 }, "en");
+    await waitFor(() => screen.getByRole("radiogroup", { name: "Voice speed" }));
+    expect(screen.queryByRole("radiogroup", { name: "Reply speed" })).toBeNull();
+  });
+});

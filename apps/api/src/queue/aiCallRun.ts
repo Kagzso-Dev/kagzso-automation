@@ -179,8 +179,8 @@ export async function processAiCallRun(payload: Record<string, unknown>): Promis
     const greetingDelaySec = greetingDelayOf(run.skipped);
     // Every call carries the contact's business: the voice backend decides how each kind of flow uses it.
     const customerBusiness = await businessForCall(next.id, next.phone, language);
-    // Null for every language without tuning (nothing is read), and for "Current behavior".
-    const voiceTuning = await voiceTuningForCall(language);
+    // Null for every language without tuning (nothing is read), and for "Current behavior". The flow finds an AI Agent's own reply speed.
+    const voiceTuning = await voiceTuningForCall(language, flow?.flowId);
     const { callId, providerCallId } = await placeVoiceCall({
       // Runs without the setting (older runs, test calls) call exactly as before.
       ...(greetingDelaySec != null ? { greetingDelaySec } : {}),

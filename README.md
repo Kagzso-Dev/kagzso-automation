@@ -552,7 +552,8 @@ port 8010 (`VOICE_GATEWAY_PORT`; `scripts/voice-gateway.mjs`): `/ta/…` → Tam
 
 **Settings → Voice response tuning** (admins) sets how a Tamil call waits for the customer: Fast, Balanced (the default),
 Patient, or **Current behavior**, which sends nothing and is an instant rollback. Values are read when each call is
-dialled, for Call Flows and AI Agents alike. With tuning the AI replies quickly after a clearly finished sentence, waits
+dialled, for Call Flows and AI Agents alike, and an autonomous AI Agent can pick its own preset (Reply speed, below).
+With tuning the AI replies quickly after a clearly finished sentence, waits
 longer after an unfinished one (never past the hard cap), and never starts a reply over the customer: a reply that is
 ready waits, and new words join the same turn. A lone sound or stray letter ("aaa", "ம்ம்", "a") never reaches the LLM:
 over the AI it is ignored, and after the AI has finished it gets one fixed, pre-rendered check-in line, at most once in a
@@ -604,6 +605,12 @@ tables and API: no screen, agent or call uses them, and nothing saved in them is
   `autonomous.voice_pace`, and used for every line of the call. The call's time limits don't change with it, so a slow
   speed fits fewer words. An agent published before this setting uses the voice backend's `AGENT_TTS_PACE` until it is
   published again.
+- **Reply speed** is how soon the AI answers once the customer stops talking, and is set per agent under the same
+  **Settings → AI Voice**, for Tamil agents only (the languages with voice response tuning). **Use Settings**, the
+  default, follows Settings → Voice response tuning; Fast, Balanced, Patient and Current behavior override it for that
+  agent. It is kept in the `Setting` table (`aiAgentReplySpeed:<agent id>`, nothing saved for Use Settings) and read when
+  each call is dialled, so it goes out on the existing `voice_tuning` request: nothing is added to the compiled flow, it
+  needs no publish, and it reaches calls still queued in a run.
 - **Maximum duration** is the agent's hard stop: 1 min 45 s by default, set in **Call settings** with the slider or by
   typing seconds (45 to 180, so 3 minutes at most). A Call Flow has its own typed value. Both are followed up to the
   voice backend's `MAX_CALL_DURATION_SECONDS` (180 in `.env.example`), which always wins; the agent and Call Flow forms

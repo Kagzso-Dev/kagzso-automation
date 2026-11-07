@@ -70,6 +70,7 @@ function initial(a: AiAgentView | null, autonomousOk: boolean, language: AiCallL
     // An existing agent keeps its own voice (none = as before); a new one starts with the language's default voice.
     voiceId: a ? (a.voiceId ?? "") : (AI_AGENT_DEFAULT_VOICE[language] ?? ""),
     voiceSpeed: a?.voiceSpeed ?? AI_AGENT_DEFAULTS.voiceSpeed,
+    replySpeed: a?.replySpeed ?? null,
   };
 }
 
@@ -98,6 +99,7 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
     voiceId: f.mode === "autonomous" ? f.voiceId || null : undefined,
     // Likewise the speed; a guided agent doesn't show it, so a speed typed before switching can't block saving.
     voiceSpeed: f.mode === "autonomous" ? f.voiceSpeed : (agent?.voiceSpeed ?? AI_AGENT_DEFAULTS.voiceSpeed),
+    replySpeed: f.mode === "autonomous" ? f.replySpeed : (agent?.replySpeed ?? null),
   };
   const check = aiAgentInput.safeParse(body);
   const fieldError = (k: string) => (!check.success ? check.error.issues.find((i) => i.path[0] === k)?.message : undefined);
@@ -227,6 +229,8 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
               speed={f.voiceSpeed}
               onSpeedChange={(v) => set("voiceSpeed", v)}
               speedError={fieldError("voiceSpeed")}
+              replySpeed={f.replySpeed}
+              onReplySpeedChange={(v) => set("replySpeed", v)}
               executiveName={f.executiveName}
             />
           </Section>

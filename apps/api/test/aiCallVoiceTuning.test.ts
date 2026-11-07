@@ -23,7 +23,15 @@ import {
 
 const settings = new Map<string, unknown>();
 const reads: string[] = [];
-const db = vi.hoisted(() => ({ setting: {} as Record<string, unknown> }));
+const agentsByFlow = new Map<string, string>(); // callFlowId -> agent id
+const db = vi.hoisted(() => ({ setting: {} as Record<string, unknown>, aiAgent: {} as Record<string, unknown> }));
+db.aiAgent = {
+  findUnique: async ({ where }: { where: { callFlowId: string } }) => {
+    reads.push(`agent of ${where.callFlowId}`);
+    const id = agentsByFlow.get(where.callFlowId);
+    return id ? { id } : null;
+  },
+};
 db.setting = {
   findUnique: async ({ where }: { where: { key: string } }) => {
     reads.push(where.key);
@@ -43,6 +51,7 @@ const OTHER_LANGUAGES = AI_CALL_LANGUAGES.filter((l) => l !== "ta");
 
 beforeEach(() => {
   settings.clear();
+  agentsByFlow.clear();
   reads.length = 0;
 });
 
@@ -134,6 +143,78 @@ describe("what a call is sent", () => {
     };
     expect((await forCall("ta"))?.preset).toBe("balanced");
     db.setting.findUnique = original;
+  });
+});
+
+describe("an AI agent's own reply speed", () => {
+  const forCall = async (language: string, flowId?: string | null) =>
+    (await import("../src/domain/aiCallVoiceTuning.js")).voiceTuningForCall(language as "ta", flowId);
+  const AGENT_KEY = "aiAgentReplySpeed:ag1";
+  beforeEach(() => void agentsByFlow.set("flow-of-ag1", "ag1"));
+
+  it("no pick: exactly the language's setting, on an agent's flow as on any other", async () => {
+    settings.set(KEY, voiceTuningPreset("patient"));
+    expect(await forCall("ta", "flow-of-ag1")).toEqual(await forCall("ta", "some-other-flow"));
+    expect((await forCall("ta", "flow-of-ag1"))?.preset).toBe("patient");
+  });
+
+  it("a pick wins over the language's setting, and only on that agent's flow", async () => {
+    settings.set(KEY, voiceTuningPreset("patient"));
+    settings.set(AGENT_KEY, "fast");
+    expect(await forCall("ta", "flow-of-ag1")).toEqual(voiceTuningPayload(voiceTuningPreset("fast")));
+    expect((await forCall("ta", "some-other-flow"))?.preset).toBe("patient");
+    expect((await forCall("ta"))?.preset).toBe("patient");
+    expect((await forCall("ta", null))?.preset).toBe("patient");
+  });
+
+  it("Current behavior sends nothing for that agent, whatever the language's setting", async () => {
+    settings.set(KEY, voiceTuningPreset("fast"));
+    settings.set(AGENT_KEY, "current");
+    expect(await forCall("ta", "flow-of-ag1")).toBeNull();
+  });
+
+  it("read on every call, so a new pick reaches the next one", async () => {
+    settings.set(AGENT_KEY, "fast");
+    expect((await forCall("ta", "flow-of-ag1"))?.preset).toBe("fast");
+    settings.set(AGENT_KEY, "patient");
+    expect((await forCall("ta", "flow-of-ag1"))?.preset).toBe("patient");
+  });
+
+  it.each([["custom"], ["turbo"], [1.2], [{ preset: "fast" }]])("an unreadable saved value (%j) follows the language's setting", async (bad) => {
+    settings.set(KEY, voiceTuningPreset("patient"));
+    settings.set(AGENT_KEY, bad);
+    expect((await forCall("ta", "flow-of-ag1"))?.preset).toBe("patient");
+  });
+
+  it.each(OTHER_LANGUAGES)("%s: still nothing, and neither the agent nor Settings is read", async (language) => {
+    settings.set(AGENT_KEY, "fast");
+    expect(await forCall(language, "flow-of-ag1")).toBeNull();
+    expect(reads).toEqual([]);
+  });
+
+  it("an agent that can't be read uses Balanced: tuning never stops a call", async () => {
+    const original = db.aiAgent.findUnique;
+    db.aiAgent.findUnique = async () => {
+      throw new Error("database down");
+    };
+    expect((await forCall("ta", "flow-of-ag1"))?.preset).toBe("balanced");
+    db.aiAgent.findUnique = original;
+  });
+
+  it("saving a pick, and removing it with null; a language without tuning saves nothing", async () => {
+    const { agentReplySpeed, saveAgentReplySpeed } = await import("../src/domain/aiCallVoiceTuning.js");
+    await saveAgentReplySpeed("ag1", "ta", "fast");
+    expect(settings.get(AGENT_KEY)).toBe("fast");
+    expect(await agentReplySpeed("ag1", "ta")).toBe("fast");
+    await saveAgentReplySpeed("ag1", "ta", null);
+    expect(settings.has(AGENT_KEY)).toBe(false);
+    expect(await agentReplySpeed("ag1", "ta")).toBeNull();
+
+    reads.length = 0;
+    await saveAgentReplySpeed("ag2", "en", "fast");
+    expect(settings.has("aiAgentReplySpeed:ag2")).toBe(false);
+    expect(await agentReplySpeed("ag2", "en")).toBeNull();
+    expect(reads).toEqual([]);
   });
 });
 

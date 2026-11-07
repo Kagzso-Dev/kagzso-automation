@@ -40,7 +40,8 @@ export function VoiceResponseTuningSection() {
       <h2 className="settings-heading">Voice response tuning</h2>
       <div className="settings-card space-y-3">
         <p className="text-slate-550">
-          How long the AI waits for the customer before it replies, and how fast it answers once they have finished. Applies from the next call.
+          How long the AI waits for the customer before it replies, and how fast it answers once they have finished. Applies from the next call,
+          except for an AI agent that has picked its own Reply speed.
         </p>
         {list.isLoading ? (
           <Spinner />

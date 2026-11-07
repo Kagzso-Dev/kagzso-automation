@@ -10,6 +10,7 @@ const db = vi.hoisted(() => ({
   aiCallLog: { findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn(), groupBy: vi.fn(), findMany: vi.fn(), updateMany: vi.fn() },
   // Settings → AI call languages (read only for runs of another language than English).
   setting: { findUnique: vi.fn() },
+  aiAgent: { findUnique: vi.fn() }, // the agent behind a tuned call's flow (its own reply speed)
   $transaction: vi.fn(async (ops: unknown[]) => Promise.all(ops)),
 }));
 const voice = vi.hoisted(() => ({ getVoiceCall: vi.fn(), placeVoiceCall: vi.fn() }));
@@ -228,6 +229,20 @@ describe("processAiCallRun (characterization)", () => {
     logs({});
     await deferredMs(processAiCallRun({ runId: "r1" }));
     expect(voice.placeVoiceCall.mock.calls[0]![0].voiceTuning).toMatchObject({ preset: "balanced", end_of_speech_silence_ms: 900 });
+  });
+
+  it("voice response tuning: a Tamil call uses the reply speed of the agent behind its flow", async () => {
+    helpers.pinnedFlowForRun.mockResolvedValue({ flowId: "f1", version: 3, language: "ta" });
+    logs({});
+    db.aiAgent.findUnique.mockResolvedValueOnce({ id: "ag1" });
+    const earlier = db.setting.findUnique.getMockImplementation();
+    db.setting.findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
+      where.key === "aiAgentReplySpeed:ag1" ? { key: where.key, value: "fast" } : null,
+    );
+    await deferredMs(processAiCallRun({ runId: "r1" }));
+    db.setting.findUnique.mockImplementation(earlier as never);
+    expect(db.aiAgent.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { callFlowId: "f1" } }));
+    expect(voice.placeVoiceCall.mock.calls[0]![0].voiceTuning).toMatchObject({ preset: "fast", end_of_speech_silence_ms: 750 });
   });
 
   it.each([undefined, "hi", "te", "kn"])("voice response tuning: a call in %s is sent nothing new", async (language) => {

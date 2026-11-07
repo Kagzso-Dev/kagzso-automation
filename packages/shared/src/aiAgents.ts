@@ -17,6 +17,7 @@
 
 import { z } from "zod";
 import { aiCallLanguage, type AiCallLanguage } from "./aiCallLanguages.js";
+import { VOICE_TUNING_PRESETS } from "./aiCallVoiceTuning.js";
 
 export const AI_AGENT_MODES = ["guided", "autonomous"] as const;
 export type AiAgentMode = (typeof AI_AGENT_MODES)[number];
@@ -148,6 +149,8 @@ export const aiAgentInput = z
       .min(AI_AGENT_VOICE_SPEED_LIMITS.min, VOICE_SPEED_RULE)
       .max(AI_AGENT_VOICE_SPEED_LIMITS.max, VOICE_SPEED_RULE)
       .default(AI_AGENT_DEFAULTS.voiceSpeed),
+    /** Autonomous, in a language with voice response tuning: how soon the AI answers. Null = the language's setting. */
+    replySpeed: z.enum(VOICE_TUNING_PRESETS).nullable().default(null),
   })
   .strict()
   .superRefine((a, ctx) => {

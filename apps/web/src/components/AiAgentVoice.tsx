@@ -9,8 +9,13 @@ import {
   AI_AGENT_VOICE_SPEED_LIMITS,
   AI_AGENT_VOICE_SPEEDS,
   AI_CALL_LANGUAGE_NAMES,
+  isVoiceTuningLanguage,
+  VOICE_TUNING_PRESET_HINTS,
+  VOICE_TUNING_PRESET_LABELS,
+  VOICE_TUNING_PRESETS,
   type AiAgentVoiceGender,
   type AiCallLanguage,
+  type VoiceTuningPreset,
 } from "@dispatch/shared";
 import { useCallFlowCatalog, type VoiceOption } from "../lib/callFlows";
 import { VoicePicker } from "./VoicePicker";
@@ -77,6 +82,40 @@ function VoiceSpeed({ speed, onChange, error }: { speed: number; onChange: (spee
 }
 
 /**
+ * How soon the AI answers once the customer stops talking: a preset of Settings > Voice response tuning, or that setting
+ * itself, the default. It is read when each call is dialled, so unlike the voice speed it needs no publish.
+ */
+function ReplySpeed({ speed, onChange }: { speed: VoiceTuningPreset | null; onChange: (speed: VoiceTuningPreset | null) => void }) {
+  const choices = [
+    { value: null, label: "Use Settings" },
+    ...VOICE_TUNING_PRESETS.map((p) => ({ value: p, label: VOICE_TUNING_PRESET_LABELS[p] })),
+  ];
+  return (
+    <div>
+      <label className="label">Reply speed</label>
+      <div role="radiogroup" aria-label="Reply speed" className="flex flex-wrap gap-2">
+        {choices.map((c) => (
+          <button
+            key={c.label}
+            type="button"
+            role="radio"
+            aria-checked={speed === c.value}
+            onClick={() => onChange(c.value)}
+            className={`rounded-lg border px-3 py-1.5 ${speed === c.value ? "border-accent bg-tint font-semibold" : "border-line"}`}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+      <p className="mt-1 text-xs text-slate-550">
+        How soon the AI answers once the customer stops talking. {speed ? VOICE_TUNING_PRESET_HINTS[speed] : "This agent follows Settings > Voice response tuning."}{" "}
+        Applies from the next call, with no publish needed.
+      </p>
+    </div>
+  );
+}
+
+/**
  * Settings → AI Voice (autonomous agents): the AI's own voice, from the voices the language's voice backend offers
  * with a gender (its list is the only one). Female / Male only filters the list; picking a voice changes the form,
  * saved with "Save settings". Listen plays a sample (text-to-speech only, never a call), at the speed picked here.
@@ -89,6 +128,8 @@ export function AiAgentVoice({
   speed,
   onSpeedChange,
   speedError,
+  replySpeed,
+  onReplySpeedChange,
   executiveName,
 }: {
   language: AiCallLanguage;
@@ -100,12 +141,23 @@ export function AiAgentVoice({
   onSpeedChange: (speed: number) => void;
   /** What's wrong with a typed speed: Listen waits for a valid one, as saving does. */
   speedError?: string;
+  /** This agent's own reply speed; null = the language's setting. Offered only in a language with voice response tuning. */
+  replySpeed: VoiceTuningPreset | null;
+  onReplySpeedChange: (speed: VoiceTuningPreset | null) => void;
   executiveName: string;
 }) {
   const catalog = useCallFlowCatalog(language);
   const [picked, setPicked] = useState<AiAgentVoiceGender | null>(null);
-  if (catalog.isLoading) return <Spinner />;
-  if (catalog.error) return <ErrorNote error={catalog.error} />;
+  // Needs nothing from the voice backend, so it stays on screen while the voices load or can't be listed.
+  const reply = isVoiceTuningLanguage(language) ? <ReplySpeed speed={replySpeed} onChange={onReplySpeedChange} /> : null;
+  if (catalog.isLoading || catalog.error) {
+    return (
+      <div className="space-y-3">
+        {catalog.error ? <ErrorNote error={catalog.error} /> : <Spinner />}
+        {reply}
+      </div>
+    );
+  }
 
   const all = catalog.data?.voices ?? [];
   const preferred = AI_AGENT_DEFAULT_VOICE[language];
@@ -175,6 +227,7 @@ export function AiAgentVoice({
         />
       )}
       <VoiceSpeed speed={speed} onChange={onSpeedChange} error={speedError} />
+      {reply}
       {!value && (
         <p className="text-xs text-slate-550">
           No voice picked: calls use {where}'s default voice{backendDefault ? ` (${backendDefault.name})` : ""}, as before.

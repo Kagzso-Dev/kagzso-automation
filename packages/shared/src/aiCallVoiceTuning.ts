@@ -5,6 +5,8 @@
 //
 // The values are read when a call is dialled and go with that call only (voice backend: OutboundCallRequest.voice_tuning).
 // "Current behavior" sends nothing at all, so it is an exact rollback. No saved value = Balanced.
+// An autonomous AI Agent may pick its own preset (Reply speed, under AI Voice): no pick = the language's setting. It is
+// read when the call is dialled as well, so it never touches the compiled flow and needs no publish.
 
 import { z } from "zod";
 import type { AiCallLanguage } from "./aiCallLanguages.js";
@@ -98,6 +100,11 @@ export function readVoiceTuning(saved: unknown): VoiceTuningSetting {
   if (!parsed.success) return voiceTuningPreset(VOICE_TUNING_DEFAULT_PRESET);
   // A preset always means its own numbers, so a later change to a preset reaches everyone who picked it.
   return parsed.data.preset === "custom" ? parsed.data : voiceTuningPreset(parsed.data.preset);
+}
+
+/** An agent's saved reply speed: its preset, or null for anything else (the language's setting applies, never an error). */
+export function readAgentReplySpeed(saved: unknown): VoiceTuningPreset | null {
+  return (VOICE_TUNING_PRESETS as readonly unknown[]).includes(saved) ? (saved as VoiceTuningPreset) : null;
 }
 
 /** What goes on the call to the voice backend. */
