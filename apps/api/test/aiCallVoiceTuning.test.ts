@@ -150,6 +150,7 @@ describe("an AI agent's own reply speed", () => {
   const forCall = async (language: string, flowId?: string | null) =>
     (await import("../src/domain/aiCallVoiceTuning.js")).voiceTuningForCall(language as "ta", flowId);
   const AGENT_KEY = "aiAgentReplySpeed:ag1";
+  const MANUAL = { ...voiceTuningPreset("balanced"), preset: "custom" as const, finishedSilenceMs: 500, endOfSpeechSilenceMs: 1000, hardCapMs: 1800 };
   beforeEach(() => void agentsByFlow.set("flow-of-ag1", "ag1"));
 
   it("no pick: exactly the language's setting, on an agent's flow as on any other", async () => {
@@ -160,34 +161,57 @@ describe("an AI agent's own reply speed", () => {
 
   it("a pick wins over the language's setting, and only on that agent's flow", async () => {
     settings.set(KEY, voiceTuningPreset("patient"));
-    settings.set(AGENT_KEY, "fast");
+    settings.set(AGENT_KEY, voiceTuningPreset("fast"));
     expect(await forCall("ta", "flow-of-ag1")).toEqual(voiceTuningPayload(voiceTuningPreset("fast")));
     expect((await forCall("ta", "some-other-flow"))?.preset).toBe("patient");
     expect((await forCall("ta"))?.preset).toBe("patient");
     expect((await forCall("ta", null))?.preset).toBe("patient");
   });
 
+  it("Manual: the waits go to the call exactly as typed", async () => {
+    settings.set(KEY, voiceTuningPreset("fast"));
+    settings.set(AGENT_KEY, MANUAL);
+    expect(await forCall("ta", "flow-of-ag1")).toEqual({
+      preset: "custom",
+      finished_silence_ms: 500,
+      end_of_speech_silence_ms: 1000,
+      extra_wait_if_incomplete_ms: 500,
+      hard_cap_ms: 1800,
+      min_words_before_reply: 1,
+    });
+  });
+
+  it("a saved preset always means its own numbers, and a bare name (the first version's) still reads", async () => {
+    settings.set(AGENT_KEY, { ...voiceTuningPreset("fast"), endOfSpeechSilenceMs: 999 });
+    expect((await forCall("ta", "flow-of-ag1"))?.end_of_speech_silence_ms).toBe(750);
+    settings.set(AGENT_KEY, "patient");
+    expect(await forCall("ta", "flow-of-ag1")).toEqual(voiceTuningPayload(voiceTuningPreset("patient")));
+  });
+
   it("Current behavior sends nothing for that agent, whatever the language's setting", async () => {
     settings.set(KEY, voiceTuningPreset("fast"));
-    settings.set(AGENT_KEY, "current");
+    settings.set(AGENT_KEY, voiceTuningPreset("current"));
     expect(await forCall("ta", "flow-of-ag1")).toBeNull();
   });
 
   it("read on every call, so a new pick reaches the next one", async () => {
-    settings.set(AGENT_KEY, "fast");
+    settings.set(AGENT_KEY, voiceTuningPreset("fast"));
     expect((await forCall("ta", "flow-of-ag1"))?.preset).toBe("fast");
-    settings.set(AGENT_KEY, "patient");
-    expect((await forCall("ta", "flow-of-ag1"))?.preset).toBe("patient");
+    settings.set(AGENT_KEY, MANUAL);
+    expect((await forCall("ta", "flow-of-ag1"))?.end_of_speech_silence_ms).toBe(1000);
   });
 
-  it.each([["custom"], ["turbo"], [1.2], [{ preset: "fast" }]])("an unreadable saved value (%j) follows the language's setting", async (bad) => {
-    settings.set(KEY, voiceTuningPreset("patient"));
-    settings.set(AGENT_KEY, bad);
-    expect((await forCall("ta", "flow-of-ag1"))?.preset).toBe("patient");
-  });
+  it.each([["custom"], ["turbo"], [1.2], [{ preset: "fast" }], [{ ...MANUAL, hardCapMs: 9999 }], [{ ...MANUAL, finishedSilenceMs: 1500 }]])(
+    "an unreadable saved value (%j) follows the language's setting",
+    async (bad) => {
+      settings.set(KEY, voiceTuningPreset("patient"));
+      settings.set(AGENT_KEY, bad);
+      expect((await forCall("ta", "flow-of-ag1"))?.preset).toBe("patient");
+    },
+  );
 
   it.each(OTHER_LANGUAGES)("%s: still nothing, and neither the agent nor Settings is read", async (language) => {
-    settings.set(AGENT_KEY, "fast");
+    settings.set(AGENT_KEY, MANUAL);
     expect(await forCall(language, "flow-of-ag1")).toBeNull();
     expect(reads).toEqual([]);
   });
@@ -201,17 +225,19 @@ describe("an AI agent's own reply speed", () => {
     db.aiAgent.findUnique = original;
   });
 
-  it("saving a pick, and removing it with null; a language without tuning saves nothing", async () => {
+  it("saving a pick or Manual waits, and removing it with null; a language without tuning saves nothing", async () => {
     const { agentReplySpeed, saveAgentReplySpeed } = await import("../src/domain/aiCallVoiceTuning.js");
-    await saveAgentReplySpeed("ag1", "ta", "fast");
-    expect(settings.get(AGENT_KEY)).toBe("fast");
-    expect(await agentReplySpeed("ag1", "ta")).toBe("fast");
+    await saveAgentReplySpeed("ag1", "ta", voiceTuningPreset("fast"));
+    expect(await agentReplySpeed("ag1", "ta")).toEqual(voiceTuningPreset("fast"));
+    await saveAgentReplySpeed("ag1", "ta", MANUAL);
+    expect(settings.get(AGENT_KEY)).toEqual(MANUAL);
+    expect(await agentReplySpeed("ag1", "ta")).toEqual(MANUAL);
     await saveAgentReplySpeed("ag1", "ta", null);
     expect(settings.has(AGENT_KEY)).toBe(false);
     expect(await agentReplySpeed("ag1", "ta")).toBeNull();
 
     reads.length = 0;
-    await saveAgentReplySpeed("ag2", "en", "fast");
+    await saveAgentReplySpeed("ag2", "en", MANUAL);
     expect(settings.has("aiAgentReplySpeed:ag2")).toBe(false);
     expect(await agentReplySpeed("ag2", "en")).toBeNull();
     expect(reads).toEqual([]);

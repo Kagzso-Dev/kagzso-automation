@@ -608,7 +608,10 @@ tables and API: no screen, agent or call uses them, and nothing saved in them is
 - **Reply speed** is how soon the AI answers once the customer stops talking, and is set per agent under the same
   **Settings → AI Voice**, for Tamil agents only (the languages with voice response tuning). **Use Settings**, the
   default, follows Settings → Voice response tuning; Fast, Balanced, Patient and Current behavior override it for that
-  agent. It is kept in the `Setting` table (`aiAgentReplySpeed:<agent id>`, nothing saved for Use Settings) and read when
+  agent, and **Manual** takes the waits typed by hand (after a finished sentence, end of speech, extra for an unfinished
+  sentence, hard cap; the same limits as Settings), starting from the speed picked before it. It is kept in the
+  `Setting` table (`aiAgentReplySpeed:<agent id>`, the same shape Settings saves, nothing saved for Use Settings; a bare
+  preset name saved by the first version still reads as that preset) and read when
   each call is dialled, so it goes out on the existing `voice_tuning` request: nothing is added to the compiled flow, it
   needs no publish, and it reaches calls still queued in a run.
 - **Maximum duration** is the agent's hard stop: 1 min 45 s by default, set in **Call settings** with the slider or by

@@ -10,12 +10,16 @@ import {
   AI_AGENT_VOICE_SPEEDS,
   AI_CALL_LANGUAGE_NAMES,
   isVoiceTuningLanguage,
+  VOICE_TUNING_DEFAULT_PRESET,
+  VOICE_TUNING_LIMITS,
   VOICE_TUNING_PRESET_HINTS,
   VOICE_TUNING_PRESET_LABELS,
   VOICE_TUNING_PRESETS,
+  voiceTuningPreset,
+  voiceTuningSetting,
   type AiAgentVoiceGender,
   type AiCallLanguage,
-  type VoiceTuningPreset,
+  type VoiceTuningSetting,
 } from "@dispatch/shared";
 import { useCallFlowCatalog, type VoiceOption } from "../lib/callFlows";
 import { VoicePicker } from "./VoicePicker";
@@ -81,15 +85,42 @@ function VoiceSpeed({ speed, onChange, error }: { speed: number; onChange: (spee
   );
 }
 
+type ReplyField = "finishedSilenceMs" | "endOfSpeechSilenceMs" | "extraWaitIfIncompleteMs" | "hardCapMs";
+/** Manual reply speed: the waits of Settings > Voice response tuning (Advanced), plus the wait after a finished sentence. */
+const REPLY_FIELDS: { key: ReplyField; label: string }[] = [
+  { key: "finishedSilenceMs", label: "Wait after a finished sentence (ms)" },
+  { key: "endOfSpeechSilenceMs", label: "End-of-speech wait (ms)" },
+  { key: "extraWaitIfIncompleteMs", label: "Extra wait for unfinished sentences (ms)" },
+  { key: "hardCapMs", label: "Hard cap on waiting (ms, 0 = no cap)" },
+];
+type ReplyChoice = VoiceTuningSetting["preset"] | null;
+
 /**
- * How soon the AI answers once the customer stops talking: a preset of Settings > Voice response tuning, or that setting
- * itself, the default. It is read when each call is dialled, so unlike the voice speed it needs no publish.
+ * How soon the AI answers once the customer stops talking: Use Settings (the default: Settings > Voice response tuning),
+ * one of its presets, or Manual, the same waits typed by hand. Manual starts from the speed picked before it (Balanced,
+ * the default, after Use Settings). It is read when each call is dialled, so unlike the voice speed it needs no publish.
  */
-function ReplySpeed({ speed, onChange }: { speed: VoiceTuningPreset | null; onChange: (speed: VoiceTuningPreset | null) => void }) {
-  const choices = [
+function ReplySpeed({ speed, onChange }: { speed: VoiceTuningSetting | null; onChange: (speed: VoiceTuningSetting | null) => void }) {
+  const picked: ReplyChoice = speed?.preset ?? null;
+  const choices: { value: ReplyChoice; label: string }[] = [
     { value: null, label: "Use Settings" },
     ...VOICE_TUNING_PRESETS.map((p) => ({ value: p, label: VOICE_TUNING_PRESET_LABELS[p] })),
+    { value: "custom", label: "Manual" },
   ];
+  function choose(value: ReplyChoice) {
+    if (value === null) onChange(null);
+    else if (value === "custom") onChange({ ...(speed ?? voiceTuningPreset(VOICE_TUNING_DEFAULT_PRESET)), preset: "custom" });
+    else onChange(voiceTuningPreset(value));
+  }
+  const manual = speed?.preset === "custom" ? speed : null;
+  const check = manual ? voiceTuningSetting.safeParse(manual) : null;
+  const fieldError = (k: ReplyField) => (check && !check.success ? check.error.issues.find((i) => i.path[0] === k)?.message : undefined);
+  const hint =
+    picked === null
+      ? "This agent follows Settings > Voice response tuning."
+      : picked === "custom"
+        ? "Your own waits below: lower numbers answer sooner, higher ones give a customer who pauses more time."
+        : VOICE_TUNING_PRESET_HINTS[picked];
   return (
     <div>
       <label className="label">Reply speed</label>
@@ -99,18 +130,48 @@ function ReplySpeed({ speed, onChange }: { speed: VoiceTuningPreset | null; onCh
             key={c.label}
             type="button"
             role="radio"
-            aria-checked={speed === c.value}
-            onClick={() => onChange(c.value)}
-            className={`rounded-lg border px-3 py-1.5 ${speed === c.value ? "border-accent bg-tint font-semibold" : "border-line"}`}
+            aria-checked={picked === c.value}
+            onClick={() => choose(c.value)}
+            className={`rounded-lg border px-3 py-1.5 ${picked === c.value ? "border-accent bg-tint font-semibold" : "border-line"}`}
           >
             {c.label}
           </button>
         ))}
       </div>
       <p className="mt-1 text-xs text-slate-550">
-        How soon the AI answers once the customer stops talking. {speed ? VOICE_TUNING_PRESET_HINTS[speed] : "This agent follows Settings > Voice response tuning."}{" "}
-        Applies from the next call, with no publish needed.
+        How soon the AI answers once the customer stops talking. {hint} Applies from the next call, with no publish needed.
       </p>
+      {manual && (
+        // Two columns: every label fits on one line, so the boxes line up.
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          {REPLY_FIELDS.map(({ key, label }) => {
+            const { min, max } = VOICE_TUNING_LIMITS[key];
+            const value = manual[key];
+            const error = fieldError(key);
+            return (
+              <div key={key}>
+                <label className="label" htmlFor={`reply-speed-${key}`}>
+                  {label}
+                </label>
+                <input
+                  id={`reply-speed-${key}`}
+                  type="number"
+                  inputMode="numeric"
+                  className="input"
+                  min={min}
+                  max={max}
+                  step={50}
+                  aria-invalid={!!error}
+                  value={Number.isNaN(value) ? "" : value}
+                  onChange={(e) => onChange({ ...manual, [key]: e.target.valueAsNumber })}
+                />
+                {/* The range turns into the error in place, so typing "900" doesn't push the page down on the way through "9". */}
+                <p className={`mt-1 text-xs ${error ? "font-semibold text-crit" : "text-slate-550"}`}>{error ?? `${min} to ${max}`}</p>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -142,8 +203,8 @@ export function AiAgentVoice({
   /** What's wrong with a typed speed: Listen waits for a valid one, as saving does. */
   speedError?: string;
   /** This agent's own reply speed; null = the language's setting. Offered only in a language with voice response tuning. */
-  replySpeed: VoiceTuningPreset | null;
-  onReplySpeedChange: (speed: VoiceTuningPreset | null) => void;
+  replySpeed: VoiceTuningSetting | null;
+  onReplySpeedChange: (speed: VoiceTuningSetting | null) => void;
   executiveName: string;
 }) {
   const catalog = useCallFlowCatalog(language);

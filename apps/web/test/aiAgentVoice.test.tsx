@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { AiAgentView, AiCallLanguage } from "@dispatch/shared";
+import { voiceTuningPreset, type AiAgentView, type AiCallLanguage } from "@dispatch/shared";
 import { AiAgentForm } from "../src/components/AiAgentForm";
 import { ConfirmProvider } from "../src/components/confirm";
 import { ToastProvider } from "../src/components/toast";
@@ -372,45 +372,118 @@ describe("Settings → AI Voice", () => {
 describe("Reply speed", () => {
   const speeds = () => screen.getByRole("radiogroup", { name: "Reply speed" });
   const checked = () => within(speeds()).getAllByRole("radio").filter((r) => r.getAttribute("aria-checked") === "true").map((r) => r.textContent);
-  const save = () => fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
+  const pick = (name: string) => fireEvent.click(within(speeds()).getByRole("radio", { name }));
+  const saveButton = () => screen.getByRole("button", { name: /save settings/i }) as HTMLButtonElement;
+  const save = () => fireEvent.click(saveButton());
   const savedBody = async () => {
     await waitFor(() => expect(sent.some((s) => s.url.startsWith("/api/ai-agents"))).toBe(true));
     return sent.find((s) => s.url.startsWith("/api/ai-agents"))!.body.agent as Record<string, unknown>;
   };
-
-  it("a Tamil agent is offered Use Settings and the presets, right after Voice speed, and starts on Use Settings", async () => {
-    form({ ...AGENT, replySpeed: null, voiceSpeed: 0.9 });
+  const LABELS = {
+    finishedSilenceMs: "Wait after a finished sentence (ms)",
+    endOfSpeechSilenceMs: "End-of-speech wait (ms)",
+    extraWaitIfIncompleteMs: "Extra wait for unfinished sentences (ms)",
+    hardCapMs: "Hard cap on waiting (ms, 0 = no cap)",
+  } as const;
+  const box = (k: keyof typeof LABELS) => screen.getByLabelText(LABELS[k]) as HTMLInputElement;
+  const boxes = () => Object.fromEntries(Object.keys(LABELS).map((k) => [k, box(k as keyof typeof LABELS).value]));
+  const type = (k: keyof typeof LABELS, value: string) => fireEvent.change(box(k), { target: { value } });
+  const loaded = async (agent: Partial<AiAgentView>) => {
+    form({ ...AGENT, voiceSpeed: 0.9, ...agent } as AiAgentView);
     await waitFor(() => screen.getByRole("radiogroup", { name: "Voice speed" }));
-    expect(within(speeds()).getAllByRole("radio").map((r) => r.textContent)).toEqual(["Use Settings", "Fast", "Balanced", "Patient", "Current behavior"]);
+  };
+
+  it("a Tamil agent is offered Use Settings, the presets and Manual, right after Voice speed, and starts on Use Settings", async () => {
+    await loaded({ replySpeed: null });
+    expect(within(speeds()).getAllByRole("radio").map((r) => r.textContent)).toEqual(["Use Settings", "Fast", "Balanced", "Patient", "Current behavior", "Manual"]);
     expect(checked()).toEqual(["Use Settings"]);
     expect(screen.getByRole("radiogroup", { name: "Voice speed" }).compareDocumentPosition(speeds()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByText(/This agent follows Settings > Voice response tuning\./)).toBeTruthy();
+    expect(screen.queryByLabelText(LABELS.endOfSpeechSilenceMs)).toBeNull(); // the waits show only for Manual
   });
 
   it("saving an untouched agent sends null, so nothing changes for it", async () => {
-    form({ ...AGENT, voiceSpeed: 0.9 }); // saved before this setting: the field is absent
-    await waitFor(() => speeds());
+    await loaded({}); // saved before this setting: the field is absent
     save();
     expect((await savedBody()).replySpeed).toBeNull();
   });
 
-  it("a pick is saved, says what it does, and the saved one is shown again", async () => {
-    form({ ...AGENT, replySpeed: "patient", voiceSpeed: 0.9 });
-    await waitFor(() => speeds());
+  it("a preset is saved with its numbers, says what it does, and the saved one is shown again", async () => {
+    await loaded({ replySpeed: voiceTuningPreset("patient") });
     expect(checked()).toEqual(["Patient"]);
-    fireEvent.click(within(speeds()).getByRole("radio", { name: "Fast" }));
+    pick("Fast");
     expect(checked()).toEqual(["Fast"]);
     expect(screen.getByText(/Replies soonest\./)).toBeTruthy();
     save();
-    expect((await savedBody()).replySpeed).toBe("fast");
+    expect((await savedBody()).replySpeed).toEqual(voiceTuningPreset("fast"));
   });
 
   it("Use Settings takes a pick back to null", async () => {
-    form({ ...AGENT, replySpeed: "fast", voiceSpeed: 0.9 });
-    await waitFor(() => speeds());
-    fireEvent.click(within(speeds()).getByRole("radio", { name: "Use Settings" }));
+    await loaded({ replySpeed: voiceTuningPreset("fast") });
+    pick("Use Settings");
     save();
     expect((await savedBody()).replySpeed).toBeNull();
+  });
+
+  it("Manual opens the waits, starting from the speed picked before, and saves what is typed", async () => {
+    await loaded({ replySpeed: voiceTuningPreset("patient") });
+    pick("Manual");
+    expect(checked()).toEqual(["Manual"]);
+    expect(boxes()).toEqual({ finishedSilenceMs: "600", endOfSpeechSilenceMs: "1100", extraWaitIfIncompleteMs: "800", hardCapMs: "2000" });
+    expect(screen.getByText(/Your own waits below/)).toBeTruthy();
+    type("finishedSilenceMs", "500");
+    type("endOfSpeechSilenceMs", "1000");
+    type("hardCapMs", "0");
+    save();
+    expect((await savedBody()).replySpeed).toEqual({ ...voiceTuningPreset("patient"), preset: "custom", finishedSilenceMs: 500, endOfSpeechSilenceMs: 1000, hardCapMs: 0 });
+  });
+
+  it("from Use Settings, Manual starts from Balanced, the default", async () => {
+    await loaded({ replySpeed: null });
+    pick("Manual");
+    expect(boxes()).toEqual({ finishedSilenceMs: "450", endOfSpeechSilenceMs: "900", extraWaitIfIncompleteMs: "500", hardCapMs: "1600" });
+  });
+
+  it("a saved Manual speed is shown again with its own numbers", async () => {
+    await loaded({ replySpeed: { ...voiceTuningPreset("fast"), preset: "custom", endOfSpeechSilenceMs: 820 } });
+    expect(checked()).toEqual(["Manual"]);
+    expect(box("endOfSpeechSilenceMs").value).toBe("820");
+  });
+
+  it("a wait out of range, an empty box or a cap below the end-of-speech wait is shown in place and blocks saving", async () => {
+    await loaded({ replySpeed: null });
+    pick("Manual");
+    expect(screen.getAllByText("300 to 2000", { selector: "p" })).toHaveLength(2); // finished-sentence and end-of-speech waits
+    expect(screen.getByText("0 to 5000", { selector: "p" })).toBeTruthy(); // hard cap
+    type("endOfSpeechSilenceMs", "100");
+    expect(screen.getAllByText("Enter whole numbers from 300 to 2000").length).toBeGreaterThan(0);
+    expect(saveButton().disabled).toBe(true);
+    type("endOfSpeechSilenceMs", "");
+    expect(saveButton().disabled).toBe(true);
+    type("endOfSpeechSilenceMs", "1000");
+    type("hardCapMs", "900");
+    expect(screen.getByText("The hard cap can't be shorter than the end-of-speech wait")).toBeTruthy();
+    expect(saveButton().disabled).toBe(true);
+    type("hardCapMs", "1500");
+    expect(saveButton().disabled).toBe(false);
+  });
+
+  it("picking a preset after Manual hides the waits and saves the preset's own numbers", async () => {
+    await loaded({ replySpeed: { ...voiceTuningPreset("balanced"), preset: "custom", endOfSpeechSilenceMs: 1000 } });
+    pick("Fast");
+    expect(screen.queryByLabelText(LABELS.endOfSpeechSilenceMs)).toBeNull();
+    save();
+    expect((await savedBody()).replySpeed).toEqual(voiceTuningPreset("fast"));
+  });
+
+  it("Voice speed is unchanged beside it: its own levels, typed box and value", async () => {
+    await loaded({ replySpeed: null, voiceSpeed: 1.1 });
+    const voice = screen.getByRole("radiogroup", { name: "Voice speed" });
+    expect(within(voice).getAllByRole("radio").map((r) => r.textContent)).toEqual(["Slow(0.8)", "Relaxed(0.9)", "Normal(1.0)", "Brisk(1.1)", "Fast(1.2)"]);
+    pick("Manual");
+    type("endOfSpeechSilenceMs", "1000");
+    save();
+    expect((await savedBody()).voiceSpeed).toBe(1.1);
   });
 
   it("stays on screen, and saves, when the voice backend can't list its voices", async () => {
@@ -418,15 +491,15 @@ describe("Reply speed", () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { method?: string; body?: string }) =>
       url.startsWith("/api/call-flows/builtin") ? json({ message: "The voice backend is not reachable" }, 502) : real(url, init as never),
     ));
-    form({ ...AGENT, replySpeed: null, voiceSpeed: 0.9 });
+    form({ ...AGENT, replySpeed: null, voiceSpeed: 0.9 } as AiAgentView);
     await waitFor(() => speeds());
-    fireEvent.click(within(speeds()).getByRole("radio", { name: "Patient" }));
+    pick("Patient");
     save();
-    expect((await savedBody()).replySpeed).toBe("patient");
+    expect((await savedBody()).replySpeed).toEqual(voiceTuningPreset("patient"));
   });
 
   it("a language without voice response tuning isn't offered it", async () => {
-    form({ ...AGENT, language: "en", voiceSpeed: 0.9 }, "en");
+    form({ ...AGENT, language: "en", voiceSpeed: 0.9 } as AiAgentView, "en");
     await waitFor(() => screen.getByRole("radiogroup", { name: "Voice speed" }));
     expect(screen.queryByRole("radiogroup", { name: "Reply speed" })).toBeNull();
   });

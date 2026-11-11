@@ -5,8 +5,9 @@
 //
 // The values are read when a call is dialled and go with that call only (voice backend: OutboundCallRequest.voice_tuning).
 // "Current behavior" sends nothing at all, so it is an exact rollback. No saved value = Balanced.
-// An autonomous AI Agent may pick its own preset (Reply speed, under AI Voice): no pick = the language's setting. It is
-// read when the call is dialled as well, so it never touches the compiled flow and needs no publish.
+// An autonomous AI Agent may pick its own (Reply speed, under AI Voice): a preset, or Manual waits in the same shape as
+// "custom" here. No pick = the language's setting. It is read when the call is dialled as well, so it never touches the
+// compiled flow and needs no publish.
 
 import { z } from "zod";
 import type { AiCallLanguage } from "./aiCallLanguages.js";
@@ -102,9 +103,16 @@ export function readVoiceTuning(saved: unknown): VoiceTuningSetting {
   return parsed.data.preset === "custom" ? parsed.data : voiceTuningPreset(parsed.data.preset);
 }
 
-/** An agent's saved reply speed: its preset, or null for anything else (the language's setting applies, never an error). */
-export function readAgentReplySpeed(saved: unknown): VoiceTuningPreset | null {
-  return (VOICE_TUNING_PRESETS as readonly unknown[]).includes(saved) ? (saved as VoiceTuningPreset) : null;
+/**
+ * An AI agent's own reply speed as its form sends it: a preset or Manual ("custom") waits, the same shape Settings saves
+ * for a language. A bare preset name, as the first version of the form sent and saved, means that preset.
+ */
+export const agentReplySpeedInput = z.union([voiceTuningSetting, z.enum(VOICE_TUNING_PRESETS).transform((p) => voiceTuningPreset(p))]);
+
+/** An agent's saved reply speed, or null for anything unreadable: the language's setting then applies, never an error. */
+export function readAgentReplySpeed(saved: unknown): VoiceTuningSetting | null {
+  const parsed = agentReplySpeedInput.safeParse(saved);
+  return parsed.success ? readVoiceTuning(parsed.data) : null;
 }
 
 /** What goes on the call to the voice backend. */

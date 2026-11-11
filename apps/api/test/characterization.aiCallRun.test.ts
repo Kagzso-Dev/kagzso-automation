@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { voiceTuningPreset } from "@dispatch/shared";
 
 // Characterization tests for one iteration of the AI-call run orchestrator
 // (queue/aiCallRun.ts): stop/finish, the gap between calls, do-not-call skips,
@@ -237,12 +238,12 @@ describe("processAiCallRun (characterization)", () => {
     db.aiAgent.findUnique.mockResolvedValueOnce({ id: "ag1" });
     const earlier = db.setting.findUnique.getMockImplementation();
     db.setting.findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
-      where.key === "aiAgentReplySpeed:ag1" ? { key: where.key, value: "fast" } : null,
+      where.key === "aiAgentReplySpeed:ag1" ? { key: where.key, value: { ...voiceTuningPreset("balanced"), preset: "custom", endOfSpeechSilenceMs: 1000 } } : null,
     );
     await deferredMs(processAiCallRun({ runId: "r1" }));
     db.setting.findUnique.mockImplementation(earlier as never);
     expect(db.aiAgent.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { callFlowId: "f1" } }));
-    expect(voice.placeVoiceCall.mock.calls[0]![0].voiceTuning).toMatchObject({ preset: "fast", end_of_speech_silence_ms: 750 });
+    expect(voice.placeVoiceCall.mock.calls[0]![0].voiceTuning).toMatchObject({ preset: "custom", end_of_speech_silence_ms: 1000 });
   });
 
   it.each([undefined, "hi", "te", "kn"])("voice response tuning: a call in %s is sent nothing new", async (language) => {

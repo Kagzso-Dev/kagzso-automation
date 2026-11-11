@@ -16,6 +16,7 @@ import {
   type AiAgentInput,
   type AiAgentView,
   type AiCallLanguage,
+  type VoiceTuningSetting,
 } from "@dispatch/shared";
 import { api } from "../lib/api";
 import { useAiCallLanguage } from "../lib/aiCallLanguage";
@@ -41,6 +42,7 @@ type Form = Required<
     | "callbackNumber"
     | "guidedFlowId"
     | "voiceId"
+    | "replySpeed"
   >
 > & {
   /** "" = no voice picked (the voice backend's default voice). */
@@ -49,6 +51,8 @@ type Form = Required<
   contactPhone: string;
   callbackNumber: string;
   guidedFlowId: string;
+  /** null = Use Settings; else a preset or Manual waits (always sent as the whole setting). */
+  replySpeed: VoiceTuningSetting | null;
 };
 
 function initial(a: AiAgentView | null, autonomousOk: boolean, language: AiCallLanguage): Form {

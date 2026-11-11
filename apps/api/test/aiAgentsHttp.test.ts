@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import jwt from "jsonwebtoken";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { voiceTuningPreset } from "@dispatch/shared";
 
 // AI Agents over HTTP: roles, language scoping, knowledge upload / review, isolation between agents,
 // compile + publish through the (fake) voice backend, and calling through the normal AI call run (stubbed:
@@ -884,9 +885,12 @@ describe("Reply speed (Settings → AI Voice): a Tamil agent's own, read when a 
   let n = 0;
   beforeEach(() => void (adminSub = `u-admin-reply-${++n}`));
   afterAll(() => void (adminSub = "u-ADMIN"));
+  const FAST = voiceTuningPreset("fast");
+  const PATIENT = voiceTuningPreset("patient");
+  const MANUAL = { ...voiceTuningPreset("balanced"), preset: "custom" as const, finishedSilenceMs: 500, endOfSpeechSilenceMs: 1000, hardCapMs: 1800 };
   const key = (id: string) => `aiAgentReplySpeed:${id}`;
   const saved = (id: string) => T("setting").find((s) => s.key === key(id));
-  const get = async (id: string) => (await (await req("GET", `/api/ai-agents/${id}`)).json()) as { replySpeed: string | null; unpublishedChanges: boolean };
+  const get = async (id: string) => (await (await req("GET", `/api/ai-agents/${id}`)).json()) as { replySpeed: unknown; unpublishedChanges: boolean };
   const put = async (id: string, replySpeed: unknown) => (await req("PUT", `/api/ai-agents/${id}`, { agent: { ...AGENT, replySpeed } })).status;
 
   it("a new or untouched agent has none and nothing is saved, so it follows Settings", async () => {
@@ -899,18 +903,33 @@ describe("Reply speed (Settings → AI Voice): a Tamil agent's own, read when a 
   });
 
   it("a picked speed is kept and shown again, one per agent, and Use Settings removes it", async () => {
-    const a = await createAgent("ta", { ...AGENT, replySpeed: "fast" });
+    const a = await createAgent("ta", { ...AGENT, replySpeed: FAST });
     const other = await createAgent("ta");
-    expect(a.replySpeed).toBe("fast");
-    expect(saved(a.id)?.value).toBe("fast");
+    expect(a.replySpeed).toEqual(FAST);
+    expect(saved(a.id)?.value).toEqual(FAST);
     expect((await get(other.id)).replySpeed).toBeNull();
-    expect(((await (await req("GET", "/api/ai-agents?language=ta")).json()) as { id: string; replySpeed: string }[]).find((x) => x.id === a.id)?.replySpeed).toBe("fast");
-    expect(await put(a.id, "patient")).toBe(200);
-    expect((await get(a.id)).replySpeed).toBe("patient");
+    expect(((await (await req("GET", "/api/ai-agents?language=ta")).json()) as { id: string; replySpeed: unknown }[]).find((x) => x.id === a.id)?.replySpeed).toEqual(FAST);
+    expect(await put(a.id, PATIENT)).toBe(200);
+    expect((await get(a.id)).replySpeed).toEqual(PATIENT);
     expect(await put(a.id, null)).toBe(200);
     expect((await get(a.id)).replySpeed).toBeNull();
     expect(saved(a.id)).toBeUndefined();
     expect(T("aiAgent").find((r) => r.id === a.id)).not.toHaveProperty("replySpeed");
+  });
+
+  it("Manual waits are kept as typed and shown again", async () => {
+    const a = await createAgent("ta", { ...AGENT, replySpeed: MANUAL });
+    expect(a.replySpeed).toEqual(MANUAL);
+    expect((await get(a.id)).replySpeed).toEqual(MANUAL);
+    const changed = { ...MANUAL, extraWaitIfIncompleteMs: 0, hardCapMs: 0 }; // 0 = no cap
+    expect(await put(a.id, changed)).toBe(200);
+    expect((await get(a.id)).replySpeed).toEqual(changed);
+  });
+
+  it("a bare preset name, as the first version of the form sent it, is saved as that preset", async () => {
+    const a = await createAgent("ta", { ...AGENT, replySpeed: "fast" });
+    expect(a.replySpeed).toEqual(FAST);
+    expect(saved(a.id)?.value).toEqual(FAST);
   });
 
   it("needs no publish: a published agent stays published, and nothing reaches its flow", async () => {
@@ -918,37 +937,47 @@ describe("Reply speed (Settings → AI Voice): a Tamil agent's own, read when a 
     expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
     expect((await get(a.id)).unpublishedChanges).toBe(false);
     const flow = JSON.stringify(previews.at(-1)!.flow);
-    expect(await put(a.id, "fast")).toBe(200);
-    expect(await get(a.id)).toMatchObject({ replySpeed: "fast", unpublishedChanges: false });
+    expect(await put(a.id, MANUAL)).toBe(200);
+    expect(await get(a.id)).toMatchObject({ replySpeed: MANUAL, unpublishedChanges: false });
     expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
     expect(JSON.stringify(previews.at(-1)!.flow)).toBe(flow);
-    expect(flow).not.toMatch(/reply_?speed/i);
+    expect(flow).not.toMatch(/reply_?speed|silence_?ms/i);
   });
 
   it("the agent's flow carries its pick to the dial; any other agent's follows Settings", async () => {
     const { voiceTuningForCall } = await import("../src/domain/aiCallVoiceTuning.js");
-    const a = await createAgent("ta", { ...AGENT, replySpeed: "patient" });
+    const a = await createAgent("ta", { ...AGENT, replySpeed: MANUAL });
+    const b = await createAgent("ta", { ...AGENT, replySpeed: PATIENT });
     const other = await createAgent("ta");
-    expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
-    expect((await req("POST", `/api/ai-agents/${other.id}/publish`)).status).toBe(200);
+    for (const x of [a, b, other]) expect((await req("POST", `/api/ai-agents/${x.id}/publish`)).status).toBe(200);
     const flowOf = (id: string) => T("aiAgent").find((r) => r.id === id)!.callFlowId as string;
-    expect((await voiceTuningForCall("ta", flowOf(a.id)))?.preset).toBe("patient");
+    expect(await voiceTuningForCall("ta", flowOf(a.id))).toMatchObject({ preset: "custom", finished_silence_ms: 500, end_of_speech_silence_ms: 1000, hard_cap_ms: 1800 });
+    expect((await voiceTuningForCall("ta", flowOf(b.id)))?.preset).toBe("patient");
     expect((await voiceTuningForCall("ta", flowOf(other.id)))?.preset).toBe("balanced");
   });
 
   it("an agent in a language without tuning saves none", async () => {
-    const a = await createAgent("en", { ...AGENT, replySpeed: "fast" });
+    const a = await createAgent("en", { ...AGENT, replySpeed: MANUAL });
     expect(a.replySpeed).toBeNull();
     expect(saved(a.id)).toBeUndefined();
-    expect(await put(a.id, "fast")).toBe(200);
+    expect(await put(a.id, FAST)).toBe(200);
     expect((await get(a.id)).replySpeed).toBeNull();
     expect(saved(a.id)).toBeUndefined();
   });
 
-  it.each(["custom", "turbo", 1.2])("%j is refused and the saved speed stays", async (bad) => {
+  it.each([
+    ["an unknown preset", "turbo"],
+    ["a number", 1.2],
+    ["a preset without its values", { preset: "fast" }],
+    ["a wait out of range", { ...MANUAL, endOfSpeechSilenceMs: 100 }],
+    ["a cap below the end-of-speech wait", { ...MANUAL, hardCapMs: 900 }],
+    ["a finished-sentence wait above the end-of-speech wait", { ...MANUAL, finishedSilenceMs: 1200 }],
+    ["a fraction", { ...MANUAL, endOfSpeechSilenceMs: 950.5 }],
+    ["an extra field", { ...MANUAL, speed: 2 }],
+  ])("%s is refused and the saved speed stays", async (_what, bad) => {
     expect((await req("POST", "/api/ai-agents", { language: "ta", agent: { ...AGENT, replySpeed: bad } })).status).toBe(400);
-    const a = await createAgent("ta", { ...AGENT, replySpeed: "fast" });
+    const a = await createAgent("ta", { ...AGENT, replySpeed: MANUAL });
     expect(await put(a.id, bad)).toBe(400);
-    expect((await get(a.id)).replySpeed).toBe("fast");
+    expect((await get(a.id)).replySpeed).toEqual(MANUAL);
   });
 });
