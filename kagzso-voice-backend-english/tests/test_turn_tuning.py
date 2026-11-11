@@ -22,6 +22,7 @@ from app.services import turn_tuning as tt
 from tests.conftest import silence_mulaw, tone_mulaw
 from tests.test_autonomous_agent import _capture_systems
 from tests.test_autonomous_conversation import _dial, _flow
+from tests.test_call_rhythm import _realtime
 from tests.test_call_policy import _agent_lines, _rows
 from tests.test_nila_flow import _call, _send, _start, _until
 from tests.test_reply_speed import FRAME, _ack, _eos_waits, _events, _realtime_silence, _wait_for, said  # noqa: F401
@@ -191,11 +192,15 @@ AFTER = silence_mulaw(1000)
 OPENING = "வணக்கம் sir, நான் Thaara பேசறேன்."
 
 
-def _tamil(client, auth, fakes, monkeypatch, tuning=BALANCED):
+def _tamil(client, auth, fakes, monkeypatch, tuning=BALANCED, natural=True):
+    """An autonomous agent's Tamil call. natural=False: an agent published before natural lines, which has the fixed
+    lines (and so the fixed check-in line), as a Guided Call Flow does."""
     fakes.llm.replies = [OPENING]
     fakes.llm.reply = "சரி sir."
     extra = {"voice_tuning": tuning} if tuning else {}
-    return _dial(client, auth, _flow("ta", monkeypatch), **extra)
+    flow = _flow("ta", monkeypatch)
+    flow["autonomous"]["natural_lines"] = natural
+    return _dial(client, auth, flow, **extra)
 
 
 def _open(ws, said):  # noqa: F811
@@ -218,7 +223,7 @@ def _llm_turns(fakes):
 
 @pytest.mark.parametrize("sound", ["mm", "ஆஆ", "ohh", "a", "uh"])
 def test_a_sound_after_the_ai_finishes_gets_one_checkin_and_no_llm(client, auth, fakes, monkeypatch, sync_engine, said, sound):  # noqa: F811
-    call_id, token = _tamil(client, auth, fakes, monkeypatch)
+    call_id, token = _tamil(client, auth, fakes, monkeypatch, natural=False)
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         _open(ws, said)
         before = _llm_turns(fakes)
@@ -230,8 +235,31 @@ def test_a_sound_after_the_ai_finishes_gets_one_checkin_and_no_llm(client, auth,
     assert len(_events(sync_engine, call_id, "checkin_sent")) == 1
 
 
-def test_the_checkin_lines_are_rendered_when_the_call_starts_and_play_from_that_audio(client, auth, fakes, monkeypatch, said):  # noqa: F811
+@pytest.mark.parametrize("sound", ["mm", "ம்", "ஆஆ"])
+def test_an_agent_answers_a_sound_in_its_own_words_never_a_fixed_line(client, auth, fakes, monkeypatch, sync_engine, said, sound):  # noqa: F811
     call_id, token = _tamil(client, auth, fakes, monkeypatch)
+    with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
+        _open(ws, said)
+        assert not set(tt.TAMIL_CHECKIN_LINES) & {t for t, _ in fakes.tts.synthesized}  # nothing rendered for it
+        before = _llm_turns(fakes)
+        fakes.llm.replies = ["ஆமா sir, hotel-க்கு billing-அ automate பண்ணலாம்."]
+        _says(ws, said, sound)
+        _ack(ws, _until(ws, "checkpoint"))
+        time.sleep(0.2)
+        history = cs.ACTIVE_SESSIONS[call_id].history
+        assert history[-1]["role"] == "assistant" and history[-2]["role"] == "assistant"  # the sound isn't their words
+        _says(ws, said, "ஆஆ")  # right after: the AI stays quiet, as after a check-in line
+        assert _wait_for(lambda: _events(sync_engine, call_id, "checkin_skipped"))
+    assert _llm_turns(fakes) == before + 1
+    sent = fakes.llm.seen_messages[-1][-1]["content"]
+    assert sent.startswith(cs.AGENT_SOUND_INSTRUCTION.format(sound=sound)) and sent.endswith(tt.TAMIL_REPLY_REMINDER)
+    assert _agent_lines(sync_engine, call_id)[-1] == "ஆமா sir, hotel-க்கு billing-அ automate பண்ணலாம்."
+    assert not set(tt.TAMIL_CHECKIN_LINES) & set(_agent_lines(sync_engine, call_id))
+    assert [e.get("llm") for e in _events(sync_engine, call_id, "checkin_sent")] == [True]
+
+
+def test_the_checkin_lines_are_rendered_when_the_call_starts_and_play_from_that_audio(client, auth, fakes, monkeypatch, said):  # noqa: F811
+    call_id, token = _tamil(client, auth, fakes, monkeypatch, natural=False)
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         _open(ws, said)
         rendered = [t for t, _ in fakes.tts.synthesized]
@@ -273,7 +301,7 @@ def test_real_short_answers_get_a_normal_reply(client, auth, fakes, monkeypatch,
 
 
 def test_two_sounds_in_a_row_get_one_checkin_and_a_real_word_resets_it(client, auth, fakes, monkeypatch, sync_engine, said):  # noqa: F811
-    call_id, token = _tamil(client, auth, fakes, monkeypatch)
+    call_id, token = _tamil(client, auth, fakes, monkeypatch, natural=False)
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         _open(ws, said)
         _says(ws, said, "mm")
@@ -389,20 +417,73 @@ def test_a_tuned_call_uses_the_lower_token_cap_and_the_prompt_line(client, auth,
     assert systems and tt.TAMIL_REPLY_RULE in systems[0]
 
 
-LONG_REPLY = ("புரியுது sir. நாங்க AI மூலமா வேலைய simple ஆக்குறோம். இது உங்க team-க்கு ரொம்ப உதவும். உங்க hotel-ல எந்த வேலைக்கு நேரம் போகுது?")
 TWO_AND_THE_ACK = "புரியுது sir. நாங்க AI மூலமா வேலைய simple ஆக்குறோம். இது உங்க team-க்கு ரொம்ப உதவும்."
+QUESTION = "உங்க hotel-ல எந்த வேலைக்கு நேரம் போகுது?"
 
 
-def test_a_reply_stops_after_two_sentences_on_a_whole_sentence(client, auth, fakes, monkeypatch, sync_engine, said):  # noqa: F811
+def _reply_heard(client, auth, fakes, monkeypatch, sync_engine, said, reply):  # noqa: F811
+    """What the customer hears of `reply` on a tuned call, and that the AI remembers exactly that."""
     call_id, token = _tamil(client, auth, fakes, monkeypatch)
-    fakes.llm.replies = [OPENING, LONG_REPLY]
+    fakes.llm.replies = [OPENING, reply]
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         _open(ws, said)
         _says(ws, said, "நாங்க hotel நடத்துறோம்")
         _ack(ws, _until(ws, "checkpoint"))
         time.sleep(0.2)
-        assert cs.ACTIVE_SESSIONS[call_id].history[-1]["content"] == TWO_AND_THE_ACK  # the AI remembers only what was said
-    assert _agent_lines(sync_engine, call_id)[-1] == TWO_AND_THE_ACK  # the acknowledgement didn't use one up
+        remembered = cs.ACTIVE_SESSIONS[call_id].history[-1]["content"]
+    heard = _agent_lines(sync_engine, call_id)[-1]
+    assert remembered == heard  # the AI remembers only what was said
+    return heard
+
+
+def test_a_reply_stops_after_two_sentences_on_a_whole_sentence(client, auth, fakes, monkeypatch, sync_engine, said):  # noqa: F811
+    reply = f"{TWO_AND_THE_ACK} இதெல்லாம் ஒரே screen-ல பாக்கலாம்."
+    assert _reply_heard(client, auth, fakes, monkeypatch, sync_engine, said, reply) == TWO_AND_THE_ACK  # the ack didn't use one up
+
+
+def test_the_reply_s_question_is_said_even_past_the_limit(client, auth, fakes, monkeypatch, sync_engine, said):  # noqa: F811
+    # The model puts its question last: dropping it left the customer in silence, not knowing it was their turn.
+    reply = f"{TWO_AND_THE_ACK} இதெல்லாம் ஒரே screen-ல பாக்கலாம். {QUESTION} அப்போ நான் சரியா சொல்ல முடியும்."
+    assert _reply_heard(client, auth, fakes, monkeypatch, sync_engine, said, reply) == f"{TWO_AND_THE_ACK} {QUESTION}"
+
+
+def test_only_one_question_and_none_after_one_within_the_limit(client, auth, fakes, monkeypatch, sync_engine, said):  # noqa: F811
+    asked = "நீங்க hotel நடத்துறீங்களா? நாங்க AI மூலமா வேலைய simple ஆக்குறோம்."
+    reply = f"{asked} இது உங்க team-க்கு ரொம்ப உதவும். {QUESTION}"
+    assert _reply_heard(client, auth, fakes, monkeypatch, sync_engine, said, reply) == asked
+
+
+def test_a_hum_that_stops_the_agent_early_lets_it_go_on(client, auth, fakes, monkeypatch, sync_engine, said):  # noqa: F811
+    """BARGE_EARLY_STOP on a tuned call: a "ம்" over the agent stops it at once, and it is a backchannel, so the agent
+    goes on from the next sentence. It never reaches the sound turn, which would have dropped the rest."""
+    monkeypatch.setattr(settings, "BARGE_EARLY_STOP", True)
+    call_id, token = _tamil(client, auth, fakes, monkeypatch)
+    rest = f"இது உங்க team-க்கு ரொம்ப உதவும். {QUESTION}"
+    fakes.llm.replies = [OPENING, f"நாங்க AI மூலமா வேலைய simple ஆக்குறோம். {rest}"]
+    with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
+        _open(ws, said)
+        fakes.tts.chunks_per_sentence = 20  # 2 s of audio per sentence
+        _says(ws, said, "நாங்க hotel நடத்துறோம்")
+        _until(ws, "playAudio")
+        time.sleep(1.0)  # past the echo window, into the first sentence
+        said["text"] = "ம்"
+        _realtime(ws, tone_mulaw(800))  # the customer is still humming
+        _until(ws, "clearAudio")
+        _send(ws, silence_mulaw(1000))
+        _ack(ws, _until(ws, "checkpoint"))
+        time.sleep(0.2)
+    assert len(_events(sync_engine, call_id, "barge_in_early")) == 1
+    assert len(_events(sync_engine, call_id, "resumed_after_backchannel")) == 1
+    assert _events(sync_engine, call_id, "checkin_sent") == []
+    assert _agent_lines(sync_engine, call_id)[-1] == rest  # no new AI reply and no fixed line: the rest of this one
+
+
+def test_the_limit_keeps_the_question_on_its_own():
+    tuning = tt.CallTuning(rules=TA, preset="balanced", min_words=1)
+    two = ["நாங்க AI மூலமா வேலைய simple ஆக்குறோம்.", "இது உங்க team-க்கு ரொம்ப உதவும்."]
+    assert tuning.speaks(two[:1], two[1]) and not tuning.speaks(two, "இன்னொரு விஷயம் இருக்கு sir.")
+    assert tuning.speaks(two, QUESTION) and not tuning.speaks([*two, QUESTION], "இன்னொரு கேள்வி இருக்கா sir?")
+    assert tuning.speaks(two, "எந்த வேலைக்கு நேரம் போகுது? ") and not tuning.speaks(two, "சரி sir")
 
 
 def test_the_reminder_reaches_the_model_but_not_the_history(client, auth, fakes, monkeypatch, said):  # noqa: F811

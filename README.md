@@ -555,9 +555,17 @@ Patient, or **Current behavior**, which sends nothing and is an instant rollback
 dialled, for Call Flows and AI Agents alike, and an autonomous AI Agent can pick its own preset (Reply speed, below).
 With tuning the AI replies quickly after a clearly finished sentence, waits
 longer after an unfinished one (never past the hard cap), and never starts a reply over the customer: a reply that is
-ready waits, and new words join the same turn. A lone sound or stray letter ("aaa", "ம்ம்", "a") never reaches the LLM:
-over the AI it is ignored, and after the AI has finished it gets one fixed, pre-rendered check-in line, at most once in a
-row. Replies stop at two sentences, on a whole sentence, and a one- or two-word acknowledgement doesn't count.
+ready waits, and new words join the same turn. A lone sound or stray letter ("aaa", "ம்ம்", "a") over the AI is ignored.
+After the AI has finished, a Call Flow answers it with one fixed, pre-rendered check-in line, and an AI Agent (natural
+lines) answers it in its own words, told it was only a sound, which after its question usually means yes: a fixed line
+there made it sound like an IVR. Either way at most once in a row. Replies stop at two sentences, on a whole sentence,
+and a one- or two-word acknowledgement doesn't count; past that limit the reply's question is still said if none was,
+because the model puts it last and dropping it left the customer in silence, not knowing it was their turn.
+
+**Talking over the customer:** by default the AI stops only after 1.2 s of unbroken loud speech, or once the customer
+has finished and STT has their words, so it keeps talking over a short "இல்ல sir, ...". `BARGE_EARLY_STOP=true` in
+`.env.ta` (the Tamil backend only; restart it after the edit) stops it after about 0.4 s of real voice instead, and a
+"ம்" that stopped it lets it go on from the next sentence.
 
 The word lists are at the top of `kagzso-voice-backend-english/app/services/turn_tuning.py` and **need a native
 speaker's review**. Every other language is untouched: it has no rules entry, so Dispatch sends it nothing and the voice
@@ -623,7 +631,8 @@ tables and API: no screen, agent or call uses them, and nothing saved in them is
   with an older compiler shows "unpublished changes" (`AI_AGENT_COMPILER_VERSION`, bump it with any such change).
 - **Checking real conversations:** `scripts/autonomous_conversation_check.py --language en|ta --run` in the voice
   backend talks to the configured LLM (no call, no audio, uses tokens). The pytest suite uses a fake LLM, so it can't
-  judge how the model talks: run this after changing the compiler's blocks and read the conversations.
+  judge how the model talks: run this after changing the compiler's blocks and read the conversations. Add `--tuned`
+  for Tamil to see what a call with voice response tuning actually says (the reply limit cuts what the model writes).
 - **Guided** agents just call with an existing published Call Flow (Nila, Follow-up, Executive or a copy),
   unchanged.
 - **Do-not-call** is detected by the backend (`is_do_not_call` in `call_service.py`) in English, romanised Tamil /

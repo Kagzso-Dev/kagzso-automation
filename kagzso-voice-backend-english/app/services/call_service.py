@@ -102,6 +102,13 @@ AGENT_SILENCE_REPROMPT_INSTRUCTION = (
 AGENT_SILENCE_CLOSE_INSTRUCTION = (
     "(The customer is still silent. Say one short, warm goodbye in your own words. The call ends after it.)"
 )
+# A call with voice response tuning (turn_tuning.py), after the AI finished: the customer made only a sound. A fixed
+# check-in line there made an agent sound like an IVR, and a "ம்" after a question is often the answer itself.
+AGENT_SOUND_INSTRUCTION = (
+    "(The customer made only a short sound after your last words: {sound}. On a phone call that usually means yes, "
+    "or that they are listening. Carry on naturally from where you were in one short sentence, or ask your last "
+    "question again more simply if it still needs an answer.)"
+)
 FALLBACK_REPLIES = {
     "en": "Sorry, I couldn't hear you clearly. Could you please repeat that?",
     "ta": "Sorry, clear-ஆ கேக்கல. கொஞ்சம் repeat பண்ணுங்க please.",
@@ -1569,7 +1576,7 @@ class CallSession:
             lines += self.ack_lines()
         if self.dnc_enforced and self.ctx.dnc_line:
             lines.append(self.ctx.dnc_line)
-        if self._tuning is not None:
+        if self._tuning is not None and not self.ctx.natural_lines:  # an agent answers a sound in its own words
             lines += list(self._tuning.rules.checkin_lines)  # ready to play at once
         return list(dict.fromkeys(line for line in lines if line))
 
@@ -2546,7 +2553,8 @@ class CallSession:
                     if self._rules is not None:
                         st.decision = "sound" if sound else "real_word"
                         log.info("Turn decision: classified as %s", st.decision)
-                    if sound and self._tuning is not None and self._agent_spoke and not (
+                    # A "ம்" that stopped the agent early (BARGE_EARLY_STOP) is a backchannel: it goes on below instead.
+                    if sound and self._tuning is not None and self._agent_spoke and resume is None and not (
                             self._should_ask_identity(text) or self._should_reask_identity(text)):
                         await self._answer_sound(text, result.get("confidence"), st, m, tts_connect, turn)
                         return
@@ -2709,7 +2717,8 @@ class CallSession:
     async def _answer_sound(self, text: str, confidence: Optional[float], st: _TurnState, m: TurnMetrics,
                             tts_connect: "asyncio.Task", turn: int) -> None:
         """A tuned call, the AI has finished and the customer made only a sound ("aaa", "ம்ம்", "a"): one fixed check-in
-        line, never the LLM and never the pitch again. Never two in a row: after that the AI stays quiet, and the
+        line, never the LLM and never the pitch again. An agent that says its own lines (natural_lines) answers in its
+        own words instead, told it was only a sound. Never two in a row: after that the AI stays quiet, and the
         existing silence handling takes over. The sound is kept in the transcript but not in the LLM's history."""
         self._turn_counts["sound"] += 1
         self._persist(lambda db, t=f"[filler] {text}", c=confidence: repo.add_transcript(
@@ -2720,11 +2729,22 @@ class CallSession:
             self._event("checkin_skipped", {"turn": turn})
             self._after_noise()
             return
+        self._checkin_streak += 1
+        self._turn_counts["checkin"] += 1
+        if self.ctx.natural_lines:
+            st.user_text, st.record_user, st.decision, st.hold_until = (
+                AGENT_SOUND_INSTRUCTION.format(sound=text), False, "sound_llm", time.monotonic())
+            log.info("Turn decision: sound - the agent answers it in its own words")
+            self._event("checkin_sent", {"turn": turn, "llm": True})
+            m.source = "llm"
+            await self._speak_streaming(st, m, tts_connect)
+            self._commit_turn(st, interrupted=False)
+            self._log_turn_timing(turn, m, st)
+            await self._after_reply()
+            return
         lines = self._tuning.rules.checkin_lines  # type: ignore[union-attr]
         line = lines[self._checkin_next % len(lines)]
         self._checkin_next += 1
-        self._checkin_streak += 1
-        self._turn_counts["checkin"] += 1
         st.scripted, st.record_user, st.decision, st.hold_until = line, False, "checkin", time.monotonic()
         log.info("Turn decision: sound - check-in line sent")
         self._event("checkin_sent", {"turn": turn})
@@ -2890,7 +2910,7 @@ class CallSession:
                     sentence = held_back[-1]  # the marker came alone: what it followed is the goodbye, so that is said
                 if not sentence:
                     return
-                if self._tuning is not None and st.scripted is None and not end and self._tuning.reply_is_full(st.spoken):
+                if self._tuning is not None and st.scripted is None and not end and not self._tuning.speaks(st.spoken, sentence):
                     held_back.append(sentence)  # enough said: the rest is read for the marker, never spoken or remembered
                     return
                 if (st.scripted is None and self.cfg.REPEAT_QUESTION_GUARD and st.spoken

@@ -7,8 +7,9 @@ language = one LanguageRules entry here, plus its code in VOICE_TUNING_LANGUAGES
 With tuning a call:
   - replies quickly after a clearly finished sentence, waits longer after an unfinished one, and never waits past the cap
   - never starts a reply over the customer: a reply that is ready waits until they stop, and new words join the same turn
-  - answers a lone sound ("aaa", "ம்ம்", "a") with one fixed check-in line instead of the LLM
-  - keeps replies short (a prompt line and a lower token cap)
+  - answers a lone sound ("aaa", "ம்ம்", "a") with one fixed check-in line instead of the LLM; an Autonomous AI Agent
+    says it in its own words instead (call_service.AGENT_SOUND_INSTRUCTION), as it does its silence lines
+  - keeps replies short (a prompt line, a lower token cap and a spoken limit that always keeps the reply's question)
 The "Current behavior" preset sends no tuning at all, so it is an exact rollback. Timing logs stay on for the language.
 """
 from __future__ import annotations
@@ -189,6 +190,15 @@ class CallTuning:
     def reply_is_full(self, spoken: List[str]) -> bool:
         """The reply has said all it may. It always ends on a whole sentence, and what follows is read but not spoken."""
         return sum(len(vf.words(s)) > 2 for s in spoken) >= self.rules.max_reply_sentences
+
+    def speaks(self, spoken: List[str], sentence: str) -> bool:
+        """Whether the reply's next sentence is spoken: every one up to the limit, and past it only the reply's
+        question, when none was said yet. The model puts its question last, so the limit alone dropped it from 18 of
+        58 replies of a real-model tuned run (autonomous_conversation_check.py --tuned), leaving 17 that handed over:
+        the customer heard a statement, then silence, and never knew it was their turn."""
+        if not self.reply_is_full(spoken):
+            return True
+        return vf.asks_question(sentence) and not any(vf.asks_question(s) for s in spoken)
 
 
 def call_variable(tuning: Optional[Mapping[str, Any]], cfg: Settings) -> Optional[str]:

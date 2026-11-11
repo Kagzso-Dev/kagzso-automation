@@ -11,6 +11,12 @@ Run it from kagzso-voice-backend-english:
 
     .venv/Scripts/python scripts/autonomous_conversation_check.py --language en --run
     .venv/Scripts/python scripts/autonomous_conversation_check.py --language ta --run --report ta.json
+    .venv/Scripts/python scripts/autonomous_conversation_check.py --language ta --tuned --run
+
+--tuned (Tamil) runs the call as a Tamil call with voice response tuning does (Balanced, the default): the short-reply
+prompt line and reminder, its token cap, the spoken limit, and a lone sound answered as a live call answers it. It
+prints and checks what the customer HEARS, and the AI remembers only that, as on a call. Without it the raw reply is
+shown, which a tuned call never speaks in full.
 
 The checks are keyword heuristics, so a pass is not proof and Tamil replies NEED A NATIVE SPEAKER'S REVIEW.
 """
@@ -33,15 +39,23 @@ parser.add_argument("--language", choices=["en", "ta"], default="en")
 parser.add_argument("--run", action="store_true", help="call the LLM provider (uses tokens)")
 parser.add_argument("--report", help="also write the conversations and checks to this JSON file")
 parser.add_argument("--only", help="run only the scenarios whose name contains this")
+parser.add_argument("--tuned", action="store_true", help="Tamil: as a call with voice response tuning (see above)")
 args = parser.parse_args()
+if args.tuned and args.language != "ta":
+    parser.error("--tuned is for Tamil, the only language with voice response tuning")
 os.environ.setdefault("KAGZSO_ENV_FILE", ".env.ta" if args.language == "ta" else ".env")
 
+from app.core.config import settings  # noqa: E402
 from app.flows.loader import parse_flow  # noqa: E402
 from app.flows.schema import render_blocks  # noqa: E402
 from app.flows.training import runtime_json  # noqa: E402
-from app.services.call_service import AGENT_GREETING_INSTRUCTION  # noqa: E402
-from app.services.llm_service import (Message, build_call_variables, clean_spoken_text, create_llm_provider,  # noqa: E402
-                                      extract_end_call)
+from app.services import turn_tuning  # noqa: E402
+from app.services.call_service import (AGENT_GREETING_INSTRUCTION, AGENT_SOUND_INSTRUCTION, asked_questions,  # noqa: E402
+                                       is_repeated_question)
+from app.services.llm_service import (MAX_REPLY_TOKENS, Message, SentenceChunker, build_call_variables,  # noqa: E402
+                                      calm_spoken_text, clean_spoken_text, create_llm_provider, extract_end_call)
+
+BALANCED = json.loads((BACKEND / "tests" / "fixtures" / "voice_tuning_presets.json").read_text(encoding="utf-8"))["balanced"]
 
 # Synthetic knowledge: it stands in for an agent's approved items and states nothing about the real company.
 KNOWLEDGE: List[Tuple[str, str, str, List[str]]] = [
@@ -135,6 +149,9 @@ SCENARIOS: Dict[str, List[Scenario]] = {
          "not_last": [r"என்ன business|என்ன தொழில்|எந்த business"]},
         {"name": "short answers only", "turns": ["ஆ", "ஆமா", "சரி இல்ல sir", "சரி சரி சரி", "சரி", "ஆமா"],
          "not": [TIME_GREETING, IDENTITY_CHECK, CONTACT_PROMISE, SENT_CLAIM]},
+        # A hum after a question is often the answer; with --tuned it reaches the model as a live call sends it.
+        {"name": "a hum answers its question", "business": "hotel", "turns": ["ம்", "ம்ம்", "சரி, சொல்லுங்க."],
+         "not": [r"சரியா கேக்கல|கேக்கல|திரும்ப சொல்ல|repeat"]},
     ],
 }
 
@@ -153,16 +170,40 @@ def agent_flow():
     return parse_flow(data)
 
 
-async def reply(llm, prompt: str, history: List[Message], said: str, variables: Dict[str, Optional[str]]) -> Tuple[str, bool]:
-    text = "".join([d async for d in llm.stream_response(prompt, history, said, variables)])
-    spoken, ended = extract_end_call(text)
-    return clean_spoken_text(spoken), ended
+def heard(raw: str, history: List[Message], speaks) -> str:
+    """What a tuned call speaks of the model's text (call_service._speak_streaming): sentences as the stream cuts them,
+    `speaks` deciding past the limit, no question already asked in the call, and the goodbye before a lone marker."""
+    asked = asked_questions([h["content"] for h in history if h["role"] == "assistant"])
+    chunker, pieces = SentenceChunker(), []
+    for i in range(0, len(raw), 8):  # streamed: a long sentence is cut at a comma as on a call
+        pieces += chunker.feed(raw[i:i + 8])
+    spoken: List[str] = []
+    held: List[str] = []
+    for piece in pieces + chunker.flush():
+        sentence, end = extract_end_call(piece)
+        sentence = calm_spoken_text(clean_spoken_text(sentence))
+        if end and not sentence and held:
+            sentence = held[-1]
+        if not sentence:
+            continue
+        if not end and not speaks(spoken, sentence):
+            held.append(sentence)
+        elif not (spoken and is_repeated_question(sentence, asked + asked_questions(spoken))):
+            spoken.append(sentence)
+    return " ".join(spoken)
 
 
-async def run_scenario(llm, prompt: str, base: Dict[str, Optional[str]], scenario: Scenario) -> dict:
+def asks(line: str) -> bool:
+    return line.rstrip().endswith("?")
+
+
+async def run_scenario(llm, prompt: str, base: Dict[str, Optional[str]], scenario: Scenario,
+                       tuning: Optional[turn_tuning.CallTuning] = None) -> dict:
     history: List[Message] = []
     lines: List[str] = []
+    lost: List[bool] = []  # --tuned: the reply's question, which the limit used to drop
     ended = False
+    sound_before = False
     # A call starts with the agent's opening, then the customer answers it (unless they speak first).
     turns = list(scenario["turns"])  # type: ignore[call-overload]
     if turns[0] is not None and not scenario.get("first"):
@@ -170,9 +211,26 @@ async def run_scenario(llm, prompt: str, base: Dict[str, Optional[str]], scenari
     for i, customer in enumerate(turns):
         variables = {**base, "call_elapsed_sec": str(i * 12), "customer_business": scenario.get("business")}  # type: ignore[dict-item]
         said = AGENT_GREETING_INSTRUCTION if customer is None else customer
-        text, ended = await reply(llm, prompt, history, said, variables)
+        sound = tuning is not None and customer is not None and i > 0 and tuning.rules.is_sound(customer)
+        if sound and sound_before:
+            lines.append("(stays quiet: a second sound in a row)")
+            sound_before = False
+            continue
+        sound_before = sound
+        if sound:
+            said = AGENT_SOUND_INSTRUCTION.format(sound=customer)  # a live agent call's sound turn
+        if tuning is not None:
+            said += tuning.rules.reply_reminder
+        raw = "".join([d async for d in llm.stream_response(prompt, history, said, variables)])
+        _, ended = extract_end_call(raw)
+        if tuning is None:
+            text = clean_spoken_text(extract_end_call(raw)[0])
+        else:
+            text = heard(raw, history, tuning.speaks)
+            old = heard(raw, history, lambda spoken, _s: not tuning.reply_is_full(spoken))
+            lost.append(asks(text) and not asks(old))
         lines.append(text)
-        if customer is not None:
+        if customer is not None and not sound:
             history.append({"role": "user", "content": customer})
         history.append({"role": "assistant", "content": text})
     last, everything = lines[-1], "\n".join(lines)
@@ -185,7 +243,8 @@ async def run_scenario(llm, prompt: str, base: Dict[str, Optional[str]], scenari
         problems.append("the call was not ended")
     if len(set(lines)) != len(lines):
         problems.append("a reply was repeated")
-    return {"name": scenario["name"], "turns": turns, "replies": lines, "ended": ended, "problems": problems}
+    return {"name": scenario["name"], "turns": turns, "replies": lines, "ended": ended, "problems": problems,
+            "hands_over": sum(asks(x) for x in lines), "question_kept": sum(lost)}
 
 
 async def main() -> int:
@@ -200,10 +259,15 @@ async def main() -> int:
     base.update(flow_target_sec=str(flow.autonomous.target_duration_sec), flow_max_sec=str(flow.limits.max_duration_sec),
                 flow_natural_lines="true", flow_contact_business="true",
                 flow_training=runtime_json(flow.training, flow.language, flow.language_style))
+    tuning = None
+    if args.tuned:
+        base["flow_voice_tuning"] = json.dumps(BALANCED)  # the prompt's short-reply line comes with it
+        _, tuning = turn_tuning.for_session(settings, base)
+        MAX_REPLY_TOKENS.set(tuning.rules.max_reply_tokens)  # type: ignore[union-attr]
     llm = create_llm_provider()
     results = []
     for scenario in scenarios:
-        result = await run_scenario(llm, prompt, base, scenario)
+        result = await run_scenario(llm, prompt, base, scenario, tuning)
         results.append(result)
         print(f"\n=== {result['name']}  [{'ok' if not result['problems'] else 'CHECK'}]")
         for customer, line in zip(result["turns"], result["replies"]):
@@ -214,6 +278,10 @@ async def main() -> int:
     if args.report:
         Path(args.report).write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
     failed = sum(1 for r in results if r["problems"])
+    if args.tuned:
+        replies = sum(len(r["replies"]) for r in results)
+        print(f"\nHeard: {sum(r['hands_over'] for r in results)}/{replies} replies end with a question; the limit "
+              f"alone would have dropped it from {sum(r['question_kept'] for r in results)} of them.")
     print(f"\n{len(results) - failed}/{len(results)} scenarios passed the keyword checks. Read the conversations too.")
     return 1 if failed else 0
 
