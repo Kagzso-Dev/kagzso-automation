@@ -27,8 +27,8 @@ END:VCALENDAR
   "html": "Hello Ada &lt;A&amp;B&gt;,
 
 See  "soon" &amp; bring Acme "Co".
-Thanks
-<div style="margin:20px 0"><a href="http://localhost:4000/api/track/click/log_1?u=https%3A%2F%2Fvideo.example.com%2Fv&s=tNN8ggHzrnt5DnzQISkvej5rRzc4ZxrFpUweDQ-L9ZU" style="display:inline-block;padding:8px 14px;border-radius:6px;text-decoration:none;font-size:14px;background:#2563eb;color:#ffffff">&#9654; Watch video</a></div><div style="margin-top:24px"><a href="http://localhost:4000/api/track/click/log_1?u=https%3A%2F%2Fexample.com%2Fbook%3Fa%3D1%26b%3D2&s=YGe1v-RtLeJkgfPHGEY3fn70zVwL3MN3B8NaoNQZ1X0" style="display:inline-block;padding:8px 14px;border-radius:6px;text-decoration:none;font-size:14px;background:#f0f2f6;color:#1f2937;margin:0 8px 8px 0">Book &lt;now&gt; &amp; save</a><a href="http://localhost:4000/api/track/click/log_1?u=https%3A%2F%2Fexample.com%2Fdocs&s=77LtPxS244380bo2bKcE2Eg2WglXsEZ2RmRcjUgOUJ8" style="display:inline-block;padding:8px 14px;border-radius:6px;text-decoration:none;font-size:14px;background:#f0f2f6;color:#1f2937;margin:0 8px 8px 0">Docs</a></div>
+Thanks<div style="margin-top:24px"><a href="http://localhost:4000/api/track/click/log_1?u=https%3A%2F%2Fexample.com%2Fbook%3Fa%3D1%26b%3D2&s=YGe1v-RtLeJkgfPHGEY3fn70zVwL3MN3B8NaoNQZ1X0" style="display:inline-block;padding:8px 14px;border-radius:6px;text-decoration:none;font-size:14px;background:#f0f2f6;color:#1f2937;margin:0 8px 8px 0">Book &lt;now&gt; &amp; save</a><a href="http://localhost:4000/api/track/click/log_1?u=https%3A%2F%2Fexample.com%2Fdocs&s=77LtPxS244380bo2bKcE2Eg2WglXsEZ2RmRcjUgOUJ8" style="display:inline-block;padding:8px 14px;border-radius:6px;text-decoration:none;font-size:14px;background:#f0f2f6;color:#1f2937;margin:0 8px 8px 0">Docs</a></div>
+<div style="margin:20px 0"><a href="http://localhost:4000/api/track/click/log_1?u=https%3A%2F%2Fvideo.example.com%2Fv&s=tNN8ggHzrnt5DnzQISkvej5rRzc4ZxrFpUweDQ-L9ZU" style="display:inline-block;padding:8px 14px;border-radius:6px;text-decoration:none;font-size:14px;background:#2563eb;color:#ffffff">&#9654; Watch video</a></div>
 <div style="border:1px solid #e3e6ec;border-radius:8px;padding:16px;margin-top:24px">
 <div style="font-weight:600;font-size:16px;margin-bottom:8px">Demo &quot;call&quot; &lt;1&gt;</div>
 <table style="font-size:14px;border-collapse:collapse"><tr><td style="padding:2px 0;color:#8a92a0">When</td><td style="padding:2px 0 2px 12px">2026-02-01 09:30 – 10:00 (Asia/Kolkata)</td></tr><tr><td style="padding:2px 0;color:#8a92a0">Where</td><td style="padding:2px 0 2px 12px">Room &lt;A&gt; &amp; B</td></tr></table>
@@ -41,9 +41,9 @@ Thanks
 
 See  "soon" & bring Acme "Co".
 Thanks
-Watch video: https://video.example.com/v
 Book <now> & save: https://example.com/book?a=1&b=2
 Docs: https://example.com/docs
+Watch video: https://video.example.com/v
 
 --- Meeting ---
 Demo "call" <1>

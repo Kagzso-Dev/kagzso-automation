@@ -435,8 +435,8 @@ function TemplateEditor({
             Embedded in the email. Each image is placed at its own placeholder —{" "}
             <span className="font-mono">{"{{image}}"}</span>,{" "}
             <span className="font-mono">{"{{image_2}}"}</span>,{" "}
-            <span className="font-mono">{"{{image_3}}"}</span> … — otherwise they stack at the top of
-            the body in order. Paste a URL or upload (JPG, PNG, WebP, GIF · max 5 MB).
+            <span className="font-mono">{"{{image_3}}"}</span> … — otherwise they come last, after the
+            message, links and videos, in order. Paste a URL or upload (JPG, PNG, WebP, GIF · max 5 MB).
           </p>
           <div className="flex flex-col gap-2">
             {form.images.map((url, i) => (
@@ -506,7 +506,7 @@ function TemplateEditor({
             A YouTube / Vimeo / any video link, rendered as a{" "}
             <span className="font-mono">▶ Watch video</span> button (email clients can’t embed a
             player). Placed at <span className="font-mono">{"{{video_link}}"}</span>,{" "}
-            <span className="font-mono">{"{{video_link_2}}"}</span> … or after the message body.
+            <span className="font-mono">{"{{video_link_2}}"}</span> … or after the message and links.
           </p>
           <div className="flex flex-col gap-2">
             {form.videos.map((v, i) => (

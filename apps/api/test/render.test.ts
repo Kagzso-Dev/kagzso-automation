@@ -124,12 +124,29 @@ describe("render", () => {
     expect(ics!.content).toContain("DTSTART:20261001T093000Z");
   });
 
-  it("embeds the image at the top of the body by default", () => {
+  it("embeds the image after the body by default", () => {
     const out = render({ ...base, imageUrl: "https://cdn.example.com/hero.jpg" });
     expect(out.html).toContain('<img src="https://cdn.example.com/hero.jpg"');
-    // before the body paragraph
-    expect(out.html.indexOf("hero.jpg")).toBeLessThan(out.html.indexOf("Hi Ada"));
+    // after the body paragraph
+    expect(out.html.indexOf("Hi Ada")).toBeLessThan(out.html.indexOf("hero.jpg"));
     expect(out.text).toContain("Image: https://cdn.example.com/hero.jpg");
+  });
+
+  it("orders an email as content, URL, video, image", () => {
+    const out = render({
+      ...base,
+      links: [{ label: "Visit site", url: "https://example.com/site" }],
+      videoUrl: "https://youtu.be/abc123",
+      imageUrl: "https://cdn.example.com/hero.jpg",
+    });
+    const at = (s: string) => out.html.indexOf(s);
+    expect(at("Hi Ada")).toBeLessThan(at("Visit site"));
+    expect(at("Visit site")).toBeLessThan(at("Watch video"));
+    expect(at("Watch video")).toBeLessThan(at("hero.jpg"));
+    const t = (s: string) => out.text.indexOf(s);
+    expect(t("Hi Ada")).toBeLessThan(t("Visit site:"));
+    expect(t("Visit site:")).toBeLessThan(t("Watch video:"));
+    expect(t("Watch video:")).toBeLessThan(t("Image:"));
   });
 
   it("places the image at a {{image}} placeholder when the body has one", () => {
@@ -179,13 +196,13 @@ describe("render", () => {
     expect(out.html).not.toContain("Watch video");
   });
 
-  it("stacks multiple images at the top of the body in order", () => {
+  it("stacks multiple images after the body in order", () => {
     const out = render({
       ...base,
       images: ["https://cdn.example.com/a.jpg", "https://cdn.example.com/b.jpg"],
     });
+    expect(out.html.indexOf("Hi Ada")).toBeLessThan(out.html.indexOf("a.jpg"));
     expect(out.html.indexOf("a.jpg")).toBeLessThan(out.html.indexOf("b.jpg"));
-    expect(out.html.indexOf("b.jpg")).toBeLessThan(out.html.indexOf("Hi Ada"));
     expect(out.text).toContain("Image: https://cdn.example.com/a.jpg");
     expect(out.text).toContain("Image: https://cdn.example.com/b.jpg");
   });
@@ -199,9 +216,9 @@ describe("render", () => {
       videoUrl: "https://youtu.be/one",
       videos: [{ url: "https://youtu.be/two", label: "Watch part two" }],
     });
-    // first image has no placeholder -> prepended; second lands at {{image_2}}
-    expect(out.html.indexOf("first.jpg")).toBeLessThan(out.html.indexOf("second.jpg"));
+    // second lands at {{image_2}}; first has no placeholder -> after the videos
     expect(out.html.indexOf("second.jpg")).toBeLessThan(out.html.indexOf("body"));
+    expect(out.html.lastIndexOf("Watch video")).toBeLessThan(out.html.indexOf("first.jpg"));
     expect(out.html).toContain("Watch part two");
     expect(out.html.indexOf("body")).toBeLessThan(out.html.indexOf("Watch part two"));
     // first video (no placeholder) trails the body

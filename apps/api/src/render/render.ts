@@ -92,25 +92,25 @@ export interface RenderInput {
   meeting?: TemplateMeeting | null;
   /**
    * Optional image URL embedded in the body. Rendered at a `{{image}}`
-   * placeholder if the message contains one, otherwise at the top of the body.
+   * placeholder if the message contains one, otherwise after the video buttons.
    * Legacy single field — merged ahead of `images`.
    */
   imageUrl?: string | null;
   /**
    * Optional video link, rendered as a "▶ Watch video" button. Placed at a
-   * `{{video_link}}` placeholder if present, otherwise after the message body.
+   * `{{video_link}}` placeholder if present, otherwise after the URL buttons.
    * Legacy single field — merged ahead of `videos`.
    */
   videoUrl?: string | null;
   /**
    * Additional embedded images. Each is placed at its own placeholder —
    * `{{image}}` for the first, `{{image_2}}`, `{{image_3}}` … for the rest —
-   * or stacked at the top of the body when no placeholder is present.
+   * or stacked after the video buttons when no placeholder is present.
    */
   images?: string[] | null;
   /**
    * Additional "▶ Watch video" buttons. Placeholders `{{video_link}}`,
-   * `{{video_link_2}}` … mirror the images; unplaced buttons follow the body.
+   * `{{video_link_2}}` … mirror the images; unplaced buttons follow the URL buttons.
    */
   videos?: Array<{ url: string; label?: string }> | null;
   /**
@@ -209,8 +209,8 @@ export function render(input: RenderInput): RenderedEmail {
   // panels. Legacy single fields (imageUrl / videoUrl) merge ahead of the arrays.
   // Rendered blocks are spliced in after sanitisation (same as the link/meeting
   // panels): each gets an indexed placeholder — {{image}} / {{image_2}} … and
-  // {{video_link}} / {{video_link_2}} … — otherwise images stack at the top of
-  // the body and videos follow it, both in order.
+  // {{video_link}} / {{video_link_2}} … — otherwise they follow the content and
+  // the URL buttons: videos first, then images, both in order.
   const imageUrls = [...(input.imageUrl ? [input.imageUrl] : []), ...(input.images ?? [])]
     .map((u) => sub(u)?.trim() ?? "")
     .filter(Boolean);
@@ -248,12 +248,14 @@ export function render(input: RenderInput): RenderedEmail {
   imageBlocks.forEach((b, i) => (bodyHtml = bodyHtml.split(slot("IMG", i)).join(b)));
   videoBlocks.forEach((b, i) => (bodyHtml = bodyHtml.split(slot("VID", i)).join(b)));
 
+  // Email layout: content → URL buttons → video buttons → images. Items placed
+  // via a {{image}} / {{video_link}} placeholder stay where the body puts them.
   let html = bodyHtml;
-  const leadingImages = imageBlocks.filter((b, i) => b && !imgInBody[i]).join("\n");
-  const trailingVideos = videoBlocks.filter((b, i) => b && !vidInBody[i]).join("\n");
-  if (leadingImages) html = leadingImages + "\n" + html;
-  if (trailingVideos) html += "\n" + trailingVideos;
   html += renderLinkPanelHtml(links);
+  const trailingVideos = videoBlocks.filter((b, i) => b && !vidInBody[i]).join("\n");
+  const trailingImages = imageBlocks.filter((b, i) => b && !imgInBody[i]).join("\n");
+  if (trailingVideos) html += "\n" + trailingVideos;
+  if (trailingImages) html += "\n" + trailingImages;
   if (hasMeeting) html += "\n" + renderMeetingHtml(meeting!);
   if (withFooter) html += footer(input.unsubscribeUrl);
 
@@ -271,9 +273,9 @@ export function render(input: RenderInput): RenderedEmail {
   );
   const text =
     textSource +
-    imageUrls.map((u) => renderImageText(u)).join("") +
-    videos.map((v) => renderVideoText(v.url, v.label)).join("") +
     renderLinkPanelText(links) +
+    videos.map((v) => renderVideoText(v.url, v.label)).join("") +
+    imageUrls.map((u) => renderImageText(u)).join("") +
     (hasMeeting ? "\n" + renderMeetingText(meeting!) : "") +
     (withFooter && input.unsubscribeUrl
       ? `\n\n---\n${env.EMAIL_SENDER_ADDRESS}\nUnsubscribe: ${input.unsubscribeUrl}`
