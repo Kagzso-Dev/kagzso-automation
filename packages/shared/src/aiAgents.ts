@@ -425,4 +425,27 @@ export interface AiKnowledgeItemView {
   source: string | null;
   /** The industry a structured row names. */
   industryHint: string | null;
+  /** Q&A only, once customers asked it on the agent's calls (absent = never asked yet). */
+  calls?: AiKnowledgeCallStats;
+}
+
+/**
+ * The `source` of a Q&A suggested from customer calls (apps/api domain/aiAgentQuestions.ts): a Draft like any other,
+ * never used on a call until an admin approves it and publishes the agent.
+ */
+export const AI_KNOWLEDGE_FROM_CALLS = "customer calls";
+
+/** How often customers asked a Q&A on the agent's calls (after each call, by the voice backend's LLM). */
+export interface AiKnowledgeCallStats {
+  /** Calls it was asked on. */
+  asked: number;
+  /** Of those, calls where the agent gave no real answer (didn't know it, avoided it, or the call ended first). */
+  unanswered: number;
+  lastAskedAt: string;
+  /** Calls per language (en, ta, …). */
+  languages: Record<string, number>;
+  /** Other ways customers asked it, not among its questions yet, newest first (private details left out). */
+  ways: string[];
+  /** The approved knowledge (topics) its drafted answer came from; empty = an admin wrote or must write it. */
+  draftedFrom: string[];
 }

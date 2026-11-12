@@ -431,6 +431,11 @@ class Settings(BaseSettings):
     # Outcome classification of a Hindi / Kannada / Telugu ... call names that language in its prompt
     # (English and Tamil calls keep today's prompt). false = the same prompt for every language.
     OUTCOME_NAMES_CALL_LANGUAGE: bool = False
+    # Autonomous AI Agent calls whose Dispatch run asked for it (app/services/customer_questions.py): after the call is
+    # finalized, one more LLM request lists the customer's questions about the company for the agent's Knowledge tab.
+    # Never during the call, never changes what the AI says. false = no extra request (nothing is learned).
+    QUESTION_LEARNING_ENABLED: bool = True
+    QUESTION_LEARNING_TIMEOUT_SECONDS: float = 20.0
     # --- Guided call flows (schema_version 2, app/flows/guided.py + app/services/guided_call.py) ---
     # A call that sends a guided flow runs it with the flow runner: the flow decides the stages, exact lines and
     # closings, the LLM understands and speaks within them. Off = such a call is refused (never run as another

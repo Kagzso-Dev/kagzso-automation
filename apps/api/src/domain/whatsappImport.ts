@@ -4,6 +4,7 @@
 import { parse as parseCsv } from "csv-parse/sync";
 import ExcelJS from "exceljs";
 import { normalizeWhatsAppPhone } from "./whatsappPhone.js";
+import { applyImportLimit, hasData, IMPORT_MAX_ROWS, type ImportLimit } from "./importLimit.js";
 
 export type WhatsAppImportFormat = "csv" | "xlsx";
 
@@ -91,10 +92,7 @@ function cellText(cell: ExcelJS.Cell): string {
   return "";
 }
 
-async function parseXlsx(
-  buf: Buffer,
-  defaultCountryCode?: string,
-): Promise<ParsedWhatsAppContact[]> {
+async function readXlsxRows(buf: Buffer): Promise<Record<string, string>[]> {
   const wb = new ExcelJS.Workbook();
   await (wb.xlsx.load as unknown as (data: Uint8Array) => Promise<unknown>)(buf);
   const ws = wb.worksheets[0];
@@ -116,21 +114,37 @@ async function parseXlsx(
     });
     if (Object.keys(obj).length > 0) rows.push(obj);
   });
-  return rowsToWhatsAppContacts(rows, defaultCountryCode);
+  return rows;
 }
 
+export interface WhatsAppContactFileRead {
+  /** Selected rows that have a usable phone number, in file order. */
+  contacts: ParsedWhatsAppContact[];
+  /** Selected rows without a usable phone number. Not imported. */
+  noPhone: number;
+  /** Rows in the file, and how many were taken (the first maxRows) or left for another file. */
+  limit: ImportLimit;
+}
+
+/**
+ * Read an import file. Only the first `maxRows` data rows are taken; `limit` counts the rest.
+ * Rows without a usable phone number are counted in `noPhone`, not dropped silently.
+ */
 export async function parseWhatsAppContactFile(
   buf: Buffer,
   format: WhatsAppImportFormat,
   defaultCountryCode?: string,
-): Promise<ParsedWhatsAppContact[]> {
-  if (format === "csv") {
-    const rows = parseCsv(buf.toString("utf8"), {
-      columns: true,
-      skip_empty_lines: true,
-      trim: true,
-    }) as Record<string, string>[];
-    return rowsToWhatsAppContacts(rows, defaultCountryCode);
-  }
-  return parseXlsx(buf, defaultCountryCode);
+  maxRows: number = IMPORT_MAX_ROWS,
+): Promise<WhatsAppContactFileRead> {
+  const all =
+    format === "csv"
+      ? (parseCsv(buf.toString("utf8"), {
+          columns: true,
+          skip_empty_lines: true,
+          trim: true,
+        }) as Record<string, string>[])
+      : await readXlsxRows(buf);
+  const { rows, limit } = applyImportLimit(all.filter(hasData), maxRows);
+  const contacts = rowsToWhatsAppContacts(rows, defaultCountryCode);
+  return { contacts, noPhone: rows.length - contacts.length, limit };
 }

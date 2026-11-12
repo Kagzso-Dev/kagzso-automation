@@ -38,7 +38,7 @@ describe("rowsToWhatsAppContacts", () => {
 describe("parseWhatsAppContactFile", () => {
   it("parses CSV with a required phone column", async () => {
     const csv = "phone,first name,business name\n+919876543210,Ada,Acme\n,Missing,Skip\n";
-    const rows = await parseWhatsAppContactFile(Buffer.from(csv), "csv");
+    const { contacts: rows } = await parseWhatsAppContactFile(Buffer.from(csv), "csv");
     expect(rows).toEqual([{ phone: "919876543210", firstName: "Ada", businessName: "Acme" }]);
   });
 
@@ -49,7 +49,7 @@ describe("parseWhatsAppContactFile", () => {
     ws.addRow(["+919876543210", "Hopper", "Navy"]);
     const buf = Buffer.from(await wb.xlsx.writeBuffer());
 
-    const rows = await parseWhatsAppContactFile(buf, "xlsx");
+    const { contacts: rows } = await parseWhatsAppContactFile(buf, "xlsx");
     expect(rows).toEqual([{ phone: "919876543210", lastName: "Hopper", businessName: "Navy" }]);
   });
 });

@@ -78,7 +78,7 @@ describe("rowsToContacts", () => {
 describe("parseContactFile", () => {
   it("parses CSV", async () => {
     const csv = "email,first name,phone\nada@gmail.com,Ada,555-123-4567\nbademail,X,Y\n";
-    const rows = await parseContactFile(Buffer.from(csv), "csv");
+    const { contacts: rows } = await parseContactFile(Buffer.from(csv), "csv");
     expect(rows).toEqual([
       { email: "ada@gmail.com", firstName: "Ada", phone: "5551234567", customFields: {} },
     ]);
@@ -91,7 +91,7 @@ describe("parseContactFile", () => {
     ws.addRow(["grace@kagzso.com", "Hopper", "Navy"]);
     const buf = Buffer.from(await wb.xlsx.writeBuffer());
 
-    const rows = await parseContactFile(buf, "xlsx");
+    const { contacts: rows } = await parseContactFile(buf, "xlsx");
     expect(rows).toEqual([
       { email: "grace@kagzso.com", lastName: "Hopper", businessName: "Navy", customFields: {} },
     ]);

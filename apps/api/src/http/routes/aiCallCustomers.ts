@@ -138,7 +138,15 @@ aiCallCustomersRouter.post(
     }
     if (sheet.headers.length === 0) throw badRequest("The file has no header row");
     if (sheet.rows.length === 0) throw badRequest("The file has no data rows");
-    res.json({ headers: sheet.headers, rows: sheet.rows, truncated: sheet.truncated, mapping: detectAiCallCustomerColumns(sheet.headers) });
+    // rows: the first maxRows data rows of the file; totalRows: all of them (the import summary shows the rest as not imported).
+    res.json({
+      headers: sheet.headers,
+      rows: sheet.rows,
+      truncated: sheet.truncated,
+      totalRows: sheet.totalRows,
+      maxRows: sheet.maxRows,
+      mapping: detectAiCallCustomerColumns(sheet.headers),
+    });
   }),
 );
 

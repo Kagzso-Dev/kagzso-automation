@@ -38,6 +38,7 @@ from app.schemas.calls import OutboundCallRequest
 from app.services import audio_service as audio
 from app.services import guided_call, provider_registry
 from app.services import status_callback
+from app.services import customer_questions
 from app.services import recording
 from app.services.noise_suppression import InputCleaner
 from app.services.public_url import check_public_url
@@ -874,6 +875,10 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
         variables[turn_tuning.VARIABLE] = tuning
     if req.greeting_delay_sec is not None:
         variables["greeting_delay_sec"] = str(req.greeting_delay_sec)
+    # An AI Agent's call from Dispatch: its questions, for learning after the call. Never read by a prompt.
+    if flow_vars.get("flow_natural_lines") and (known := customer_questions.known_json(
+            [k.model_dump() for k in req.known_questions] if req.known_questions is not None else None)) is not None:
+        variables[customer_questions.KNOWN_VARIABLE] = known
     rotation = cfg.voice_rotation
     # An Autonomous AI Agent with a picked voice: that voice for the whole call, never a rotation voice.
     agent_picked_voice = flow_vars.get("flow_agent_voice")
@@ -1487,6 +1492,10 @@ class CallSession:
             await recording.finalize(self.recorder, self.cfg)  # never raises
         await finalize_conversation(self.call_id, self.providers.llm, reason)
         await self.store.delete(self.call_id)
+        # Last, once the outcome, do-not-call and follow-ups are saved: an AI Agent's call Dispatch asked it for lists
+        # the customer's questions for Dispatch. Every other call skips it; it never raises.
+        if customer_questions.requested(self.ctx.variables or {}):
+            await customer_questions.learn_after_call(self.call_id, self.providers.llm)
 
     # ------------------------------------------------------------------ persistence
     def _persist(self, fn: Callable[[AsyncSession], Awaitable[None]]) -> None:

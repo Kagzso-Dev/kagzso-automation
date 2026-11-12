@@ -44,6 +44,14 @@ class VoiceTuning(BaseModel):
     min_words_before_reply: int = Field(1, ge=1, le=5)
 
 
+class KnownQuestion(BaseModel):
+    """One of an AI Agent's questions in Dispatch (approved Q&A or a suggestion), for customer_questions.py."""
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(..., max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    question: str = Field(..., min_length=1, max_length=300)
+
+
 class OutboundCallRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -81,6 +89,10 @@ class OutboundCallRequest(BaseModel):
     flow_schema: Optional[int] = Field(None, ge=1, le=2)
     # Absent = the call uses this backend's own settings, exactly as before.
     voice_tuning: Optional[VoiceTuning] = None
+    # Autonomous AI Agent runs from Dispatch: the agent's questions, so that after the call the customer's questions
+    # are recognised in any wording or language (app/services/customer_questions.py). Kept on the call, never in a
+    # prompt during it. Absent = nothing is learned from the call, exactly as before; [] = learn, nothing known yet.
+    known_questions: Optional[List[KnownQuestion]] = Field(None, max_length=80)
 
     @model_validator(mode="after")
     def _agent(self) -> "OutboundCallRequest":
@@ -154,6 +166,8 @@ class CallDetailOut(CallOut):
     events: List[dict] = []
     # The business the customer said they run, on a call that had none on file.
     learned_business: Optional[str] = None
+    # The customer's questions about the company, learned after an AI Agent's call (customer_questions.py).
+    customer_questions: Optional[List[Dict[str, Any]]] = None
 
 
 class TestTextRequest(BaseModel):

@@ -10,7 +10,7 @@ from app.db import repositories as repo
 from app.db.database import get_db
 from app.db.models import FINAL_CALL_STATUSES, CallStatus
 from app.schemas.calls import CallDetailOut, CallListItem, CallOut, OutboundCallRequest, OutboundCallResponse
-from app.services import call_service
+from app.services import call_service, customer_questions
 
 router = APIRouter(prefix="/api/calls", tags=["calls"], dependencies=[Depends(require_api_key)])
 
@@ -57,6 +57,7 @@ async def get_call(call_id: str, db: AsyncSession = Depends(get_db)) -> CallDeta
         for e in await repo.list_events(db, call_id)
     ]
     out.learned_business = (call.variables or {}).get("learned_business")
+    out.customer_questions = customer_questions.learned(call.variables or {})
     return out
 
 

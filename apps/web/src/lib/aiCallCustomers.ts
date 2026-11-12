@@ -112,8 +112,13 @@ export interface AiCallCustomerDetail {
 
 export interface CustomerSheet {
   headers: string[];
+  /** The first maxRows data rows of the file, in file order: the rows this import can use. */
   rows: Record<string, string>[];
   truncated: boolean;
+  /** Data rows in the file; those after `rows` are not imported (shown in the import summary). */
+  totalRows: number;
+  /** The most rows one import takes. */
+  maxRows: number;
   mapping: AiCallCustomerColumnMapping;
 }
 

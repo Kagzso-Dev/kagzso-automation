@@ -42,6 +42,8 @@ export interface PlaceCallInput {
   customerBusiness?: string | null;
   /** Voice response tuning for this call. Absent for every language without tuning, and for "Current behavior". */
   voiceTuning?: VoiceTuningPayload | null;
+  /** An Autonomous AI Agent's call: the agent's questions, to learn the customer's after the call. Absent = nothing learned. */
+  knownQuestions?: { id: string; question: string }[] | null;
   phone: string; // E.164
   runId: string;
   logId: string;
@@ -72,6 +74,8 @@ export interface VoiceCallDetail {
   transcripts?: { speaker: string; text: string }[];
   /** The business the customer said they run, on a call that had none on file. */
   learned_business?: string | null;
+  /** The customer's questions, learned after an AI Agent's call (checked by domain/aiAgentQuestions). */
+  customer_questions?: unknown;
 }
 
 /** FastAPI errors: {"detail": "msg"} or {"detail": [{"loc": [...], "msg": "..."}]}. */
@@ -198,6 +202,19 @@ export async function voiceCallsBlockedReason(language: AiCallLanguage = DEFAULT
 }
 
 export async function placeVoiceCall(input: PlaceCallInput): Promise<{ callId: string; providerCallId: string | null }> {
+  try {
+    return await placeVoiceCallOnce(input);
+  } catch (err) {
+    // A voice backend from before question learning refuses the field (422: validated before anything is dialled), e.g.
+    // one a deploy left running: the call goes out without it, and nothing is learned from it.
+    if (input.knownQuestions && err instanceof VoiceBackendError && err.status === 422 && err.message.includes("known_questions")) {
+      return placeVoiceCallOnce({ ...input, knownQuestions: null });
+    }
+    throw err;
+  }
+}
+
+async function placeVoiceCallOnce(input: PlaceCallInput): Promise<{ callId: string; providerCallId: string | null }> {
   const res = await request<{ success: boolean; call_id: string; provider_call_id: string | null }>(
     "POST",
     "/api/calls/outbound",
@@ -208,6 +225,7 @@ export async function placeVoiceCall(input: PlaceCallInput): Promise<{ callId: s
       follow_up_detail: input.followUpDetail || undefined,
       customer_business: input.customerBusiness || undefined,
       voice_tuning: input.voiceTuning || undefined,
+      known_questions: input.knownQuestions ?? undefined,
       run_id: input.runId,
       log_id: input.logId,
       ...(input.greetingDelaySec != null ? { greeting_delay_sec: input.greetingDelaySec } : {}),

@@ -4,6 +4,7 @@ import ExcelJS from "exceljs";
 // pdf-parse's package entry runs a debug block when required as the main module;
 // the lib path is the plain function with no side effects.
 import pdfParse from "pdf-parse/lib/pdf-parse.js";
+import { applyImportLimit, hasData, IMPORT_MAX_ROWS, type ImportLimit } from "./importLimit.js";
 
 export interface ParsedContact {
   email: string;
@@ -89,7 +90,7 @@ export function rowsToContacts(rows: Record<string, unknown>[]): ParsedContact[]
   return out;
 }
 
-async function parseXlsx(buf: Buffer): Promise<ParsedContact[]> {
+async function readXlsxRows(buf: Buffer): Promise<Record<string, string>[]> {
   const wb = new ExcelJS.Workbook();
   // ExcelJS ships older Buffer typings than @types/node; a Uint8Array is accepted at runtime.
   await (wb.xlsx.load as unknown as (data: Uint8Array) => Promise<unknown>)(buf);
@@ -112,7 +113,7 @@ async function parseXlsx(buf: Buffer): Promise<ParsedContact[]> {
     });
     if (Object.keys(obj).length > 0) rows.push(obj);
   });
-  return rowsToContacts(rows);
+  return rows;
 }
 
 /** ExcelJS cell values can be strings, numbers, dates, or rich objects. */
@@ -130,23 +131,39 @@ function cellText(cell: ExcelJS.Cell): string {
   return "";
 }
 
-async function parsePdf(buf: Buffer): Promise<ParsedContact[]> {
-  const { text } = await pdfParse(buf);
-  return extractEmails(text).map((email) => ({ email, customFields: {} }));
+export interface ContactFileRead {
+  /** Selected rows that have an email address, in file order. */
+  contacts: ParsedContact[];
+  /** Selected rows without an email address. Not imported. */
+  noEmail: number;
+  /** Rows in the file, and how many were taken (the first maxRows) or left for another file. */
+  limit: ImportLimit;
 }
 
+/**
+ * Read an import file. Only the first `maxRows` data rows (a pdf: distinct email addresses, in
+ * the order they appear) are taken; `limit` counts the rest. Rows without an email are counted
+ * in `noEmail`, not dropped silently.
+ */
 export async function parseContactFile(
   buf: Buffer,
   format: ImportFormat,
-): Promise<ParsedContact[]> {
-  if (format === "csv") {
-    const rows = parseCsv(buf.toString("utf8"), {
-      columns: true,
-      skip_empty_lines: true,
-      trim: true,
-    }) as Record<string, string>[];
-    return rowsToContacts(rows);
+  maxRows: number = IMPORT_MAX_ROWS,
+): Promise<ContactFileRead> {
+  if (format === "pdf") {
+    const { text } = await pdfParse(buf);
+    const { rows: emails, limit } = applyImportLimit(extractEmails(text), maxRows);
+    return { contacts: emails.map((email) => ({ email, customFields: {} })), noEmail: 0, limit };
   }
-  if (format === "xlsx") return parseXlsx(buf);
-  return parsePdf(buf);
+  const all =
+    format === "csv"
+      ? (parseCsv(buf.toString("utf8"), {
+          columns: true,
+          skip_empty_lines: true,
+          trim: true,
+        }) as Record<string, string>[])
+      : await readXlsxRows(buf);
+  const { rows, limit } = applyImportLimit(all.filter(hasData), maxRows);
+  const contacts = rowsToContacts(rows);
+  return { contacts, noEmail: rows.length - contacts.length, limit };
 }

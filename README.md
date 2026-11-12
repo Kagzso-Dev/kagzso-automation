@@ -593,6 +593,22 @@ those calls, and an empty Business leaves them as they were. Customer name, gend
 every call. The business stays on the call and is never saved on the voice backend's contact, so a fix or a cleared
 field counts on the next call.
 
+**Customer questions (learned FAQ).** After an autonomous agent's call, its voice backend asks the LLM once more for the
+customer's general questions about the company (`app/services/customer_questions.py`). This runs after the outcome,
+do-not-call and follow-ups are saved, never during the call, and nothing the AI says on a call changes. Dispatch
+sends each call the agent's own questions, so the model can match a differently worded question, in any language, to
+one it already has. The agent's **Knowledge** tab then shows how often each Q&A was asked and how often the AI couldn't
+answer it (filter *Customer questions*). A new question becomes a **Draft** Q&A (source *customer calls*), with the
+customer's wording among its questions and an answer drafted **only from the agent's approved knowledge**, or no
+answer when nothing approved covers it. A customer's words are never used as an answer, and their name, business,
+number or email is never kept. Like any item, a suggestion reaches calls only after an admin approves it and
+publishes the agent. Rejecting it stops it being suggested again. Nothing is learned from guided calls, Call Flows,
+wrong-person, voicemail or do-not-call calls. Counts are kept in the `Setting` table (`aiAgentQuestions:<agent id>`;
+no new table). Switch it off per language with `QUESTION_LEARNING_ENABLED=false` in that backend's `.env.<code>`
+(each answered agent call otherwise makes one extra LLM request afterwards). A voice backend from before this refuses
+the new `known_questions` field: Dispatch then places the call without it, so nothing is learned until that backend is
+updated. Real-model check: `scripts/customer_questions_check.py --run`.
+
 The old agent-level category,
 industry and business name columns stay in the database unused. So do the shared category and industry library's
 tables and API: no screen, agent or call uses them, and nothing saved in them is lost.

@@ -6,6 +6,7 @@
 import { parse as parseCsv } from "csv-parse/sync";
 import ExcelJS from "exceljs";
 import { detectAiCallColumns, type AiCallColumnMapping } from "@dispatch/shared";
+import { applyImportLimit } from "./importLimit.js";
 
 export type AiCallImportFormat = "csv" | "xlsx";
 
@@ -13,10 +14,15 @@ export const AI_CALL_IMPORT_MAX_ROWS = 5000;
 
 export interface AiCallSheet {
   headers: string[];
+  /** The first AI_CALL_IMPORT_MAX_ROWS data rows, in file order. */
   rows: Record<string, string>[];
   mapping: AiCallColumnMapping;
   /** True when the file had more than AI_CALL_IMPORT_MAX_ROWS data rows. */
   truncated: boolean;
+  /** Data rows in the file (blank rows not counted); rows beyond `rows` are not imported. */
+  totalRows: number;
+  /** The most rows one file gives (AI_CALL_IMPORT_MAX_ROWS). */
+  maxRows: number;
 }
 
 export function aiCallFormatFromFilename(filename: string): AiCallImportFormat | null {
@@ -44,11 +50,14 @@ function cellText(cell: ExcelJS.Cell): string {
 
 function finish(headers: string[], rows: Record<string, string>[]): AiCallSheet {
   const clean = rows.filter((r) => Object.values(r).some((v) => v.trim() !== ""));
+  const { rows: selected, limit } = applyImportLimit(clean, AI_CALL_IMPORT_MAX_ROWS);
   return {
     headers,
-    rows: clean.slice(0, AI_CALL_IMPORT_MAX_ROWS),
+    rows: selected,
     mapping: detectAiCallColumns(headers),
-    truncated: clean.length > AI_CALL_IMPORT_MAX_ROWS,
+    truncated: limit.skippedOverLimit > 0,
+    totalRows: limit.totalRows,
+    maxRows: limit.maxRows,
   };
 }
 

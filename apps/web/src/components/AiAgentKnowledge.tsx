@@ -1,7 +1,9 @@
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  AI_CALL_LANGUAGE_NAMES,
   AI_KNOWLEDGE_FORMATS,
+  AI_KNOWLEDGE_FROM_CALLS,
   AI_KNOWLEDGE_MAX_APPROVED,
   AI_KNOWLEDGE_MAX_FILES_PER_UPLOAD,
   AI_KNOWLEDGE_TEXT_MAX,
@@ -31,7 +33,7 @@ export function AiAgentKnowledge({ agent }: { agent: AiAgentView }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const replaceInput = useRef<HTMLInputElement>(null);
   const [replacing, setReplacing] = useState<string | null>(null);
-  const [filter, setFilter] = useState<AiKnowledgeStatus | "all" | "issues">("all");
+  const [filter, setFilter] = useState<AiKnowledgeStatus | "all" | "issues" | "calls">("all");
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<AiKnowledgeItemView | "new" | null>(null);
   const refresh = () => AGENT_QUERY_KEYS.forEach((key) => void qc.invalidateQueries({ queryKey: [...key] }));
@@ -77,10 +79,15 @@ export function AiAgentKnowledge({ agent }: { agent: AiAgentView }) {
   });
 
   const items = k.data?.items ?? [];
-  const shown = useMemo(
-    () => items.filter((i) => (filter === "all" ? true : filter === "issues" ? i.issues.length > 0 : i.status === filter)),
-    [items, filter],
-  );
+  const fromCalls = (i: AiKnowledgeItemView) => !!i.calls || i.source === AI_KNOWLEDGE_FROM_CALLS;
+  const shown = useMemo(() => {
+    if (filter === "calls") {
+      // Customer questions: the most asked first.
+      return items.filter(fromCalls).sort((a, b) => (b.calls?.asked ?? 0) - (a.calls?.asked ?? 0));
+    }
+    return items.filter((i) => (filter === "all" ? true : filter === "issues" ? i.issues.length > 0 : i.status === filter));
+  }, [items, filter]);
+  const suggestions = items.filter((i) => i.source === AI_KNOWLEDGE_FROM_CALLS && i.status === "draft").length;
   const fileName = new Map((k.data?.files ?? []).map((f) => [f.id, f.fileName]));
   const approved = items.filter((i) => i.status === "approved").length;
 
@@ -179,11 +186,21 @@ export function AiAgentKnowledge({ agent }: { agent: AiAgentView }) {
             <option value="issues">With issues ({items.filter((i) => i.issues.length).length})</option>
             <option value="approved">Approved ({approved})</option>
             <option value="rejected">Rejected ({items.filter((i) => i.status === "rejected").length})</option>
+            <option value="calls">Customer questions ({items.filter(fromCalls).length})</option>
           </select>
           <button type="button" className="btn btn-ghost" onClick={() => setEditing("new")}>
             Add item
           </button>
         </div>
+        {(filter === "calls" || suggestions > 0) && (
+          <p className="mb-3 text-xs text-slate-550">
+            <span className="font-medium text-ink">Customer questions.</span> After each call, the questions customers asked about
+            the company are counted on the Q&amp;A they match, in any wording or language. A new question is added here as a Draft
+            Q&amp;A ({suggestions} to review), with an answer drafted only from this agent's approved knowledge, or none when
+            nothing approved answers it. What a customer said is never used as an answer. Check or write the answer, then approve
+            it and publish the agent: until then no call uses it. Reject a question to stop it being suggested again.
+          </p>
+        )}
         {picked.size > 0 && (
           <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg bg-tint px-3 py-2">
             <span>{picked.size} selected</span>
@@ -240,12 +257,28 @@ export function AiAgentKnowledge({ agent }: { agent: AiAgentView }) {
                     <td className="py-2 pr-3 font-medium">
                       {i.topic}
                       <div className="text-xs font-normal text-slate-550">{i.kind === "qa" ? "Q&A" : i.always ? "fact · every reply" : "fact"}</div>
+                      {i.calls && (
+                        <div className="text-xs font-normal text-slate-550">
+                          Asked on {i.calls.asked} call{i.calls.asked === 1 ? "" : "s"}
+                          {i.calls.unanswered > 0 && <span className="text-warn"> · not answered on {i.calls.unanswered}</span>}
+                        </div>
+                      )}
                     </td>
                     <td className="py-2 pr-3">
                       {i.questions.length > 0 && <div className="text-xs text-slate-550">Q: {i.questions.join(" · ")}</div>}
                       <button type="button" className="text-left hover:underline" onClick={() => setEditing(i)}>
-                        {i.text}
+                        {i.text || <span className="italic text-slate-550">No approved information answers this yet: write the answer</span>}
                       </button>
+                      {i.source === AI_KNOWLEDGE_FROM_CALLS && i.status === "draft" && i.text && (
+                        <div className="text-xs text-slate-550">
+                          {i.calls?.draftedFrom.length
+                            ? `Drafted from approved knowledge: ${i.calls.draftedFrom.join(", ")}. Check it before approving.`
+                            : "Check the answer before approving."}
+                        </div>
+                      )}
+                      {i.calls && i.calls.ways.length > 0 && (
+                        <div className="text-xs text-slate-550">Also asked as: {i.calls.ways.join(" · ")}</div>
+                      )}
                       {i.industryHint && <div className="text-xs text-slate-550">Industry in the file: {i.industryHint}</div>}
                       {i.issues.map((x) => (
                         <div key={x} className="text-xs text-crit">
@@ -256,6 +289,15 @@ export function AiAgentKnowledge({ agent }: { agent: AiAgentView }) {
                     <td className="py-2 pr-3 text-xs text-slate-550">
                       {i.fileId ? fileName.get(i.fileId) : null}
                       {i.source && <div>{i.source}</div>}
+                      {i.calls && (
+                        <div>
+                          Last asked {new Date(i.calls.lastAskedAt).toLocaleDateString()}
+                          {" · "}
+                          {Object.keys(i.calls.languages)
+                            .map((l) => AI_CALL_LANGUAGE_NAMES[l as keyof typeof AI_CALL_LANGUAGE_NAMES] ?? l)
+                            .join(", ")}
+                        </div>
+                      )}
                     </td>
                     <td className="py-2">
                       <Badge tone={STATUS_TONE[i.status]}>{i.status}</Badge>

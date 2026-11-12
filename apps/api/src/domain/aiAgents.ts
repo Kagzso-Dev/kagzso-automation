@@ -23,6 +23,7 @@ import {
 import { prisma } from "../prisma.js";
 import { AI_AGENT_COMPILER_VERSION, compileAgentFlow, type CompileKnowledgeItem } from "./aiAgentCompile.js";
 import { itemIssues, type Extraction } from "./aiAgentKnowledge.js";
+import { questionStats } from "./aiAgentQuestions.js";
 import { agentReplySpeed, saveAgentReplySpeed } from "./aiCallVoiceTuning.js";
 import { definitionHash, latestPublished, schemaIssues } from "./callFlows.js";
 import { getSetting, setSetting } from "./settings.js";
@@ -225,9 +226,10 @@ function itemView(i: AiAgentKnowledgeItem): AiKnowledgeItemView {
 
 export async function listKnowledge(agentId: string): Promise<{ files: AiKnowledgeFileView[]; items: AiKnowledgeItemView[] }> {
   await getAgentRow(agentId);
-  const [files, items] = await Promise.all([
+  const [files, items, calls] = await Promise.all([
     prisma.aiAgentKnowledgeFile.findMany({ where: { agentId }, orderBy: { createdAt: "desc" } }),
     prisma.aiAgentKnowledgeItem.findMany({ where: { agentId }, orderBy: [{ fileId: "asc" }, { createdAt: "asc" }] }),
+    questionStats(agentId), // how often customers asked each Q&A on calls (domain/aiAgentQuestions)
   ]);
   return {
     files: files.map((f) => ({
@@ -241,7 +243,7 @@ export async function listKnowledge(agentId: string): Promise<{ files: AiKnowled
       uploadedByEmail: f.uploadedByEmail,
       createdAt: f.createdAt.toISOString(),
     })),
-    items: items.map(itemView),
+    items: items.map((i) => (calls[i.id] ? { ...itemView(i), calls: calls[i.id] } : itemView(i))),
   };
 }
 

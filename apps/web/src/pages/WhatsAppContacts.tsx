@@ -8,6 +8,22 @@ import { SendWhatsApp, type WhatsAppRecipient } from "../components/SendWhatsApp
 import { useWhatsAppConfig, WHATSAPP_NOT_CONFIGURED_HINT } from "../lib/whatsapp";
 import { formatPhoneDisplay } from "@dispatch/shared";
 import { PhoneInput, phoneInputOk } from "../components/PhoneInput";
+import { ImportCountsSummary, ImportSummaryCard } from "../components/ImportSummary";
+import { fullNumber } from "../lib/numberFormat";
+
+/** POST /api/whatsapp/contacts/import. created + updated + duplicates + failed = selectedRows. */
+interface WhatsAppImportResult {
+  totalRows: number;
+  maxRows: number;
+  selectedRows: number;
+  skippedOverLimit: number;
+  created: number;
+  updated: number;
+  /** The same number again later in the file: applied to that contact. */
+  duplicates: number;
+  /** No usable phone number. */
+  failed: number;
+}
 
 interface WContact {
   id: string;
@@ -128,17 +144,24 @@ export function WhatsAppContactsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["whatsapp-contacts"] }),
   });
 
+  // The summary card below replaces the old "Contacts imported" toast: it also says what wasn't imported.
+  const [importResult, setImportResult] = useState<{ filename: string; result: WhatsAppImportResult } | null>(null);
   const importMut = useMutation({
     mutationFn: async (file: File) => {
       const fd = new FormData();
       fd.append("file", file);
-      return api<{ created: number; updated: number }>("/api/whatsapp/contacts/import", {
+      const result = await api<WhatsAppImportResult>("/api/whatsapp/contacts/import", {
         method: "POST",
         body: fd,
-        notify: "Contacts imported",
+        notify: false,
       });
+      return { filename: file.name, result };
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["whatsapp-contacts"] }),
+    onMutate: () => setImportResult(null),
+    onSuccess: (r) => {
+      setImportResult(r);
+      return qc.invalidateQueries({ queryKey: ["whatsapp-contacts"] });
+    },
   });
 
   const configured = config.data?.configured ?? false;
@@ -211,6 +234,22 @@ export function WhatsAppContactsPage() {
         <div className="mb-3">
           <ErrorNote error={importMut.error} />
         </div>
+      )}
+      {importResult && (
+        <ImportSummaryCard title={`Import summary: ${importResult.filename}`} onDismiss={() => setImportResult(null)}>
+          <ImportCountsSummary
+            counts={{ ...importResult.result, imported: importResult.result.created + importResult.result.updated }}
+            details={[
+              `Imported: ${fullNumber.format(importResult.result.created)} new, ${fullNumber.format(importResult.result.updated)} already saved (updated)`,
+              importResult.result.failed ? `${fullNumber.format(importResult.result.failed)} without a usable phone number` : null,
+              importResult.result.duplicates
+                ? `${fullNumber.format(importResult.result.duplicates)} repeating a number from an earlier row (applied to that contact)`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          />
+        </ImportSummaryCard>
       )}
       {del.error && (
         <div className="mb-3">

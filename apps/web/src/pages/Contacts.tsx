@@ -12,6 +12,8 @@ import { Icon } from "../components/icons";
 import { useAiCallsConfig } from "../lib/aiCalls";
 import { formatPhoneDisplay } from "@dispatch/shared";
 import { PhoneInput, phoneInputOk } from "../components/PhoneInput";
+import { ImportCountsSummary, ImportSummaryCard } from "../components/ImportSummary";
+import { fullNumber } from "../lib/numberFormat";
 
 interface Contact {
   id: string;
@@ -163,15 +165,17 @@ export function ContactsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["contacts"] }),
   });
 
+  // The import runs as a queued job; ContactImportStatus follows it and shows the summary.
+  const [importJob, setImportJob] = useState<{ jobId: string; filename: string } | null>(null);
   const importMut = useMutation({
     mutationFn: async (file: File) => {
       const fd = new FormData();
       fd.append("file", file);
-      return api<{ jobId: string }>("/api/contacts/import", { method: "POST", body: fd });
+      const { jobId } = await api<{ jobId: string }>("/api/contacts/import", { method: "POST", body: fd });
+      return { jobId, filename: file.name };
     },
-    onSuccess: () => {
-      setTimeout(() => qc.invalidateQueries({ queryKey: ["contacts"] }), 1500);
-    },
+    onMutate: () => setImportJob(null),
+    onSuccess: (job) => setImportJob(job),
   });
 
   return (
@@ -240,8 +244,8 @@ export function ContactsPage() {
       />
 
       {importMut.isPending && <div className="mb-3 text-sm text-slate-550">Uploading file…</div>}
-      {importMut.isSuccess && (
-        <div className="mb-3 text-sm text-ok">Import queued — refreshing shortly.</div>
+      {importJob && (
+        <ContactImportStatus key={importJob.jobId} {...importJob} onDismiss={() => setImportJob(null)} />
       )}
       {importMut.error && (
         <div className="mb-3">
@@ -429,6 +433,101 @@ export function ContactsPage() {
         onSent={() => setSelectedIds(new Set())}
       />
     </div>
+  );
+}
+
+/** A Contacts import job's result (apps/api queue/contactImport.ts). created + updated + duplicates + failed = selectedRows. */
+interface ContactImportResult {
+  totalRows: number;
+  maxRows: number;
+  selectedRows: number;
+  skippedOverLimit: number;
+  created: number;
+  updated: number;
+  /** The same email again later in the file: applied to that contact. */
+  duplicates: number;
+  /** No usable email address. */
+  skipped: number;
+  /** Email domain not on the approved sending list. */
+  rejectedDomain: number;
+  failed: number;
+}
+
+interface ContactImportJobView {
+  jobId: string;
+  state: "PENDING" | "ACTIVE" | "COMPLETED" | "FAILED" | "DEAD";
+  result: ContactImportResult | null;
+  failedReason: string | null;
+}
+
+const IMPORT_FINISHED = new Set<ContactImportJobView["state"]>(["COMPLETED", "FAILED", "DEAD"]);
+
+/** Follows a queued Contacts import until it finishes, then shows its summary. */
+export function ContactImportStatus({ jobId, filename, onDismiss }: { jobId: string; filename: string; onDismiss: () => void }) {
+  const qc = useQueryClient();
+  const job = useQuery({
+    queryKey: ["contact-import", jobId],
+    queryFn: () => api<ContactImportJobView>(`/api/contacts/import/${encodeURIComponent(jobId)}`),
+    refetchInterval: (q) => (q.state.data && IMPORT_FINISHED.has(q.state.data.state) ? false : 1500),
+  });
+  const state = job.data?.state;
+  useEffect(() => {
+    if (state === "COMPLETED") void qc.invalidateQueries({ queryKey: ["contacts"] });
+  }, [state, qc]);
+
+  if (job.error) {
+    return (
+      <div className="mb-3">
+        <ErrorNote error={job.error} />
+      </div>
+    );
+  }
+  if (!job.data || !IMPORT_FINISHED.has(job.data.state)) {
+    return (
+      <div className="mb-3 text-sm text-slate-550" role="status">
+        Importing {filename}…
+      </div>
+    );
+  }
+  const r = job.data.result;
+  if (job.data.state !== "COMPLETED" || !r) {
+    return (
+      <div className="mb-3">
+        <ErrorNote error={new Error(`Import of ${filename} failed: ${job.data.failedReason ?? "unknown error"}`)} />
+      </div>
+    );
+  }
+  const n = (v: number) => fullNumber.format(v);
+  const details = [
+    `Imported: ${n(r.created)} new, ${n(r.updated)} already saved (updated)`,
+    r.skipped ? `${n(r.skipped)} without an email address` : null,
+    r.rejectedDomain ? `${n(r.rejectedDomain)} with an email domain not on the approved list (Settings)` : null,
+    r.duplicates ? `${n(r.duplicates)} repeating an email from an earlier row (applied to that contact)` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <ImportSummaryCard title={`Import summary: ${filename}`} onDismiss={onDismiss}>
+      {typeof r.totalRows === "number" ? (
+        <ImportCountsSummary
+          counts={{
+            totalRows: r.totalRows,
+            maxRows: r.maxRows,
+            selectedRows: r.selectedRows,
+            imported: r.created + r.updated,
+            failed: r.failed,
+            duplicates: r.duplicates,
+            skippedOverLimit: r.skippedOverLimit,
+          }}
+          details={details}
+        />
+      ) : (
+        // A job finished by a worker from before the import limit: only its own counts.
+        <p className="text-sm">
+          Import finished: {n(r.created)} new, {n(r.updated)} updated.
+        </p>
+      )}
+    </ImportSummaryCard>
   );
 }
 

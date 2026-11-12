@@ -1,10 +1,9 @@
 import { env } from "../env.js";
 import { logger } from "../logger.js";
-import { prisma } from "../prisma.js";
 import { deliverEmail } from "../domain/delivery.js";
 import { PermanentSendError } from "../provider/index.js";
 import { DeferJobError, PermanentJobError, QueueWorker } from "./engine.js";
-import { QUEUE, type CampaignDispatchJob, type ContactImportJob, type SendEmailJob } from "./queues.js";
+import { QUEUE, type CampaignDispatchJob, type SendEmailJob } from "./queues.js";
 import { dailyCapReached, msUntilNextWindow } from "./dailyCap.js";
 import { processManualBulkSend } from "./manualBulkSend.js";
 import { processWhatsAppBulkSend } from "./whatsappBulkSend.js";
@@ -13,8 +12,7 @@ import { processAiCallFollowup } from "./aiCallFollowup.js";
 import { processWhatsAppMediaDownload } from "./whatsappMediaDownload.js";
 import { processDataQuality } from "./dataQuality.js";
 import { fanOutCampaign } from "./dispatch.js";
-import { parseContactFile } from "../domain/contactImport.js";
-import { domainAllowed, loadAllowedDomains } from "../domain/allowedDomains.js";
+import { processContactImport } from "./contactImport.js";
 
 /* ----------------------------------------------------- send-email */
 
@@ -121,54 +119,7 @@ const contactImportWorker = new QueueWorker({
   queue: QUEUE.csvImport,
   batch: 1,
   pollMs: 2000,
-  processor: async (payload) => {
-    const job = payload as unknown as ContactImportJob;
-    const parsed = await parseContactFile(Buffer.from(job.fileBase64, "base64"), job.format);
-    const allowedDomains = await loadAllowedDomains();
-
-    let created = 0;
-    let updated = 0;
-    let skipped = 0; // no usable email address
-    let rejectedDomain = 0; // email domain not on the approved list
-    for (const row of parsed) {
-      const email = row.email.toLowerCase().trim();
-      if (!email || !email.includes("@")) {
-        skipped++;
-        continue;
-      }
-      if (!domainAllowed(email, allowedDomains)) {
-        rejectedDomain++;
-        continue;
-      }
-      const data = {
-        firstName: row.firstName || undefined,
-        lastName: row.lastName || undefined,
-        phone: row.phone || undefined,
-        businessName: row.businessName || undefined,
-        customFields: row.customFields,
-      };
-      const existing = await prisma.contact.findUnique({ where: { email } });
-      const contact = await prisma.contact.upsert({
-        where: { email },
-        create: { email, ...data },
-        update: data, // import = upsert on email (design §13)
-      });
-      if (existing) updated++;
-      else created++;
-      if (job.listId) {
-        await prisma.listMembership.upsert({
-          where: { listId_contactId: { listId: job.listId, contactId: contact.id } },
-          create: { listId: job.listId, contactId: contact.id },
-          update: {},
-        });
-      }
-    }
-    logger.info(
-      { format: job.format, created, updated, skipped, rejectedDomain },
-      "contact import complete",
-    );
-    return { created, updated, skipped, rejectedDomain, total: parsed.length };
-  },
+  processor: (payload) => processContactImport(payload),
 });
 
 export function startAllWorkers(): QueueWorker[] {

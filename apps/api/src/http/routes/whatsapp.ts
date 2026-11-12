@@ -189,7 +189,8 @@ whatsappRouter.post(
     const format = formatFromFilename(req.file.originalname);
     if (!format) throw badRequest("Unsupported file type — upload a .csv or .xlsx file");
 
-    const parsed = await parseWhatsAppContactFile(
+    // Only the first IMPORT_MAX_ROWS data rows are imported; `limit` counts the rest for the summary.
+    const { contacts, noPhone, limit } = await parseWhatsAppContactFile(
       req.file.buffer,
       format,
       whatsappConfig.defaultCountryCode,
@@ -197,22 +198,28 @@ whatsappRouter.post(
 
     let created = 0;
     let updated = 0;
-    for (const row of parsed) {
+    let duplicates = 0; // a number repeated in the file: applied to that contact, as before
+    const seen = new Set<string>();
+    for (const row of contacts) {
       const data = {
         firstName: row.firstName || undefined,
         lastName: row.lastName || undefined,
         businessName: row.businessName || undefined,
       };
-      const existing = await prisma.whatsAppContact.findUnique({ where: { phone: row.phone } });
+      const repeated = seen.has(row.phone);
+      seen.add(row.phone);
+      const existing = repeated ? null : await prisma.whatsAppContact.findUnique({ where: { phone: row.phone } });
       await prisma.whatsAppContact.upsert({
         where: { phone: row.phone },
         create: { phone: row.phone, ...data },
         update: data,
       });
-      if (existing) updated++;
+      if (repeated) duplicates++;
+      else if (existing) updated++;
       else created++;
     }
-    res.json({ created, updated, skipped: 0, total: parsed.length });
+    // created + updated + duplicates + failed = selectedRows. skipped = failed: rows without a usable number.
+    res.json({ ...limit, created, updated, duplicates, failed: noPhone, skipped: noPhone, total: contacts.length });
   }),
 );
 

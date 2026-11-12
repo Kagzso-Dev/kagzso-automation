@@ -29,6 +29,7 @@ import { disabledAiCallLanguages, languageName } from "../domain/aiCallLanguages
 import { voiceTuningForCall } from "../domain/aiCallVoiceTuning.js";
 import { pinnedFlowForRun } from "../domain/callFlows.js";
 import { businessForCall, markCustomerCalling, syncCustomerFromLog } from "../domain/aiCallCustomerSync.js";
+import { knownQuestionsForFlow } from "../domain/aiAgentQuestions.js";
 import { getVoiceCall, placeVoiceCall, VoiceBackendError } from "../services/voiceBackend.js";
 import { DeferJobError } from "./engine.js";
 import type { AiCallRunJob } from "./queues.js";
@@ -86,6 +87,7 @@ async function pollInFlight(runId: string, language: AiCallLanguage): Promise<bo
         endedAt: parseUtc(d.ended_at),
         error: d.hangup_cause,
         learnedBusiness: d.learned_business,
+        customerQuestions: d.customer_questions,
       });
     } catch (err) {
       logger.warn(
@@ -181,11 +183,14 @@ export async function processAiCallRun(payload: Record<string, unknown>): Promis
     const customerBusiness = await businessForCall(next.id, next.phone, language);
     // Null for every language without tuning (nothing is read), and for "Current behavior". The flow finds an AI Agent's own reply speed.
     const voiceTuning = await voiceTuningForCall(language, flow?.flowId);
+    // An Autonomous AI Agent's flow only: its questions, so the customer's are learned after the call. Null otherwise.
+    const knownQuestions = await knownQuestionsForFlow(flow?.flowId);
     const { callId, providerCallId } = await placeVoiceCall({
       // Runs without the setting (older runs, test calls) call exactly as before.
       ...(greetingDelaySec != null ? { greetingDelaySec } : {}),
       ...(customerBusiness ? { customerBusiness } : {}),
       ...(voiceTuning ? { voiceTuning } : {}),
+      ...(knownQuestions ? { knownQuestions } : {}),
       customerName: next.customerName,
       gender: next.gender,
       followUpDetail: next.followUpDetail,

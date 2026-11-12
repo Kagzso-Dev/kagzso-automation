@@ -42,6 +42,7 @@ import { PhoneInput, phoneInputOk } from "./PhoneInput";
 import { useConfirm } from "./confirm";
 import { useToast } from "./toast";
 import { TrainingFromCallButton } from "./TrainingFromCall";
+import { ImportCountsSummary, OverLimitNote } from "./ImportSummary";
 import { Badge, EmptyState, ErrorNote, Modal, Spinner, Table, type BadgeTone } from "./ui";
 
 /**
@@ -572,6 +573,18 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
   const invalid = checks.filter((c) => c.errors.length > 0).length;
   const duplicates = checks.filter((c) => c.duplicate).length;
   const validRows = rows.filter((_, i) => checks[i]!.errors.length === 0 && !checks[i]!.duplicate);
+  // Rows after the import limit: never sent to the server, reported in the summary.
+  const skippedOverLimit = sheet ? Math.max(0, sheet.totalRows - sheet.rows.length) : 0;
+  const overLimit = sheet && skippedOverLimit > 0 && (
+    <OverLimitNote totalRows={sheet.totalRows} maxRows={sheet.maxRows} skippedOverLimit={skippedOverLimit} imported={!!(result || perLanguage)} />
+  );
+  // Back to "Choose file", e.g. for the rows a file over the limit left out.
+  const startOver = () => {
+    setSheet(null);
+    setMapping(null);
+    setResult(null);
+    setPerLanguage(null);
+  };
 
   const doImport = useMutation({
     mutationFn: async () => {
@@ -608,7 +621,13 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
             </tr>
           ))}
         </Table>
-        <div className="mt-4 flex justify-end">
+        {overLimit && <div className="mt-3">{overLimit}</div>}
+        <div className="mt-4 flex justify-end gap-2">
+          {skippedOverLimit > 0 && (
+            <button type="button" className="btn-ghost" onClick={startOver}>
+              Upload another file
+            </button>
+          )}
           <button className="btn-primary" onClick={onClose}>
             Done
           </button>
@@ -617,14 +636,22 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
     );
   }
 
-  if (result) {
+  if (result && sheet) {
     return (
       <div>
-        <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Stat label="Imported" value={result.imported} tone="ok" />
-          <Stat label="Skipped (invalid)" value={invalid + result.skipped} tone={invalid + result.skipped ? "crit" : "neutral"} />
-          <Stat label="Duplicates" value={duplicates + result.duplicates} tone={duplicates + result.duplicates ? "warn" : "neutral"} />
-          <Stat label="Do not call" value={result.doNotCall} tone={result.doNotCall ? "warn" : "neutral"} />
+        <div className="mb-3">
+          <ImportCountsSummary
+            counts={{
+              totalRows: sheet.totalRows,
+              maxRows: sheet.maxRows,
+              selectedRows: rows.length,
+              imported: result.imported,
+              failed: invalid + result.skipped,
+              duplicates: duplicates + result.duplicates,
+              skippedOverLimit,
+            }}
+            extra={[{ label: "Do not call", value: result.doNotCall, tone: result.doNotCall ? "warn" : "neutral" }]}
+          />
         </div>
         {result.doNotCall > 0 && (
           <p className="mb-3 text-sm text-slate-550">Numbers already on the do-not-call list were saved as “Do not call” and will never be dialled.</p>
@@ -634,7 +661,12 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
             {result.problems.length} row{result.problems.length === 1 ? " was" : "s were"} not imported because the number is already saved.
           </p>
         )}
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          {skippedOverLimit > 0 && (
+            <button type="button" className="btn-ghost" onClick={startOver}>
+              Upload another file
+            </button>
+          )}
           <button className="btn-primary" onClick={onClose}>
             Done
           </button>
@@ -690,7 +722,6 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-sm">
         <span>
           <b>{rows.length}</b> row{rows.length === 1 ? "" : "s"} read
-          {sheet.truncated && <span className="text-warn"> (file truncated to the first {rows.length})</span>}
         </span>
         <button
           className="text-xs text-accent-ink hover:underline"
@@ -702,6 +733,7 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
           Upload a different file
         </button>
       </div>
+      {overLimit && <div className="mb-3">{overLimit}</div>}
       <div className="mb-4 grid gap-3 sm:grid-cols-4">
         {AI_CALL_CUSTOMER_FIELDS.map((f) => (
           <div key={f}>
@@ -933,16 +965,6 @@ function CopyToLanguagesModal({ ids, onClose }: { ids: string[] | null; onClose:
         </div>
       </div>
     </Modal>
-  );
-}
-
-function Stat({ label, value, tone }: { label: string; value: number; tone: BadgeTone }) {
-  const color = tone === "ok" ? "text-ok" : tone === "crit" ? "text-crit" : tone === "warn" ? "text-warn" : "text-ink";
-  return (
-    <div className="rounded-lg border border-line px-3 py-2">
-      <div className={`text-xl font-semibold ${color}`}>{value}</div>
-      <div className="text-xs text-slate-550">{label}</div>
-    </div>
   );
 }
 
