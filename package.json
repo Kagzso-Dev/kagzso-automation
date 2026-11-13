@@ -34,6 +34,8 @@
     "callflow:import": "tsx prisma/importCallFlow.ts --apply",
     "callflow:seed:plan": "tsx prisma/seedCallFlowLanguages.ts",
     "callflow:seed": "tsx prisma/seedCallFlowLanguages.ts --apply",
+    "outreach:templates:plan": "tsx prisma/importOutreachTemplates.ts",
+    "outreach:templates": "tsx prisma/importOutreachTemplates.ts --apply",
     "voice:lang:plan": "node scripts/voice-lang-env.mjs",
     "voice:lang:init": "node scripts/voice-lang-env.mjs --apply",
     "seed": "npm run db:seed",
