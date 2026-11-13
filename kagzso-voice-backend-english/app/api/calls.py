@@ -58,6 +58,7 @@ async def get_call(call_id: str, db: AsyncSession = Depends(get_db)) -> CallDeta
     ]
     out.learned_business = (call.variables or {}).get("learned_business")
     out.customer_questions = customer_questions.learned(call.variables or {})
+    out.call_insights = customer_questions.insights(call.variables or {})
     return out
 
 

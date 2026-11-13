@@ -448,4 +448,8 @@ export interface AiKnowledgeCallStats {
   ways: string[];
   /** The approved knowledge (topics) its drafted answer came from; empty = an admin wrote or must write it. */
   draftedFrom: string[];
+  /** How the customers who asked it felt on their call, per sentiment (counted since call insights; absent on older counts). */
+  sentiments?: Record<string, number>;
+  /** How interested the customers who asked it were at the end of their call, per interest level. */
+  interests?: Record<string, number>;
 }

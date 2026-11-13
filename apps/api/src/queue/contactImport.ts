@@ -32,7 +32,9 @@ export async function processContactImport(
   maxRows: number = IMPORT_MAX_ROWS,
 ): Promise<ContactImportResult> {
   const job = payload as unknown as ContactImportJob;
-  const { contacts, noEmail, limit } = await parseContactFile(Buffer.from(job.fileBase64, "base64"), job.format, maxRows);
+  // A big file was read by the API already (only its first rows are here); a small one is read now.
+  const { contacts, noEmail, limit } =
+    job.parsed ?? (await parseContactFile(Buffer.from(job.fileBase64 ?? "", "base64"), job.format, maxRows));
   const allowedDomains = await loadAllowedDomains();
 
   let created = 0;

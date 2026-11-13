@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import type {
+  AiAgentCallInsights,
   AiAgentView,
   AiCallLanguage,
   AiKnowledgeFileView,
@@ -29,7 +30,9 @@ export function useAiAgent(id: string | null) {
 export function useAgentKnowledge(id: string | null) {
   return useQuery({
     queryKey: ["ai-agent-knowledge", id],
-    queryFn: () => api<{ files: AiKnowledgeFileView[]; items: AiKnowledgeItemView[] }>(`/api/ai-agents/${id}/knowledge`),
+    // insights: the agent's call insights (sentiment, interest, concerns); null / absent = none yet.
+    queryFn: () =>
+      api<{ files: AiKnowledgeFileView[]; items: AiKnowledgeItemView[]; insights?: AiAgentCallInsights | null }>(`/api/ai-agents/${id}/knowledge`),
     enabled: !!id,
   });
 }

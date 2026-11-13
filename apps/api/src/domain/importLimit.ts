@@ -4,10 +4,10 @@
 // No email / WhatsApp dependencies, so every import module can use it.
 
 /**
- * The most data rows one Contacts or WhatsApp Contacts import takes. The same number as the
- * AI call customer import (AI_CALL_IMPORT_MAX_ROWS, which keeps its own constant).
+ * The most data rows one bulk import takes: Contacts, WhatsApp Contacts and AI Call Customers.
+ * (AI calls from a file and Data Quality uploads keep AI_CALL_IMPORT_MAX_ROWS, 5,000.)
  */
-export const IMPORT_MAX_ROWS = 5000;
+export const IMPORT_MAX_ROWS = 1000;
 
 export interface ImportLimit {
   /** Data rows in the file. Blank rows are not counted. */
@@ -32,6 +32,15 @@ export function applyImportLimit<T>(rows: readonly T[], maxRows: number = IMPORT
       skippedOverLimit: rows.length - selected.length,
     },
   };
+}
+
+/**
+ * Counts for a file read as a stream (importStream.ts): `kept` rows of the first maxRows, out of
+ * `counted` rows in the file. A kept row found blank only once its text was read is not counted.
+ */
+export function streamedLimit(kept: number, counted: number, maxRows: number): ImportLimit {
+  const skippedOverLimit = Math.max(0, counted - maxRows);
+  return { totalRows: kept + skippedOverLimit, maxRows, selectedRows: kept, skippedOverLimit };
 }
 
 /** True when the row has at least one non-blank value. A blank row is not a record. */

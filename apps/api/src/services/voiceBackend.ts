@@ -76,6 +76,8 @@ export interface VoiceCallDetail {
   learned_business?: string | null;
   /** The customer's questions, learned after an AI Agent's call (checked by domain/aiAgentQuestions). */
   customer_questions?: unknown;
+  /** Sentiment and interest, read after an AI Agent's call (checked by domain/aiCallInsights). */
+  call_insights?: unknown;
 }
 
 /** FastAPI errors: {"detail": "msg"} or {"detail": [{"loc": [...], "msg": "..."}]}. */

@@ -30,9 +30,13 @@ import {
   AI_KNOWLEDGE_TOPIC_MAX,
   DEFAULT_AI_CALL_LANGUAGE,
   knowledgeTextIssues,
+  type AiCallInsights,
   type AiCallLanguage,
   type AiKnowledgeCallStats,
 } from "@dispatch/shared";
+
+/** The call's sentiment and interest (call insights), counted on each question asked on it. */
+export type QuestionCallInsights = Pick<AiCallInsights, "sentiment" | "interest">;
 import { logger } from "../logger.js";
 import { prisma } from "../prisma.js";
 import { businessForCall } from "./aiCallCustomerSync.js";
@@ -188,7 +192,7 @@ export function planQuestions(
   items: QaItem[],
   logId: string,
   questions: LearnedQuestion[],
-  opts: { language: string; now: Date; terms: readonly string[] },
+  opts: { language: string; now: Date; terms: readonly string[]; insights?: QuestionCallInsights | null },
 ): Planned | null {
   if (store.calls.includes(logId)) return null;
   // Working copies: a question asked twice in one call, or a suggestion created a moment ago, is found again.
@@ -262,6 +266,11 @@ export function planQuestions(
       stats.unanswered += q.answered ? 0 : 1;
       stats.languages = { ...stats.languages, [opts.language]: (stats.languages[opts.language] ?? 0) + 1 };
       stats.lastAskedAt = opts.now.toISOString();
+      // Call insights (absent from an older voice backend): how the customer felt on the call, and how interested they were.
+      const sentiment = opts.insights?.sentiment;
+      const interest = opts.insights?.interest;
+      if (sentiment) stats.sentiments = { ...stats.sentiments, [sentiment]: (stats.sentiments?.[sentiment] ?? 0) + 1 };
+      if (interest) stats.interests = { ...stats.interests, [interest]: (stats.interests?.[interest] ?? 0) + 1 };
     }
     // A wording an item doesn't take in (approved, from a file, rejected or full) is kept beside it for the admin.
     if (wording && !has(item.questions, wording)) {
@@ -322,7 +331,7 @@ export async function knownQuestionsForFlow(flowId: string | null | undefined): 
  * One call's learned questions: counted, and new ones suggested as Draft Q&A. Idempotent per call (webhook and poll
  * may both deliver them). Never throws: a problem here never affects the call's status update.
  */
-export async function saveCustomerQuestions(logId: string, raw: unknown): Promise<void> {
+export async function saveCustomerQuestions(logId: string, raw: unknown, insights: QuestionCallInsights | null = null): Promise<void> {
   try {
     const questions = parseLearnedQuestions(raw);
     if (!questions.length) return;
@@ -349,7 +358,7 @@ export async function saveCustomerQuestions(logId: string, raw: unknown): Promis
           select: { id: true, status: true, source: true, questions: true, text: true, topic: true },
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         });
-        const plan = planQuestions(store, items, logId, questions, { language, now: new Date(), terms });
+        const plan = planQuestions(store, items, logId, questions, { language, now: new Date(), terms, insights });
         if (!plan) return null;
         // The upload module (file readers) is loaded only when a suggestion is written: the run worker never needs it otherwise.
         const { itemIssues } = plan.creates.length || plan.updates.length ? await import("./aiAgentKnowledge.js") : { itemIssues: () => [] };

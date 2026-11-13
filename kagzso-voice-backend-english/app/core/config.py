@@ -436,6 +436,11 @@ class Settings(BaseSettings):
     # Never during the call, never changes what the AI says. false = no extra request (nothing is learned).
     QUESTION_LEARNING_ENABLED: bool = True
     QUESTION_LEARNING_TIMEOUT_SECONDS: float = 20.0
+    # Call insights on the same calls (customer_questions.py INSIGHTS_SYSTEM): one more short LLM request, at the same
+    # time as the questions one, notes the customer's sentiment and interest for Dispatch's records. Never during the
+    # call, never changes the outcome, stage or what the AI says. false = no insights (questions as before). Needs
+    # QUESTION_LEARNING_ENABLED (the same calls).
+    CALL_INSIGHTS_ENABLED: bool = True
     # --- Guided call flows (schema_version 2, app/flows/guided.py + app/services/guided_call.py) ---
     # A call that sends a guided flow runs it with the flow runner: the flow decides the stages, exact lines and
     # closings, the LLM understands and speaks within them. Off = such a call is refused (never run as another

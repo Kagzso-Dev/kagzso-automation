@@ -7,9 +7,11 @@ import { AI_CALL_IMPORT_MAX_ROWS, readAiCallSheet } from "../src/domain/aiCallIm
 
 // Import row limit: a file over the limit is not refused. The first rows, in file order, are
 // read for the import; the rest are counted (skippedOverLimit), never dropped silently. Files
-// below, at and above the real limit (5,000), as csv and xlsx, for every bulk import.
+// below, at and above the real limit (1,000), as csv and xlsx, for every bulk import.
 
-const LIMIT = 5000;
+const LIMIT = 1000;
+/** AI calls from a file and Data Quality uploads: not bulk imports, their own limit is unchanged. */
+const AI_FILE_LIMIT = 5000;
 const SIZES: [number, number, number][] = [
   // rows in the file, rows taken, rows skipped over the limit
   [LIMIT - 1, LIMIT - 1, 0],
@@ -31,9 +33,9 @@ async function xlsx(header: string[], rows: string[][]): Promise<Buffer> {
 }
 
 describe("applyImportLimit", () => {
-  it("the configured limits: 5,000 rows per import (Contacts / WhatsApp Contacts, and AI Call Customers' own)", () => {
+  it("the configured limits: 1,000 rows per bulk import; AI calls from a file / Data Quality keep 5,000", () => {
     expect(IMPORT_MAX_ROWS).toBe(LIMIT);
-    expect(AI_CALL_IMPORT_MAX_ROWS).toBe(LIMIT);
+    expect(AI_CALL_IMPORT_MAX_ROWS).toBe(AI_FILE_LIMIT);
   });
 
   it("below the limit: every row, nothing skipped", () => {
@@ -78,7 +80,7 @@ describe("Contacts → Import file (email)", () => {
     expect(contacts.some((c) => c.email === email(LIMIT + 1))).toBe(false);
   });
 
-  it("xlsx above the limit: the first 5,000 rows, in order", async () => {
+  it("xlsx above the limit: the first 1,000 rows, in order", async () => {
     const buf = await xlsx(["Email", "First Name"], range(LIMIT + 1).map((i) => [email(i), `N${i}`]));
     const { contacts, limit } = await parseContactFile(buf, "xlsx");
     expect(limit).toEqual({ totalRows: LIMIT + 1, maxRows: LIMIT, selectedRows: LIMIT, skippedOverLimit: 1 });
@@ -109,7 +111,7 @@ describe("WhatsApp Contacts → Import file", () => {
     expect(contacts.at(-1)!.phone).toBe(`919${String(taken).padStart(9, "0")}`);
   });
 
-  it("xlsx above the limit: the first 5,000 rows, in order", async () => {
+  it("xlsx above the limit: the first 1,000 rows, in order", async () => {
     const buf = await xlsx(["Phone", "First Name"], range(LIMIT + 1).map((i) => [phone(i), `N${i}`]));
     const { contacts, limit } = await parseWhatsAppContactFile(buf, "xlsx", "91");
     expect(limit).toEqual({ totalRows: LIMIT + 1, maxRows: LIMIT, selectedRows: LIMIT, skippedOverLimit: 1 });
@@ -127,7 +129,7 @@ describe("WhatsApp Contacts → Import file", () => {
 
 describe("AI Call Customers → Import (file read)", () => {
   it.each(SIZES)("csv with %i rows: %i rows to import, %i over the limit", async (n, taken, skipped) => {
-    const sheet = await readAiCallSheet(csv("customer_name,phone", range(n).map((i) => `C${i},${phone(i)}`)), "csv");
+    const sheet = await readAiCallSheet(csv("customer_name,phone", range(n).map((i) => `C${i},${phone(i)}`)), "csv", IMPORT_MAX_ROWS);
     expect(sheet.rows).toHaveLength(taken);
     expect(sheet.totalRows).toBe(n);
     expect(sheet.maxRows).toBe(LIMIT);
@@ -137,11 +139,21 @@ describe("AI Call Customers → Import (file read)", () => {
     expect(sheet.rows.at(-1)!.customer_name).toBe(`C${taken}`);
   });
 
-  it("xlsx above the limit: the first 5,000 rows, in order", async () => {
+  it("xlsx above the limit: the first 1,000 rows, in order", async () => {
     const buf = await xlsx(["customer_name", "phone"], range(LIMIT + 1).map((i) => [`C${i}`, phone(i)]));
-    const sheet = await readAiCallSheet(buf, "xlsx");
+    const sheet = await readAiCallSheet(buf, "xlsx", IMPORT_MAX_ROWS);
     expect(sheet.rows).toHaveLength(LIMIT);
     expect({ totalRows: sheet.totalRows, maxRows: sheet.maxRows, truncated: sheet.truncated }).toEqual({ totalRows: LIMIT + 1, maxRows: LIMIT, truncated: true });
     expect(sheet.rows.at(-1)!.customer_name).toBe(`C${LIMIT}`);
+  });
+
+  it("AI calls from a file and Data Quality uploads (the default) still read 5,000 rows", async () => {
+    const sheet = await readAiCallSheet(csv("customer_name,phone", range(AI_FILE_LIMIT + 1).map((i) => `C${i},${phone(i)}`)), "csv");
+    expect(sheet.rows).toHaveLength(AI_FILE_LIMIT);
+    expect({ totalRows: sheet.totalRows, maxRows: sheet.maxRows, truncated: sheet.truncated }).toEqual({
+      totalRows: AI_FILE_LIMIT + 1,
+      maxRows: AI_FILE_LIMIT,
+      truncated: true,
+    });
   });
 });

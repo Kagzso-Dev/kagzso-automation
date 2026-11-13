@@ -8,6 +8,7 @@ import { checkAiCallRow, normalizePhoneE164, type StartAiCallsInput } from "@dis
 import { prisma } from "../prisma.js";
 import { saveLearnedBusiness, syncCustomerFromLog } from "./aiCallCustomerSync.js";
 import { saveCustomerQuestions } from "./aiAgentQuestions.js";
+import { saveCallInsights } from "./aiCallInsights.js";
 
 /* ------------------------------------------------------------------ random selection */
 
@@ -180,6 +181,8 @@ export interface VoiceCallUpdate {
   learnedBusiness?: string | null;
   /** The customer's questions after an AI Agent's call (domain/aiAgentQuestions checks and counts them). */
   customerQuestions?: unknown;
+  /** Sentiment and interest after an AI Agent's call (domain/aiCallInsights checks and keeps them). */
+  callInsights?: unknown;
 }
 
 export function formatTranscript(lines: { speaker: string; text: string }[]): string {
@@ -213,7 +216,9 @@ export async function applyVoiceUpdate(logId: string, u: VoiceCallUpdate): Promi
   const outcomeChanged = !!u.outcome && u.outcome.slice(0, 32) !== log.outcome;
   if (isFinalAiCallStatus(status) && (becameFinal || outcomeChanged)) await syncCustomerFromLog(logId);
   if (u.learnedBusiness) await saveLearnedBusiness(logId, u.learnedBusiness);
-  if (u.customerQuestions) await saveCustomerQuestions(logId, u.customerQuestions); // never throws; once per call
+  // Insights first: each question is counted with the call's sentiment and interest. Both never throw; once per call.
+  const insights = u.callInsights ? await saveCallInsights(logId, u.callInsights) : null;
+  if (u.customerQuestions) await saveCustomerQuestions(logId, u.customerQuestions, insights);
   return status;
 }
 

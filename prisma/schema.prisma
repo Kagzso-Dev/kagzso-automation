@@ -547,6 +547,12 @@ model AiCallLog {
   durationSec    Int?
   transcript     String?      @db.LongText
   summary        String?      @db.Text
+  // Call insights after an Autonomous AI Agent's call (domain/aiCallInsights.ts), empty on every other call and on
+  // calls from before: sentiment = how the customer felt overall (positive, neutral, confused, hesitant, negative,
+  // frustrated); insights = sentiment at the start and end, interest level, objections, not-interested reason,
+  // requirement (packages/shared callInsights.ts AiCallInsights). Never changes the outcome or the stage.
+  sentiment      String?      @db.VarChar(16)
+  insights       Json?
   startedAt      DateTime?
   endedAt        DateTime?
   createdAt      DateTime     @default(now())

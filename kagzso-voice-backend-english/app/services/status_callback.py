@@ -67,10 +67,12 @@ def build_payload(call: Any, event: str, transcripts: Optional[Iterable[Any]] = 
         payload.update({k: variables.get(k) for k in ("flow_id", "flow_version", "flow_fallback")})
     if variables.get("learned_business"):  # Dispatch fills the contact's empty Business field with it
         payload["learned_business"] = variables["learned_business"]
-    from app.services.customer_questions import learned  # it sends with this module: imported here, not at the top
+    from app.services.customer_questions import insights, learned  # it sends with this module: imported here, not at the top
 
     if questions := learned(variables):  # suggestions and counts for the agent's Knowledge tab in Dispatch
         payload["customer_questions"] = questions
+    if found := insights(variables):  # sentiment and interest, for the call log and the customer's timeline in Dispatch
+        payload["call_insights"] = found
     if transcripts is not None:
         payload["transcript"] = [{"speaker": t.speaker, "text": t.text} for t in transcripts]
     return payload

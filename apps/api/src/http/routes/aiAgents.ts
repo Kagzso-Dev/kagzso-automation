@@ -76,6 +76,7 @@ import { extractKnowledge } from "../../domain/aiAgentKnowledge.js";
 import { AiIndustryError, createCategory, createIndustry, listLibrary, updateCategory, updateIndustry } from "../../domain/aiIndustries.js";
 import { CallFlowError, publishDraft } from "../../domain/callFlows.js";
 import { previewFlow, trainingTestReply } from "../../services/voiceBackend.js";
+import { agentCallInsights } from "../../domain/aiCallInsights.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
 import { AppError, badRequest, wrap } from "../errors.js";
 import { builtins, voiceError } from "./callFlows.js";
@@ -268,7 +269,9 @@ aiAgentsRouter.get(
   adminOnly, // like a Call Flow's training, an agent's knowledge is admin-only (editors only see the counts)
   wrap(async (req, res) => {
     const { id } = agentParam.parse(req.params);
-    res.json(await guard(listKnowledge(id)));
+    const knowledge = await guard(listKnowledge(id));
+    // insights: sentiment, interest and objections of the agent's calls (domain/aiCallInsights; null = none yet).
+    res.json({ ...knowledge, insights: await agentCallInsights(id) });
   }),
 );
 

@@ -1,5 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
-import type { AiCallCustomerColumnMapping, AiCallLanguage, AiCallLanguageInfo, AiCallStage } from "@dispatch/shared";
+import type {
+  AiCallCustomerColumnMapping,
+  AiCallInsights,
+  AiCallInterest,
+  AiCallLanguage,
+  AiCallLanguageInfo,
+  AiCallSentiment,
+  AiCallStage,
+} from "@dispatch/shared";
 import { api, getAccessToken } from "./api";
 import type { BadgeTone } from "../components/ui";
 
@@ -19,6 +27,8 @@ export interface AiCallCustomer {
   doNotCallSetIn?: AiCallLanguage | null;
   lastCalledAt: string | null;
   createdAt: string;
+  /** Sentiment and interest from the newest AI Agent call that has them (list only); shown beside the stage, never instead. */
+  lastInsight?: { sentiment: AiCallSentiment | null; interest: AiCallInterest | null; at: string } | null;
 }
 
 /** The lists a customer can also go into: languages switched on in Settings, this page's own first. */
@@ -93,6 +103,9 @@ export interface AiCallCustomerCall {
   startedAt: string | null;
   endedAt: string | null;
   createdAt: string;
+  /** Call insights after an AI Agent's call (null on other calls and older ones). */
+  sentiment?: AiCallSentiment | null;
+  insights?: AiCallInsights | null;
 }
 
 export interface TimelineItem {

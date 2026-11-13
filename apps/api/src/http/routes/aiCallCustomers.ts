@@ -22,7 +22,6 @@
 // The same number may be in each list once; do-not-call set in any list blocks it in every list.
 
 import { Router, type NextFunction, type Request, type Response } from "express";
-import multer from "multer";
 import { rateLimit } from "express-rate-limit";
 import {
   addCustomerToLanguagesInput,
@@ -40,7 +39,9 @@ import {
   setAiCallStageInput,
 } from "@dispatch/shared";
 import { aiCallsConfig } from "../../config/aiCalls.js";
-import { aiCallFormatFromFilename, readAiCallSheet } from "../../domain/aiCallImport.js";
+import { aiCallFormatFromFilename, readAiCallSheetUpload } from "../../domain/aiCallImport.js";
+import { IMPORT_MAX_ROWS } from "../../domain/importLimit.js";
+import { importUpload, removeUpload, unreadableFile } from "../importUpload.js";
 import {
   addCustomerToLanguages,
   callableCustomers,
@@ -63,8 +64,6 @@ import { AppError, badRequest, wrap } from "../errors.js";
 import { planAndStartAiCallRun } from "./aiCalls.js";
 
 export const aiCallCustomersRouter = Router();
-
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 const limiter = (limit: number) =>
   rateLimit({
@@ -125,16 +124,18 @@ aiCallCustomersRouter.get(
 aiCallCustomersRouter.post(
   "/parse",
   readLimiter,
-  upload.single("file"),
+  importUpload(),
   wrap(async (req, res) => {
     if (!req.file) throw badRequest("File required (multipart field 'file')");
-    const format = aiCallFormatFromFilename(req.file.originalname);
-    if (!format) throw badRequest("Unsupported file type — upload a .xlsx or .csv file");
+    const file = req.file;
     let sheet;
     try {
-      sheet = await readAiCallSheet(req.file.buffer, format);
-    } catch (err) {
-      throw badRequest(`Couldn't read the file: ${err instanceof Error ? err.message : String(err)}`);
+      const format = aiCallFormatFromFilename(file.originalname);
+      if (!format) throw badRequest("Unsupported file type — upload a .xlsx or .csv file");
+      // A file over 5 MB is read row by row (up to 500 MB).
+      sheet = await readAiCallSheetUpload(file.path, file.size, format, IMPORT_MAX_ROWS).catch(unreadableFile);
+    } finally {
+      await removeUpload(file);
     }
     if (sheet.headers.length === 0) throw badRequest("The file has no header row");
     if (sheet.rows.length === 0) throw badRequest("The file has no data rows");

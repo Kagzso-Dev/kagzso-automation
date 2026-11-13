@@ -1,5 +1,6 @@
 import { env } from "../env.js";
 import { enqueue } from "./engine.js";
+import type { ContactFileRead } from "../domain/contactImport.js";
 
 export const QUEUE = {
   campaignDispatch: "campaign-dispatch",
@@ -28,8 +29,10 @@ export interface SendEmailJob {
 }
 
 export interface ContactImportJob {
-  /** base64 of the uploaded file (csv/xlsx/pdf) */
-  fileBase64: string;
+  /** base64 of the uploaded file (csv/xlsx/pdf), up to 10 MB: the worker reads it */
+  fileBase64?: string;
+  /** a bigger file, already read by the API row by row: only the rows to import, and the counts */
+  parsed?: ContactFileRead;
   filename: string;
   format: "csv" | "xlsx" | "pdf";
   listId?: string;

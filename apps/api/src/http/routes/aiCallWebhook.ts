@@ -34,6 +34,8 @@ const callbackBody = z.object({
   learned_business: z.string().max(200).optional().nullable(),
   // Checked by domain/aiAgentQuestions: a list it can't read is ignored there, never a reason to refuse the update.
   customer_questions: z.unknown().optional(),
+  // Checked by domain/aiCallInsights the same way: never a reason to refuse the update.
+  call_insights: z.unknown().optional(),
   transcript: z
     .array(z.object({ speaker: z.string().max(20), text: z.string().max(5000) }))
     .max(500)
@@ -85,6 +87,7 @@ aiCallWebhookRouter.post(
       error: body.hangup_cause,
       learnedBusiness: body.learned_business,
       customerQuestions: body.customer_questions,
+      callInsights: body.call_insights,
     });
     logger.debug({ logId: log.id, event: body.event, status }, "ai call callback applied");
     res.json({ ok: true, status });

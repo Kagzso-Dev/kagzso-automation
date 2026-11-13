@@ -1,5 +1,5 @@
+import { readFile } from "node:fs/promises";
 import { Router } from "express";
-import multer from "multer";
 import {
   createContactInput,
   idParam,
@@ -11,7 +11,8 @@ import {
 } from "@dispatch/shared";
 import { prisma } from "../../prisma.js";
 import { enqueueContactImport } from "../../queue/queues.js";
-import { formatFromFilename } from "../../domain/contactImport.js";
+import { CONTACT_FILE_IN_MEMORY_BYTES, formatFromFilename, parseContactUpload } from "../../domain/contactImport.js";
+import { importUpload, removeUpload, unreadableFile } from "../importUpload.js";
 import { isEmailDomainAllowed } from "../../domain/allowedDomains.js";
 import {
   createManualSendBatch,
@@ -25,8 +26,6 @@ import { badRequest, notFound, wrap } from "../errors.js";
 
 export const contactsRouter = Router();
 contactsRouter.use(authRequired);
-
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 contactsRouter.get(
   "/",
@@ -204,19 +203,34 @@ contactsRouter.post(
 
 contactsRouter.post(
   "/import",
-  upload.single("file"),
+  importUpload(),
   wrap(async (req, res) => {
     if (!req.file) throw badRequest("File required (multipart field 'file')");
-    const format = formatFromFilename(req.file.originalname);
-    if (!format) throw badRequest("Unsupported file type — upload a .csv, .xlsx, or .pdf file");
-    const listId = typeof req.body.listId === "string" && req.body.listId ? req.body.listId : undefined;
-    const jobId = await enqueueContactImport({
-      fileBase64: req.file.buffer.toString("base64"),
-      filename: req.file.originalname,
-      format,
-      listId,
-    });
-    res.status(202).json({ jobId, status: "queued" });
+    const file = req.file;
+    try {
+      const format = formatFromFilename(file.originalname);
+      if (!format) throw badRequest("Unsupported file type — upload a .csv, .xlsx, or .pdf file");
+      const listId = typeof req.body.listId === "string" && req.body.listId ? req.body.listId : undefined;
+      // Up to 10 MB the worker reads the file, as before. A bigger one is read here row by row and
+      // the job gets only the rows to import (the first IMPORT_MAX_ROWS) and the counts.
+      const jobId =
+        file.size <= CONTACT_FILE_IN_MEMORY_BYTES
+          ? await enqueueContactImport({
+              fileBase64: (await readFile(file.path)).toString("base64"),
+              filename: file.originalname,
+              format,
+              listId,
+            })
+          : await enqueueContactImport({
+              parsed: await parseContactUpload(file.path, file.size, format).catch(unreadableFile),
+              filename: file.originalname,
+              format,
+              listId,
+            });
+      res.status(202).json({ jobId, status: "queued" });
+    } finally {
+      await removeUpload(file);
+    }
   }),
 );
 

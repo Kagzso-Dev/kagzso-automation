@@ -17,6 +17,7 @@ import { AGENT_QUERY_KEYS, useAgentKnowledge } from "../lib/aiAgents";
 import { useConfirm } from "./confirm";
 import { useToast } from "./toast";
 import { Badge, EmptyState, ErrorNote, Modal, Spinner } from "./ui";
+import { AgentInsightsCard, QuestionMood } from "./CallInsights";
 
 const ACCEPT = AI_KNOWLEDGE_FORMATS.map((f) => `.${f}`).join(",");
 const STATUS_TONE = { draft: "neutral", approved: "ok", rejected: "crit" } as const;
@@ -175,6 +176,7 @@ export function AiAgentKnowledge({ agent }: { agent: AiAgentView }) {
       </div>
 
       <div className="rounded-xl border border-line bg-surface p-4 shadow-sm">
+        <AgentInsightsCard insights={k.data?.insights} />
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <h3 className="font-semibold">Extracted knowledge</h3>
           <span className="text-xs text-slate-550">
@@ -261,6 +263,7 @@ export function AiAgentKnowledge({ agent }: { agent: AiAgentView }) {
                         <div className="text-xs font-normal text-slate-550">
                           Asked on {i.calls.asked} call{i.calls.asked === 1 ? "" : "s"}
                           {i.calls.unanswered > 0 && <span className="text-warn"> · not answered on {i.calls.unanswered}</span>}
+                          <QuestionMood stats={i.calls} />
                         </div>
                       )}
                     </td>

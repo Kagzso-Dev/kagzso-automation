@@ -3,8 +3,15 @@
 
 import { parse as parseCsv } from "csv-parse/sync";
 import ExcelJS from "exceljs";
+import { readFile } from "node:fs/promises";
 import { normalizeWhatsAppPhone } from "./whatsappPhone.js";
-import { applyImportLimit, hasData, IMPORT_MAX_ROWS, type ImportLimit } from "./importLimit.js";
+import { applyImportLimit, hasData, IMPORT_MAX_ROWS, streamedLimit, type ImportLimit } from "./importLimit.js";
+import { streamCsvRows, streamXlsxRows } from "./importStream.js";
+
+/** Files up to this size are read into memory, exactly as before; bigger ones are streamed. */
+export const WHATSAPP_FILE_IN_MEMORY_BYTES = 10 * 1024 * 1024;
+
+const CSV_OPTIONS = { columns: true, skip_empty_lines: true, trim: true } as const;
 
 export type WhatsAppImportFormat = "csv" | "xlsx";
 
@@ -98,23 +105,35 @@ async function readXlsxRows(buf: Buffer): Promise<Record<string, string>[]> {
   const ws = wb.worksheets[0];
   if (!ws) return [];
 
-  const headers: string[] = [];
-  ws.getRow(1).eachCell({ includeEmpty: false }, (cell, col) => {
-    headers[col] = cellText(cell).trim();
-  });
+  const headers = sheetHeaders(ws.getRow(1));
   if (headers.filter(Boolean).length === 0) return [];
 
   const rows: Record<string, string>[] = [];
   ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
     if (rowNumber === 1) return;
-    const obj: Record<string, string> = {};
-    row.eachCell({ includeEmpty: false }, (cell, col) => {
-      const header = headers[col];
-      if (header) obj[header] = cellText(cell);
-    });
-    if (Object.keys(obj).length > 0) rows.push(obj);
+    const obj = sheetRecord(row, headers);
+    if (obj) rows.push(obj);
   });
   return rows;
+}
+
+/** Header name by column number (row 1). */
+function sheetHeaders(row: ExcelJS.Row | undefined): string[] {
+  const headers: string[] = [];
+  row?.eachCell({ includeEmpty: false }, (cell, col) => {
+    headers[col] = cellText(cell).trim();
+  });
+  return headers;
+}
+
+/** One data row keyed by header; null when nothing is under a header. */
+function sheetRecord(row: ExcelJS.Row, headers: string[]): Record<string, string> | null {
+  const obj: Record<string, string> = {};
+  row.eachCell({ includeEmpty: false }, (cell, col) => {
+    const header = headers[col];
+    if (header) obj[header] = cellText(cell);
+  });
+  return Object.keys(obj).length > 0 ? obj : null;
 }
 
 export interface WhatsAppContactFileRead {
@@ -138,13 +157,38 @@ export async function parseWhatsAppContactFile(
 ): Promise<WhatsAppContactFileRead> {
   const all =
     format === "csv"
-      ? (parseCsv(buf.toString("utf8"), {
-          columns: true,
-          skip_empty_lines: true,
-          trim: true,
-        }) as Record<string, string>[])
+      ? (parseCsv(buf.toString("utf8"), CSV_OPTIONS) as Record<string, string>[])
       : await readXlsxRows(buf);
   const { rows, limit } = applyImportLimit(all.filter(hasData), maxRows);
   const contacts = rowsToWhatsAppContacts(rows, defaultCountryCode);
   return { contacts, noPhone: rows.length - contacts.length, limit };
+}
+
+/**
+ * Read an uploaded import file from disk. Up to WHATSAPP_FILE_IN_MEMORY_BYTES:
+ * parseWhatsAppContactFile, as before. Bigger files are streamed: the first `maxRows` rows are
+ * kept and the rest only counted, whatever the size.
+ */
+export async function parseWhatsAppContactUpload(
+  path: string,
+  size: number,
+  format: WhatsAppImportFormat,
+  defaultCountryCode?: string,
+  maxRows: number = IMPORT_MAX_ROWS,
+): Promise<WhatsAppContactFileRead> {
+  if (size <= WHATSAPP_FILE_IN_MEMORY_BYTES) {
+    return parseWhatsAppContactFile(await readFile(path), format, defaultCountryCode, maxRows);
+  }
+  let rows: Record<string, string>[];
+  let counted: number;
+  if (format === "csv") {
+    ({ rows, totalRows: counted } = await streamCsvRows(path, CSV_OPTIONS, maxRows, (r) => (hasData(r) ? r : null)));
+  } else {
+    const sheet = await streamXlsxRows(path, maxRows);
+    const headers = sheetHeaders(sheet.header);
+    rows = sheet.rows.map((r) => sheetRecord(r, headers)).filter((r): r is Record<string, string> => r !== null && hasData(r));
+    counted = sheet.totalRows;
+  }
+  const contacts = rowsToWhatsAppContacts(rows, defaultCountryCode);
+  return { contacts, noPhone: rows.length - contacts.length, limit: streamedLimit(rows.length, counted, maxRows) };
 }

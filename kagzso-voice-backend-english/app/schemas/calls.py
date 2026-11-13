@@ -168,6 +168,8 @@ class CallDetailOut(CallOut):
     learned_business: Optional[str] = None
     # The customer's questions about the company, learned after an AI Agent's call (customer_questions.py).
     customer_questions: Optional[List[Dict[str, Any]]] = None
+    # Sentiment and interest, read after an AI Agent's call with the questions (customer_questions.py).
+    call_insights: Optional[Dict[str, Any]] = None
 
 
 class TestTextRequest(BaseModel):

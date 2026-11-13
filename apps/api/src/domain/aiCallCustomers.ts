@@ -25,6 +25,7 @@ import { logger } from "../logger.js";
 import { aiCallsConfig } from "../config/aiCalls.js";
 import { loadDoNotCallPhones } from "./aiCalls.js";
 import { asAiCallLanguage, listAiCallLanguages } from "./aiCallLanguages.js";
+import { storedInsights } from "./aiCallInsights.js";
 import { addCustomerEvent, cancelPendingFollowups, createFollowupDrafts, deliveryFor, POSITIVE_CANCEL_REASON } from "./aiCallFollowups.js";
 
 export class CustomerError extends Error {
@@ -239,12 +240,40 @@ export async function listCustomers(q: {
     : [];
   const setIn = new Map<string, AiCallLanguage>();
   for (const r of elsewhere) if (!setIn.has(r.phone)) setIn.set(r.phone, asAiCallLanguage(r.language));
+  const insight = await latestInsights(items.map((c) => c.id));
   return {
-    items: items.map((c) => ({ ...c, doNotCallSetIn: c.doNotCall ? null : (setIn.get(c.phone) ?? null) })),
+    items: items.map((c) => ({
+      ...c,
+      doNotCallSetIn: c.doNotCall ? null : (setIn.get(c.phone) ?? null),
+      // Shown beside the stage, never instead of it: the newest call that has insights (a call nobody answered is
+      // no news about interest). Null = no AI Agent call with insights yet.
+      lastInsight: insight.get(c.id) ?? null,
+    })),
     total,
     page: q.page,
     pageSize: q.pageSize,
   };
+}
+
+/** Each customer's newest call with insights (sentiment, interest), by customer id. */
+async function latestInsights(customerIds: string[]): Promise<Map<string, { sentiment: string | null; interest: string | null; at: string }>> {
+  const out = new Map<string, { sentiment: string | null; interest: string | null; at: string }>();
+  if (!customerIds.length) return out;
+  const links = await prisma.aiCallCustomerCall.findMany({ where: { customerId: { in: customerIds } }, select: { customerId: true, logId: true } });
+  if (!links.length) return out;
+  const logs = await prisma.aiCallLog.findMany({
+    where: { id: { in: links.map((l) => l.logId) }, insights: { not: Prisma.AnyNull } },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, sentiment: true, insights: true, createdAt: true },
+  });
+  const customerOf = new Map(links.map((l) => [l.logId, l.customerId]));
+  for (const l of logs) {
+    const customerId = customerOf.get(l.id);
+    const i = storedInsights(l.insights);
+    if (!customerId || !i || out.has(customerId)) continue;
+    out.set(customerId, { sentiment: l.sentiment ?? i.sentiment ?? null, interest: i.interest ?? null, at: l.createdAt.toISOString() });
+  }
+  return out;
 }
 
 /** Every live customer of one language's list, for the AI Call modal's "Saved customers" source. */
@@ -543,6 +572,7 @@ export async function customerDetail(id: string) {
         select: {
           id: true, runId: true, status: true, outcome: true, summary: true, transcript: true, error: true,
           durationSec: true, startedAt: true, endedAt: true, createdAt: true,
+          sentiment: true, insights: true, // call insights (AI Agent calls; null on others)
         },
       })
     : [];

@@ -43,6 +43,7 @@ import { useConfirm } from "./confirm";
 import { useToast } from "./toast";
 import { TrainingFromCallButton } from "./TrainingFromCall";
 import { ImportCountsSummary, OverLimitNote } from "./ImportSummary";
+import { CallInsightsLine, InterestBadge } from "./CallInsights";
 import { Badge, EmptyState, ErrorNote, Modal, Spinner, Table, type BadgeTone } from "./ui";
 
 /**
@@ -283,6 +284,11 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
                   <button onClick={() => setDetailId(c.id)} title="Open call detail">
                     <StageBadge stage={c.stage} />
                   </button>
+                  {c.lastInsight?.interest && (
+                    <div className="mt-0.5 text-[11px] text-slate-550" title="Interest on the latest AI Agent call (the stage is separate)">
+                      Interest: <InterestBadge interest={c.lastInsight.interest} />
+                    </div>
+                  )}
                   {c.needsReview && <div className="mt-0.5 text-[11px] text-warn">suggested — review</div>}
                   {c.doNotCallSetIn && (
                     <div className="mt-0.5 text-[11px] text-crit" title="Never called from any list">
@@ -979,6 +985,7 @@ const EVENT_LABEL: Record<string, string> = {
   call_cancelled: "Call cancelled before dialling",
   call_result: "Call result",
   business_learned: "Business learned on the call",
+  call_insights: "Call insights: sentiment and interest",
   do_not_call: "Do not call",
   stage_changed: "Stage changed",
   approved: "Approved",
@@ -1119,6 +1126,7 @@ function DetailBody({ id, onClose }: { id: string; onClose: () => void }) {
                   <span className="ml-auto text-xs text-slate-550">{formatDateTime(l.startedAt ?? l.createdAt)}</span>
                 </div>
                 {l.summary && <p className="mt-1 text-slate-550">{l.summary}</p>}
+                <CallInsightsLine insights={l.insights} />
                 {l.error && <p className="mt-1 text-crit">{l.error}</p>}
                 {l.transcript && (
                   <details className="mt-1">

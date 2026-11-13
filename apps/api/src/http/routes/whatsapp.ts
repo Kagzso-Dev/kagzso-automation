@@ -1,5 +1,4 @@
 import { Router } from "express";
-import multer from "multer";
 import {
   createWhatsAppContactInput,
   createWhatsAppTemplateInput,
@@ -25,7 +24,8 @@ import { getArchivedTemplateIds, setTemplateArchived } from "../../domain/whatsa
 import { getHeaderMediaMap, headerKindForFormat } from "../../domain/whatsappTemplateHeader.js";
 import { mediaView } from "../../domain/whatsappMedia.js";
 import { ECOSYSTEM_LIMIT_CODE } from "../../domain/whatsappCooldown.js";
-import { formatFromFilename, parseWhatsAppContactFile } from "../../domain/whatsappImport.js";
+import { formatFromFilename, parseWhatsAppContactUpload } from "../../domain/whatsappImport.js";
+import { importFileProblem, importUpload, removeUpload } from "../importUpload.js";
 import {
   createWhatsAppSendBatch,
   getWhatsAppBatchView,
@@ -36,8 +36,6 @@ import { AppError, badRequest, conflict, notFound, wrap } from "../errors.js";
 
 export const whatsappRouter = Router();
 whatsappRouter.use(authRequired);
-
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 /* ---------------------------------------------------------------- config */
 
@@ -183,18 +181,21 @@ whatsappRouter.delete(
 
 whatsappRouter.post(
   "/contacts/import",
-  upload.single("file"),
+  importUpload(),
   wrap(async (req, res) => {
     if (!req.file) throw badRequest("File required (multipart field 'file')");
-    const format = formatFromFilename(req.file.originalname);
-    if (!format) throw badRequest("Unsupported file type — upload a .csv or .xlsx file");
-
-    // Only the first IMPORT_MAX_ROWS data rows are imported; `limit` counts the rest for the summary.
-    const { contacts, noPhone, limit } = await parseWhatsAppContactFile(
-      req.file.buffer,
-      format,
-      whatsappConfig.defaultCountryCode,
-    );
+    const file = req.file;
+    let read;
+    try {
+      const format = formatFromFilename(file.originalname);
+      if (!format) throw badRequest("Unsupported file type — upload a .csv or .xlsx file");
+      // Only the first IMPORT_MAX_ROWS data rows are imported; `limit` counts the rest for the summary.
+      // A file over 10 MB is read row by row (up to 500 MB).
+      read = await parseWhatsAppContactUpload(file.path, file.size, format, whatsappConfig.defaultCountryCode).catch(importFileProblem);
+    } finally {
+      await removeUpload(file);
+    }
+    const { contacts, noPhone, limit } = read;
 
     let created = 0;
     let updated = 0;

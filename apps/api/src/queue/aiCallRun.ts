@@ -88,6 +88,7 @@ async function pollInFlight(runId: string, language: AiCallLanguage): Promise<bo
         error: d.hangup_cause,
         learnedBusiness: d.learned_business,
         customerQuestions: d.customer_questions,
+        callInsights: d.call_insights,
       });
     } catch (err) {
       logger.warn(
