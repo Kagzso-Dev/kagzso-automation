@@ -13,6 +13,7 @@ import { prisma } from "../prisma.js";
 import { csvCell } from "./csv.js";
 import { deliveryFor } from "./aiCallFollowups.js";
 import { historyResult, type HistorySource } from "./historyFilter.js";
+import { batchTemplateLabel } from "./templateDelete.js";
 
 export type ExportChannel = "email" | "whatsapp" | "ai-followups";
 
@@ -144,7 +145,7 @@ export async function* exportHistoryCsv(channel: ExportChannel): AsyncGenerator<
           out +=
             csvLine([
               b.id,
-              b.template.name,
+              batchTemplateLabel(b),
               it.name,
               it.email,
               it.status,

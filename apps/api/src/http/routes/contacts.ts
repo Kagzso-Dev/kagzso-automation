@@ -179,6 +179,13 @@ contactsRouter.get(
 contactsRouter.post(
   "/send/batches/:id/retry",
   wrap(async (req, res) => {
+    const source = await prisma.manualSendBatch.findUnique({
+      where: { id: req.params.id },
+      select: { templateId: true },
+    });
+    if (source && !source.templateId) {
+      throw badRequest("Can't retry — the email template of this send was deleted. Send again from Contacts with another template.");
+    }
     const batchId = await retryFailedItems(req.params.id);
     if (!batchId) throw badRequest("Nothing to retry — no failed contacts in that batch");
     res.status(202).json({ batchId });

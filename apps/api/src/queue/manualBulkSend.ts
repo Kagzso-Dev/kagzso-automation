@@ -72,6 +72,16 @@ export async function processManualBulkSend(payload: Record<string, unknown>): P
   const batch = await prisma.manualSendBatch.findUnique({ where: { id: batchId } });
   if (!batch) return { skipped: "batch gone" };
   if (batch.status !== "RUNNING") return { skipped: `batch ${batch.status}` };
+  const templateId = batch.templateId;
+  if (!templateId) {
+    // Template deleted. Templates → Delete refuses while a batch is RUNNING, so this only covers a
+    // race: the contacts not yet emailed are skipped (nothing is sent) and the batch finishes.
+    await prisma.manualSendBatchItem.updateMany({
+      where: { batchId, status: "PENDING" },
+      data: { status: "SKIPPED", error: "The email template was deleted" },
+    });
+    return { done: true, ...(await finish(batchId, batch.purgeAfter)) };
+  }
 
   const item = await prisma.manualSendBatchItem.findFirst({
     where: { batchId, status: "PENDING" },
@@ -91,9 +101,9 @@ export async function processManualBulkSend(payload: Record<string, unknown>): P
 
   try {
     const outcome = await deliverEmail({
-      idempotencyKey: manualKey(batch.templateId, item.contactId),
+      idempotencyKey: manualKey(templateId, item.contactId),
       contactId: item.contactId,
-      source: { type: "manual", templateId: batch.templateId },
+      source: { type: "manual", templateId },
     });
     await prisma.manualSendBatchItem.update({
       where: { id: item.id },
@@ -108,7 +118,7 @@ export async function processManualBulkSend(payload: Record<string, unknown>): P
     // before throwing (domain/delivery.ts) — link it here so the Send Queue
     // detail view (which joins through emailLogId) can show that timestamp.
     const log = await prisma.emailLog.findUnique({
-      where: { idempotencyKey: manualKey(batch.templateId, item.contactId) },
+      where: { idempotencyKey: manualKey(templateId, item.contactId) },
       select: { id: true },
     });
     await prisma.manualSendBatchItem.update({

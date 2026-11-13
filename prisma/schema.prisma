@@ -267,7 +267,10 @@ enum ManualBatchItemStatus {
 // Settings change never alters a running batch.
 model ManualSendBatch {
   id          String                @id @default(cuid())
-  templateId  String
+  // Empty once the email template is deleted (domain/templateDelete.ts); the batch and its
+  // history stay, and deletedTemplateName keeps the template's name for the Send Queue.
+  templateId  String?
+  deletedTemplateName String?
   minDelaySec Int
   maxDelaySec Int
   status      ManualBatchStatus     @default(RUNNING)
@@ -279,7 +282,7 @@ model ManualSendBatch {
   purgeAfter  Boolean               @default(false)
   createdAt   DateTime              @default(now())
   updatedAt   DateTime              @updatedAt
-  template    Template              @relation(fields: [templateId], references: [id])
+  template    Template?             @relation(fields: [templateId], references: [id], onDelete: SetNull)
   items       ManualSendBatchItem[]
 
   @@index([status])

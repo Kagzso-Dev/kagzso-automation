@@ -19,6 +19,7 @@ import {
   ImageUploadError,
   storeTemplateImage,
 } from "../../domain/imageUpload.js";
+import { deleteTemplate } from "../../domain/templateDelete.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
 import { badRequest, conflict, notFound, wrap } from "../errors.js";
 
@@ -153,15 +154,8 @@ templatesRouter.delete(
   requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
-    const inUse = await prisma.template.findUnique({
-      where: { id },
-      include: { _count: { select: { campaigns: true, triggers: true } } },
-    });
-    if (!inUse) throw notFound("Template");
-    if (inUse._count.campaigns > 0 || inUse._count.triggers > 0) {
-      throw conflict("Template is referenced by a campaign or trigger");
-    }
-    await prisma.template.delete({ where: { id } });
+    const result = await deleteTemplate(id);
+    if (!result.ok) throw result.status === 404 ? notFound("Template") : conflict(result.message);
     res.status(204).end();
   }),
 );

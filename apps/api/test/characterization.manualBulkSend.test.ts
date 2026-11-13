@@ -47,6 +47,17 @@ describe("processManualBulkSend (characterization)", () => {
     expect(deliverEmail).not.toHaveBeenCalled();
   });
 
+  it("template deleted (race with Templates → Delete): nothing sent, the rest SKIPPED, batch DONE", async () => {
+    db.manualSendBatch.findUnique.mockResolvedValueOnce({ ...batch, templateId: null });
+    await expect(processManualBulkSend({ batchId: "b1" })).resolves.toEqual({ done: true, SENT: 4 });
+    expect(db.manualSendBatchItem.updateMany).toHaveBeenCalledWith({
+      where: { batchId: "b1", status: "PENDING" },
+      data: { status: "SKIPPED", error: "The email template was deleted" },
+    });
+    expect(db.manualSendBatch.update).toHaveBeenCalledWith({ where: { id: "b1" }, data: { status: "DONE", nextItemAt: null } });
+    expect(deliverEmail).not.toHaveBeenCalled();
+  });
+
   it("no PENDING items: batch DONE with counts", async () => {
     db.manualSendBatchItem.findFirst.mockResolvedValueOnce(null);
     await expect(processManualBulkSend({ batchId: "b1" })).resolves.toEqual({ done: true, SENT: 4 });

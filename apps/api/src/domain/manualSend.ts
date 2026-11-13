@@ -4,6 +4,7 @@ import { manualKey, queueJobId } from "./idempotency.js";
 import { isSuppressed } from "./suppression.js";
 import { isEmailDomainAllowed } from "./allowedDomains.js";
 import { getBulkSendDelays } from "./settings.js";
+import { batchTemplateLabel } from "./templateDelete.js";
 import { enqueueSend, enqueueManualBulkSend, type SendEmailJob } from "../queue/queues.js";
 
 export type ManualSendResult =
@@ -132,7 +133,8 @@ export async function retryFailedItems(batchId: string): Promise<string | null> 
     where: { id: batchId },
     include: { items: { where: { status: "FAILED" }, select: { contactId: true } } },
   });
-  if (!batch || batch.items.length === 0) return null;
+  // No template any more (deleted after this send): the route says so before calling here.
+  if (!batch || !batch.templateId || batch.items.length === 0) return null;
   return createManualSendBatch(
     batch.templateId,
     batch.items.map((i) => i.contactId),
@@ -179,7 +181,7 @@ export async function listManualSendBatches(status?: "RUNNING" | "DONE" | "CANCE
     const counts = countsByBatch.get(b.id) ?? { ...EMPTY_ITEM_COUNTS };
     return {
       id: b.id,
-      templateName: b.template.name,
+      templateName: batchTemplateLabel(b),
       total: b.total,
       status: b.status,
       counts,
