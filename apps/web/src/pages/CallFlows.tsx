@@ -46,7 +46,8 @@ import {
 } from "../lib/callFlows";
 import { PageHeader } from "../components/Layout";
 import { RunningCallsNote } from "../components/RunningCallsNote";
-import { Badge, EmptyState, ErrorNote, Modal, Spinner } from "../components/ui";
+import { Badge, EmptyState, ErrorNote, Modal, Spinner, type BadgeTone } from "../components/ui";
+import { Tooltip } from "../components/Tooltip";
 import { SectionHardStopBar } from "../components/HardStopButton";
 import { useConfirm } from "../components/confirm";
 import { useToast } from "../components/toast";
@@ -221,6 +222,11 @@ export function CallFlowsPage() {
                 >
                   <button className="min-w-0 flex-1 px-3 py-2.5 text-left text-sm" onClick={() => setSelectedId(f.id)}>
                     <div className="truncate font-medium" title={f.name}>{f.name}</div>
+                    {f.agent?.agentName?.trim() && (
+                      <div className="truncate text-xs text-slate-550" title={`Agent: ${f.agent.agentName}`}>
+                        Agent: {f.agent.agentName}
+                      </div>
+                    )}
                     <div className="mt-0.5 flex flex-wrap gap-1">
                       {f.published ? <Badge tone="ok">v{f.published.version} live</Badge> : <Badge>not published</Badge>}
                       {f.draft && <Badge tone="warn">draft v{f.draft.version}</Badge>}
@@ -377,6 +383,35 @@ function RemoveFlowDialog({
 
 const groupLabel = (g: string) => TABS.find((t) => t.key === g)?.label ?? g;
 
+/**
+ * How a flow speaks, from its own fields: "executive" (and an AI Agent's autonomous flow, always executive) lets the
+ * LLM choose each next step; Follow-up follows its script. Nila is the older scripted screening flow.
+ */
+function flowStyleBadge(def: Pick<CallFlowDefinition, "base" | "autonomous">): { label: string; tone: BadgeTone } {
+  if (def.base === "executive" || def.autonomous) return { label: "LLM decides each step", tone: "accent" };
+  if (def.base === "nila") return { label: "Scripted (legacy)", tone: "neutral" };
+  return { label: "Fixed script", tone: "neutral" };
+}
+
+/** What the locked count covers: those blocks by name, and the system rules added to every call. */
+function LockedSafetyNote({ def, catalog, count }: { def: CallFlowDefinition; catalog: CallFlowCatalog; count: number }) {
+  const names = def.blocks.filter(isLockedBlock).map((b) => blockTitle(catalog.locked_blocks[b.locked] ?? b.locked));
+  const label = (
+    <>
+      {names.length > 0 && <>Locked here: {names.join(", ")}. </>}
+      Every call also gets system rules no script can change: do-not-call (ends the call when asked), AI disclosure
+      (says it's an AI if asked) and no false claims (no invented prices, savings or promises).
+    </>
+  );
+  return (
+    <Tooltip label={label} describe>
+      <button type="button" className="cursor-help underline decoration-dotted underline-offset-2">
+        {count} locked safety blocks
+      </button>
+    </Tooltip>
+  );
+}
+
 /** The read-only built-in scripts, always listed so they can be read before copying. */
 function BuiltinScripts({ catalog, onCustomized }: { catalog: CallFlowCatalog; onCustomized: (id: string) => void }) {
   const qc = useQueryClient();
@@ -407,19 +442,27 @@ function BuiltinScripts({ catalog, onCustomized }: { catalog: CallFlowCatalog; o
           const def = catalog.flows[base];
           if (!def) return null;
           const locked = def.blocks.filter((b) => isLockedBlock(b)).length;
+          const style = flowStyleBadge(def);
+          const agentName = def.training?.persona?.agent_name?.trim();
           return (
             <div key={base} className="card flex flex-col gap-2">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-semibold">{def.name}</span>
                 <Badge tone="accent">built-in</Badge>
+                <Badge tone={style.tone}>{style.label}</Badge>
                 {base === "nila" && isEnglish(language) && <Badge tone="ok">used by AI calls by default</Badge>}
               </div>
+              {agentName && (
+                <p className="text-xs text-slate-550">
+                  Agent: <span className="font-medium text-ink">{agentName}</span>
+                </p>
+              )}
               <p className="text-xs text-slate-550">{BASE_LABELS[base]}</p>
               <p className="text-sm">
                 Opens with: <i>“{def.greeting.text}”</i>
               </p>
               <p className="text-xs text-slate-550">
-                {def.blocks.length - locked} editable blocks · {locked} locked safety blocks
+                {def.blocks.length - locked} editable blocks · <LockedSafetyNote def={def} catalog={catalog} count={locked} />
               </p>
               <div className="mt-auto flex gap-2 pt-1">
                 <button className="btn-ghost" onClick={() => setViewing(base)}>
