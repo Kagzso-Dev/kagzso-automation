@@ -66,6 +66,16 @@ export function parseCallInsights(raw: unknown, terms: readonly string[] = [], o
     notInterestedReason: interest === "not_interested" && d.not_interested_reason ? note(d.not_interested_reason) : null,
     requirement: cleanText(d.requirement, terms) || null,
     automationNeed: cleanText(d.automation_need, terms) || null,
+    // Only when the voice backend was asked for it (an AI Agent whose instructions lead): every other call's insights
+    // keep exactly the keys they had. A declined call never keeps a callback. Nothing is scheduled from it.
+    ...(d.callback_request !== undefined
+      ? {
+          callbackRequest:
+            d.callback_request && !(outcome && DECLINED.has(outcome))
+              ? { type: d.callback_request.type, when: cleanText(d.callback_request.when, terms) || null }
+              : null,
+        }
+      : {}),
   };
 }
 
@@ -83,6 +93,9 @@ export function insightsLine(i: AiCallInsights): string {
     i.objections.length ? `Objection${i.objections.length > 1 ? "s" : ""}: ${i.objections.map(concern).join("; ")}` : null,
     i.requirement ? `Needs: ${i.requirement}` : null,
     i.automationNeed ? `Wants automated: ${i.automationNeed}` : null,
+    i.callbackRequest
+      ? `Callback: ${i.callbackRequest.type === "explicit" ? "asked" : "maybe"}${i.callbackRequest.when ? ` (${i.callbackRequest.when})` : ""}`
+      : null,
   ]
     .filter(Boolean)
     .join(" · ");

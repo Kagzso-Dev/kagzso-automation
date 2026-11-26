@@ -76,6 +76,19 @@ export interface AiCallInsights {
   requirement: string | null;
   /** What they would want automated, when they said it. */
   automationNeed: string | null;
+  /**
+   * A callback the customer asked for (AI Agents whose admin's instructions lead only; absent on every other call):
+   * explicit = they named a time, suggested = later / roughly when. `when` is their own words, never a date. Nothing
+   * is scheduled from it.
+   */
+  callbackRequest?: AiCallCallbackRequest | null;
+}
+
+export const AI_CALL_CALLBACK_TYPES = ["explicit", "suggested"] as const;
+export type AiCallCallbackType = (typeof AI_CALL_CALLBACK_TYPES)[number];
+export interface AiCallCallbackRequest {
+  type: AiCallCallbackType;
+  when: string | null;
 }
 
 /** An agent's call insights (Knowledge tab, GET /api/ai-agents/:id/knowledge `insights`): its newest calls, counted. */
@@ -106,4 +119,10 @@ export const voiceCallInsightsSchema = z.object({
   not_interested_reason: concern.nullable().optional().catch(null),
   requirement: text(300),
   automation_need: text(300),
+  // Absent (undefined) on every call that wasn't asked for it, so those insights are kept exactly as before.
+  callback_request: z
+    .object({ type: z.enum(AI_CALL_CALLBACK_TYPES), when: z.string().max(200).nullable().optional().catch(null) })
+    .nullable()
+    .optional()
+    .catch(null),
 });

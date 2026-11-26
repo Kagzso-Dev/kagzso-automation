@@ -156,7 +156,7 @@ describe("bulk import", () => {
       [
         { customerName: "A", gender: "m", phone: "9876543210", whatsappOptIn: "yes" },
         { customerName: "B", gender: "female", phone: "+91 98765 43210" }, // duplicate in file
-        { customerName: "C", gender: "x?", phone: "9123456789" }, // unrecognised gender: imported as Male
+        { customerName: "C", gender: "x?", phone: "9123456789" }, // unrecognised gender: imported as Not specified (0042)
         { customerName: "D", phone: "" }, // missing phone
         { customerName: "E", phone: "12" }, // invalid phone
         { customerName: "F", phone: "09000000001" }, // already saved
@@ -166,7 +166,7 @@ describe("bulk import", () => {
     );
     expect(res).toMatchObject({ imported: 3, skipped: 2, duplicates: 2 });
     expect(res.problems.map((p) => p.row).sort()).toEqual([2, 4, 5, 6]);
-    expect(T("aiCallCustomer").find((c) => c.customerName === "C")).toMatchObject({ gender: "male" });
+    expect(T("aiCallCustomer").find((c) => c.customerName === "C")).toMatchObject({ gender: "unspecified" });
     const a = T("aiCallCustomer").find((c) => c.customerName === "A")!;
     expect(a).toMatchObject({ phone: "+919876543210", gender: "male", whatsappOptIn: true });
   });
@@ -483,11 +483,11 @@ describe("follow-up approval (Send Queue)", () => {
   });
 });
 
-describe("gender: Male or Female only, Male by default", () => {
-  it("saves Male when the gender is missing, blank, unknown or anything else", async () => {
+describe("gender: Male, Female or Not specified - never a silent Male (0042)", () => {
+  it("saves Not specified when the gender is missing, blank, unknown or anything else", async () => {
     for (const [i, gender] of [undefined, null, "", "unknown", "other"].entries()) {
       const c = await customers.createCustomer(input({ phone: `900000010${i}`, gender }) as any, ADMIN);
-      expect(c.gender).toBe("male");
+      expect(c.gender).toBe("unspecified");
     }
     const f = await customers.createCustomer(input({ phone: "9000000200", gender: "F" }) as any, ADMIN);
     expect(f.gender).toBe("female");

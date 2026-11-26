@@ -30,6 +30,7 @@ import { voiceTuningForCall } from "../domain/aiCallVoiceTuning.js";
 import { pinnedFlowForRun } from "../domain/callFlows.js";
 import { businessForCall, markCustomerCalling, syncCustomerFromLog } from "../domain/aiCallCustomerSync.js";
 import { knownQuestionsForFlow } from "../domain/aiAgentQuestions.js";
+import { historyForCall } from "../domain/aiAgentHistory.js";
 import { getVoiceCall, placeVoiceCall, VoiceBackendError } from "../services/voiceBackend.js";
 import { isHardStopEnabled } from "../config/hardStop.js";
 import { claimAiCallLog } from "../domain/hardStop.js";
@@ -243,12 +244,17 @@ export async function processAiCallRun(payload: Record<string, unknown>): Promis
     const voiceTuning = await voiceTuningForCall(language, flow?.flowId);
     // An Autonomous AI Agent's flow only: its questions, so the customer's are learned after the call. Null otherwise.
     const knownQuestions = await knownQuestionsForFlow(flow?.flowId);
+    // An AI Agent whose admin's instructions lead only: this contact's earlier calls in this language. Null otherwise.
+    const customerHistory = flow
+      ? await historyForCall({ logId: next.id, runId, phone: next.phone, language, flowDefinition: flow.definition })
+      : null;
     const { callId, providerCallId } = await placeVoiceCall({
       // Runs without the setting (older runs, test calls) call exactly as before.
       ...(greetingDelaySec != null ? { greetingDelaySec } : {}),
       ...(customerBusiness ? { customerBusiness } : {}),
       ...(voiceTuning ? { voiceTuning } : {}),
       ...(knownQuestions ? { knownQuestions } : {}),
+      ...(customerHistory ? { customerHistory } : {}),
       customerName: next.customerName,
       gender: next.gender,
       followUpDetail: next.followUpDetail,

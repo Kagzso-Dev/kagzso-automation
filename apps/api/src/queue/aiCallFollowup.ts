@@ -13,7 +13,7 @@ import { logger } from "../logger.js";
 import { aiCallsConfig } from "../config/aiCalls.js";
 import { callsCountedTowardDailyCap, loadDoNotCallPhones } from "../domain/aiCalls.js";
 import { aiCallLanguageBlockedReason, asAiCallLanguage, languageName, runInProgressReason } from "../domain/aiCallLanguages.js";
-import { flowVersionForCallAgain } from "../domain/callFlows.js";
+import { agentVersionForCallAgain, flowVersionForCallAgain } from "../domain/callFlows.js";
 import { addCustomerEvent } from "../domain/aiCallFollowups.js";
 import { linkCustomersToRun } from "../domain/aiCallCustomerSync.js";
 import { isHardStopEnabled } from "../config/hardStop.js";
@@ -52,6 +52,10 @@ export async function processAiCallFollowup(payload: Record<string, unknown>): P
     const version = await flowVersionForCallAgain(c.id, language);
     if (!version) return fail(f.id, c.id, "FAILED", `No published ${languageName(language)} call flow to call again with`);
     flowVersionId = version.id;
+  } else {
+    // English: a follow-up from an AI Agent's call calls again with that agent's published version; any other (Nila,
+    // an ordinary Call Flow, a manual follow-up) with the default agent, exactly as before.
+    flowVersionId = (await agentVersionForCallAgain(f.sourceCallLogId))?.id ?? null;
   }
 
   // One run at a time, one language at a time (same rule as the Start button): wait for the current one.

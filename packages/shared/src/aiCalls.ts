@@ -107,6 +107,33 @@ export function isAiCallGender(raw: unknown): boolean {
   return ["m", "male", "f", "female"].includes(String(raw ?? "").trim().toLowerCase().replace(/\./g, ""));
 }
 
+/**
+ * A Voicecall Contact's gender: Male, Female or Not specified. Not specified (added 2026-11-26) is never guessed as
+ * either: an AI Agent then greets with the name alone, without sir or madam. Contacts saved before keep their value.
+ */
+export const AI_CALL_CONTACT_GENDERS = ["male", "female", "unspecified"] as const;
+export type AiCallContactGender = (typeof AI_CALL_CONTACT_GENDERS)[number];
+export const AI_CALL_CONTACT_GENDER_LABELS: Record<AiCallContactGender, string> = {
+  male: "Male",
+  female: "Female",
+  unspecified: "Not specified",
+};
+const UNSPECIFIED_WORDS = ["unspecified", "not specified", "notspecified", "unknown", "other", "na", "n/a", "-"];
+
+/** A contact's gender: "m" / "male", "f" / "female" in any case; anything else (incl. blank) is Not specified. */
+export function normalizeContactGender(raw: unknown): AiCallContactGender {
+  const v = String(raw ?? "").trim().toLowerCase().replace(/\./g, "");
+  if (v === "m" || v === "male") return "male";
+  if (v === "f" || v === "female") return "female";
+  return "unspecified";
+}
+
+/** True when `raw` names a contact gender on purpose (Male, Female or a Not specified word); blank is false. */
+export function isContactGender(raw: unknown): boolean {
+  const v = String(raw ?? "").trim().toLowerCase().replace(/\./g, "");
+  return isAiCallGender(raw) || UNSPECIFIED_WORDS.includes(v);
+}
+
 /** "+919876543210" → "+91******3210". For logs and anywhere a full number isn't needed. */
 export function maskPhone(phone: string | null | undefined): string {
   const s = String(phone ?? "");

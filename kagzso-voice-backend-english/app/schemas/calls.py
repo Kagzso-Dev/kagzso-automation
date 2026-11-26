@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import phonenumbers
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
@@ -52,6 +52,47 @@ class KnownQuestion(BaseModel):
     question: str = Field(..., min_length=1, max_length=300)
 
 
+class CallbackRequest(BaseModel):
+    """A callback the customer asked for on an earlier call, as Dispatch kept it from that call's insights: explicit
+    (they asked to be called at a time they named) or suggested (they asked for a call later, or only roughly said
+    when). `when` is the customer's own words, never a date worked out from them."""
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["explicit", "suggested"]
+    when: Optional[str] = Field(None, max_length=80)
+
+
+class HistoryCall(BaseModel):
+    """One earlier completed call to this contact, in this language, as Dispatch recorded it."""
+    model_config = ConfigDict(extra="forbid")
+
+    date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    outcome: Optional[str] = Field(None, max_length=32)
+    summary: Optional[str] = Field(None, max_length=400)
+    interest: Optional[str] = Field(None, max_length=32)
+    requirement: Optional[str] = Field(None, max_length=200)
+    automation_need: Optional[str] = Field(None, max_length=200)
+    callback_request: Optional[CallbackRequest] = None
+
+
+class CallAgain(BaseModel):
+    """This call is an approved "call again" follow-up: why the team asked for it."""
+    model_config = ConfigDict(extra="forbid")
+
+    reason: Optional[str] = Field(None, max_length=64)
+    note: Optional[str] = Field(None, max_length=400)
+    scheduled_for: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+class CustomerHistory(BaseModel):
+    """An AI Agent call's customer history from Dispatch: this contact's last completed calls (newest first, at most 2)
+    and the follow-up this call is for. Used only by an agent whose admin's instructions lead (llm_service)."""
+    model_config = ConfigDict(extra="forbid")
+
+    calls: List[HistoryCall] = Field(default_factory=list, max_length=2)
+    call_again: Optional[CallAgain] = None
+
+
 class OutboundCallRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -93,6 +134,9 @@ class OutboundCallRequest(BaseModel):
     # are recognised in any wording or language (app/services/customer_questions.py). Kept on the call, never in a
     # prompt during it. Absent = nothing is learned from the call, exactly as before; [] = learn, nothing known yet.
     known_questions: Optional[List[KnownQuestion]] = Field(None, max_length=80)
+    # AI Agent runs from Dispatch: this contact's earlier calls and the follow-up this call is for. Only an agent whose
+    # admin's instructions lead reads it (call_service keeps it for those calls only). Absent = as before.
+    customer_history: Optional[CustomerHistory] = None
 
     @model_validator(mode="after")
     def _agent(self) -> "OutboundCallRequest":

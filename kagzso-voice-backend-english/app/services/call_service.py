@@ -53,8 +53,10 @@ from app.services.llm_service import (
     LLMProvider,
     SentenceChunker,
     agent_call,
+    CUSTOMER_HISTORY_VARIABLE,
     build_call_variables,
     calm_spoken_text,
+    customer_history_json,
     clean_spoken_text,
     has_pause_markers,
     pauses_from_variables,
@@ -938,6 +940,12 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
     if flow_vars.get("flow_natural_lines") and (known := customer_questions.known_json(
             [k.model_dump() for k in req.known_questions] if req.known_questions is not None else None)) is not None:
         variables[customer_questions.KNOWN_VARIABLE] = known
+    # An AI Agent whose admin's instructions lead: this contact's earlier calls and the follow-up this call is for, as
+    # Dispatch recorded them. Only with a known name: without one nobody on the call can show they are the customer,
+    # so nothing about them is kept for the prompt. Every other call ignores it, exactly as before.
+    if flow_vars.get(INSTRUCTIONS_LEAD_VARIABLE) and name and req.customer_history is not None:
+        if history := customer_history_json(req.customer_history.model_dump(exclude_none=True)):
+            variables[CUSTOMER_HISTORY_VARIABLE] = history
     # The call's voice, resolved here once and saved on the call: an AI agent's saved voice (else the language default,
     # above); any other call's own flow voice, else this backend's main voice (None). Every line of the call - the
     # greeting pre-rendered while it rings, each reply, re-ask and the closing - is spoken by the TTS CallSession builds

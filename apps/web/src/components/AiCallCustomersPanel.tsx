@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CallRecording, RecordingBadge, useRecordingStatuses } from "./CallRecording";
 import {
+  AI_CALL_CONTACT_GENDER_LABELS,
   AI_CALL_CUSTOMER_FIELDS,
   AI_CALL_LANGUAGE_NAMES,
   AI_CALL_MANUAL_STAGES,
@@ -168,6 +169,7 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
           <option value="">All genders</option>
           <option value="male">Male</option>
           <option value="female">Female</option>
+          <option value="unspecified">Not specified</option>
         </select>
         <select
           className={FILTER_SELECT}
@@ -275,7 +277,7 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
                     {c.customerName || "—"}
                   </button>
                 </td>
-                <td className="px-4 py-2.5 capitalize text-slate-550">{c.gender}</td>
+                <td className="px-4 py-2.5 text-slate-550">{genderLabel(c.gender)}</td>
                 <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs">{formatPhoneDisplay(c.phone)}</td>
                 <td className="px-4 py-2.5">{c.businessName || "—"}</td>
                 <td className="max-w-[16rem] px-4 py-2.5">
@@ -354,6 +356,10 @@ export function StageBadge({ stage }: { stage: AiCallStage }) {
   return <Badge tone={STAGE_TONE[stage]}>{AI_CALL_STAGE_LABELS[stage]}</Badge>;
 }
 
+/** "male" -> "Male", "unspecified" -> "Not specified"; any older value as it is. */
+const genderLabel = (g: string | null | undefined) =>
+  (g && AI_CALL_CONTACT_GENDER_LABELS[g as keyof typeof AI_CALL_CONTACT_GENDER_LABELS]) || g || "";
+
 function Pager({ page, pageSize, total, onChange }: { page: number; pageSize: number; total: number; onChange: (p: number) => void }) {
   const pages = Math.max(1, Math.ceil(total / pageSize));
   return (
@@ -389,7 +395,8 @@ function CustomerFormModal({ customer, onClose }: { customer: AiCallCustomer | "
   const [results, setResults] = useState<AddToLanguageResult[] | null>(null);
   const [form, setForm] = useState({
     customerName: existing?.customerName ?? "",
-    gender: existing?.gender === "female" ? "female" : "male", // Male by default
+    // A new contact starts as Not specified (never silently Male); an existing one keeps its own.
+    gender: existing?.gender === "female" || existing?.gender === "male" || existing?.gender === "unspecified" ? existing.gender : "unspecified",
     phone: existing?.phone ?? "",
     businessName: existing?.businessName ?? "",
     followUpDetail: existing?.followUpDetail ?? "",
@@ -457,6 +464,7 @@ function CustomerFormModal({ customer, onClose }: { customer: AiCallCustomer | "
             <select className="input" value={form.gender} onChange={(e) => set("gender", e.target.value)}>
               <option value="male">Male</option>
               <option value="female">Female</option>
+              <option value="unspecified">Not specified</option>
             </select>
           </div>
         </div>
@@ -1101,7 +1109,7 @@ function DetailBody({ id, onClose }: { id: string; onClose: () => void }) {
         <div className="text-sm">
           <div className="font-mono">{formatPhoneDisplay(c.phone)}</div>
           <div className="text-slate-550">
-            {[c.businessName, c.gender, c.email, c.whatsappOptIn ? "WhatsApp opt-in" : null]
+            {[c.businessName, genderLabel(c.gender), c.email, c.whatsappOptIn ? "WhatsApp opt-in" : null]
               .filter(Boolean)
               .join(" · ") || "—"}
           </div>

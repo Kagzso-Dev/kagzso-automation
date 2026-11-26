@@ -19,6 +19,7 @@ import {
   type VoiceTuningPayload,
 } from "@dispatch/shared";
 import { aiCallsConfig, isAiCallsConfigured, voiceBackendFor, type VoiceBackendTarget } from "../config/aiCalls.js";
+import type { VoiceCustomerHistory } from "../domain/aiAgentHistory.js";
 
 export class VoiceBackendError extends Error {
   constructor(
@@ -44,6 +45,8 @@ export interface PlaceCallInput {
   voiceTuning?: VoiceTuningPayload | null;
   /** An Autonomous AI Agent's call: the agent's questions, to learn the customer's after the call. Absent = nothing learned. */
   knownQuestions?: { id: string; question: string }[] | null;
+  /** An AI Agent whose admin's instructions lead: this contact's earlier calls (aiAgentHistory). Absent = as before. */
+  customerHistory?: VoiceCustomerHistory | null;
   phone: string; // E.164
   runId: string;
   logId: string;
@@ -210,7 +213,11 @@ export async function placeVoiceCall(input: PlaceCallInput): Promise<{ callId: s
     // A voice backend from before question learning refuses the field (422: validated before anything is dialled), e.g.
     // one a deploy left running: the call goes out without it, and nothing is learned from it.
     if (input.knownQuestions && err instanceof VoiceBackendError && err.status === 422 && err.message.includes("known_questions")) {
-      return placeVoiceCallOnce({ ...input, knownQuestions: null });
+      return placeVoiceCall({ ...input, knownQuestions: null });
+    }
+    // Likewise a voice backend from before customer history: the call goes out without it.
+    if (input.customerHistory && err instanceof VoiceBackendError && err.status === 422 && err.message.includes("customer_history")) {
+      return placeVoiceCall({ ...input, customerHistory: null });
     }
     throw err;
   }
@@ -228,6 +235,7 @@ async function placeVoiceCallOnce(input: PlaceCallInput): Promise<{ callId: stri
       customer_business: input.customerBusiness || undefined,
       voice_tuning: input.voiceTuning || undefined,
       known_questions: input.knownQuestions ?? undefined,
+      customer_history: input.customerHistory ?? undefined,
       run_id: input.runId,
       log_id: input.logId,
       ...(input.greetingDelaySec != null ? { greeting_delay_sec: input.greetingDelaySec } : {}),

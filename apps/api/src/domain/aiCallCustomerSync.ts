@@ -58,7 +58,7 @@ export function markCustomerCalling(logId: string): Promise<void> {
  * The saved customer a call is for: its link (calls from the customer list), else the same number in the language's
  * list (AI Agents → Call, a flow's test call), which is what an admin expects from a number that is in the list.
  */
-async function customerOfCall(logId: string, phone: string, language: string): Promise<AiCallCustomer | null> {
+export async function customerOfCall(logId: string, phone: string, language: string): Promise<AiCallCustomer | null> {
   const link = await prisma.aiCallCustomerCall.findUnique({ where: { logId }, include: { customer: true } });
   return link?.customer ?? (await prisma.aiCallCustomer.findFirst({ where: { activePhone: phone, language } }));
 }

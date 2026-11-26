@@ -607,10 +607,67 @@ _CUSTOMER_BUSINESS_HINTS = {
 # believed) - never when or whether to ask about it, or what to do with the answer: that is the admin's instructions'.
 CUSTOMER_BUSINESS_KNOWN_DATA_RULES = """
 - `customer_business` in the customer details is this contact's own business, as the team has it on file. It is not verified. It is the one thing specific to the customer you may say before the person has shown they are the customer.
+- Use what you know about their business to make what you say relevant to it. Never assume what it offers, how it works or what it needs.
 - Say the name as it is written in `customer_business`, in the same letters. Never translate it, respell it or read it letter by letter.
 - If they say the business is different or wrong, believe them, go by what they say and do not mention the old one again."""
 CUSTOMER_BUSINESS_UNKNOWN_DATA_RULES = """
 - The customer's business is not known on this call. Never guess it, never say that it is missing, and never say a word such as undefined, null or blank in its place."""
+
+# instructions_lead: the contact's earlier calls (Dispatch's record, call_service.CUSTOMER_HISTORY_VARIABLE) - what
+# the data is, when it may be used and what it never allows. What to do with it is the admin's instructions'.
+CUSTOMER_HISTORY_VARIABLE = "flow_customer_history"
+CUSTOMER_HISTORY_RULES = """
+- `previous_calls` in the customer details is what the system recorded about earlier calls to this number, newest first: the date, the outcome, a one-line summary and, when recorded, the customer's interest, their requirement and a callback they asked for. It is a record, not verified, and what the customer says now always comes first.
+- Use it only once the person has shown they are the customer: until then, never mention an earlier call or anything in it.
+- A `callback_request` is what the customer said about being called back, in their words: `explicit` when they named a time, `suggested` when they only said later or roughly when. Never turn it into a date or time of your own, and never say that a call was arranged.
+- Never claim or imply an earlier conversation, request, promise or agreement that is not in `previous_calls`, and never add details it does not have."""
+CUSTOMER_NO_HISTORY_RULE = """
+- There is no record of an earlier call with this number: never say or imply that you spoke before."""
+CALL_AGAIN_RULE = """
+- `call_again` in the customer details is why the team asked for this call: a note from the team, not the customer's words. Use it only once the person has shown they are the customer, and never read it out word for word."""
+
+_HISTORY_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_HISTORY_TEXT = (("outcome", 32), ("summary", 300), ("interest", 32), ("requirement", 160), ("automation_need", 160))
+CALLBACK_TYPES = ("explicit", "suggested")
+
+
+def customer_history_json(raw: Mapping[str, Any]) -> Optional[str]:
+    """The history Dispatch sent, made safe for the prompt's data block (contact data is untrusted: sanitize_variable,
+    fixed keys, at most 2 calls), as the call's variable; None when nothing usable is left."""
+    calls: List[Dict[str, Any]] = []
+    for c in list(raw.get("calls") or [])[:2]:
+        if not isinstance(c, Mapping) or not _HISTORY_DATE.match(str(c.get("date") or "")):
+            continue
+        item: Dict[str, Any] = {"date": str(c["date"])}
+        for key, limit in _HISTORY_TEXT:
+            if value := sanitize_variable(c.get(key), limit):
+                item[key] = value
+        cb = c.get("callback_request")
+        if isinstance(cb, Mapping) and cb.get("type") in CALLBACK_TYPES:
+            when = sanitize_variable(cb.get("when"), 80)
+            item["callback_request"] = {"type": cb["type"], **({"when": when} if when else {})}
+        calls.append(item)
+    again: Dict[str, str] = {}
+    raw_again = raw.get("call_again")
+    if isinstance(raw_again, Mapping):
+        for key, limit in (("reason", 64), ("note", 300)):
+            if value := sanitize_variable(raw_again.get(key), limit):
+                again[key] = value
+        if _HISTORY_DATE.match(str(raw_again.get("scheduled_for") or "")):
+            again["scheduled_for"] = str(raw_again["scheduled_for"])
+    if not calls and not again:
+        return None
+    return json.dumps({**({"calls": calls} if calls else {}), **({"call_again": again} if again else {})},
+                      ensure_ascii=False)
+
+
+def customer_history(variables: Mapping[str, Optional[str]]) -> Dict[str, Any]:
+    """The call's stored history ({} = none, or unreadable)."""
+    try:
+        value = json.loads(variables.get(CUSTOMER_HISTORY_VARIABLE) or "{}")
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def customer_business_data_rules(business: str) -> str:
@@ -703,6 +760,14 @@ def build_system_prompt(
         data["customer_business"] = business or None
         business_rules = (customer_business_data_rules(business) if lead
                           else customer_business_rules(business, lang, opening=not last_reply))
+    if lead:  # the contact's earlier calls: data only, kept by call_service for a named customer only
+        history = customer_history(variables)
+        calls, again = history.get("calls") or [], history.get("call_again") or {}
+        if calls:
+            data["previous_calls"] = calls
+        if again:
+            data["call_again"] = again
+        business_rules += (CUSTOMER_HISTORY_RULES if calls else CUSTOMER_NO_HISTORY_RULE) + (CALL_AGAIN_RULE if again else "")
     brand = (
         f"\n- Our company name is spelled Kagzso but pronounced \"Kexo\". "
         f"Whenever you say it, write it exactly as {brand_spoken(lang)}."

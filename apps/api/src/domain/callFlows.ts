@@ -12,6 +12,7 @@ import {
   AI_CALL_LANGUAGE_NAMES,
   aiCallLanguagePath,
   autonomousCallBlockedReason,
+  DEFAULT_AI_CALL_LANGUAGE,
   type AiCallLanguage,
   type CallFlowDefinition,
 } from "@dispatch/shared";
@@ -149,6 +150,33 @@ export async function flowVersionForCallAgain(customerId: string, language: AiCa
     take: 50,
   });
   return newest.find((v) => !autonomousCallBlockedReason(language, v.definition)) ?? null;
+}
+
+/**
+ * English "call again": the published version of the AI Agent whose call created the follow-up (`sourceCallLogId`),
+ * when that call was an active Autonomous agent's; null otherwise - a follow-up from a Nila call, an ordinary Call Flow
+ * or a manual one calls with the default agent exactly as before. Only English uses it: every other language already
+ * calls again with the customer's last flow (flowVersionForCallAgain).
+ */
+export async function agentVersionForCallAgain(sourceCallLogId: string | null | undefined): Promise<CallFlowVersion | null> {
+  if (!sourceCallLogId) return null;
+  const log = await prisma.aiCallLog.findUnique({
+    where: { id: sourceCallLogId },
+    select: { run: { select: { flow: { select: { flowVersion: { select: { flowId: true } } } } } } },
+  });
+  const flowId = log?.run.flow?.flowVersion.flowId;
+  if (!flowId) return null;
+  const agent = await prisma.aiAgent.findFirst({
+    where: { callFlowId: flowId, mode: "AUTONOMOUS", archivedAt: null, language: DEFAULT_AI_CALL_LANGUAGE },
+    select: { id: true },
+  });
+  if (!agent) return null;
+  try {
+    return await versionForNewRun(flowId, DEFAULT_AI_CALL_LANGUAGE);
+  } catch (err) {
+    if (err instanceof CallFlowError) return null; // unpublished or removed since: the default agent, as before
+    throw err;
+  }
 }
 
 /** What an admin types to remove a live (published) flow. */
