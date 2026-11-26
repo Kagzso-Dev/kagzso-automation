@@ -299,6 +299,40 @@ describe("Settings → AI Voice", () => {
       expect(screen.queryByRole("button", { name: /Use the recommended/ })).toBeNull(); // it is already in the box
     });
 
+    it("agrees with the built-in agent rules (the six conflicts of 2026-11-26 are gone)", () => {
+      const text = AI_AGENT_DEFAULT_INSTRUCTIONS.ta!;
+      // 1. Reply length = the phone rule "Maximum two short sentences per reply unless the customer asks for more detail."
+      expect(text).not.toMatch(/1-3 சின்ன வாக்கியம்/);
+      expect(text).toContain("ஒரு பதில்ல அதிகபட்சம் ரெண்டு சின்ன வாக்கியம்; customer விவரமா கேட்டா மட்டும் கொஞ்சம் அதிகம்.");
+      // 2. Busy / wrong person = "Do not ask when to call back and never promise a callback." / "thank the person politely and end the call"
+      expect(text).not.toMatch(/எப்போ பேசலாம்னு கேளுங்க|எப்போ பேசலாம்னு கேட்டு/);
+      expect(text).toContain("திரும்ப call பண்ற நேரம் கேக்காதீங்க, callback வாக்குறுதியும் வேண்டாம்.");
+      expect(text).toContain("customer இருக்காங்களான்னு மரியாதையா கேளுங்க. இல்லன்னா நன்றி சொல்லி முடிங்க.");
+      // 3. "Are you an AI" = "[never] add a question of your own ... after they ask who or what you are" / "continue only if they want to"
+      expect(text).not.toContain("அப்புறம் அவங்க business பத்தி கேளுங்க");
+      expect(text).not.toContain("அப்புறம் உங்க கேள்வி."); // "answer first, then your question" put a question after it too
+      expect(text).toContain("உண்மையா சொல்லி நிறுத்துங்க. அதுக்கு அப்புறம் உங்க கேள்வி வேண்டாம்; அவங்க தொடர விரும்பினா மட்டும் தொடருங்க.");
+      // 4. Interested = "Interest is a reason to keep listening, not to end the call"
+      expect(text).not.toContain("அவ்வளவுதான்");
+      expect(text).toContain("அவங்களுக்கு கேள்வி இருந்தா தொடர்ந்து பதில் சொல்லுங்க");
+      // 5. Do-not-call = the built-in line only ("No further questions, no explanation, no recovery attempt.")
+      expect(text).not.toContain("மன்னிப்பு கேட்டு call-ஐ முடிங்க");
+      expect(text).toContain("DO NOT CALL பகுதியில இருக்கற வரியை மட்டும் சொல்லி உடனே call-ஐ முடிங்க.");
+      // 6. How the number was found = "Never invent missing information."
+      expect(text).not.toMatch(/contact list/i);
+      expect(text).toContain("Number எப்படி கிடைச்சுதுன்னு உங்களுக்கு தெரியாது: அதை guess பண்ணாதீங்க, காரணம் சொல்லாதீங்க.");
+      // Kept: spoken Tamil with English business words, verb last, one question, safety.
+      expect(text).toContain("software, billing, GST, WhatsApp, automation மாதிரி வார்த்தைகள் English-லயே இருக்கட்டும்.");
+      expect(text).toContain("வினைச்சொல் வாக்கியத்தோட கடைசியில வரணும்.");
+      expect(text).toContain("ஒரு நேரத்துல ஒரு கேள்வி மட்டும்");
+      expect(text).toContain("Kagzso சார்பா பேசுற AI assistant-னு உண்மையா");
+    });
+
+    it("only Tamil has recommended instructions: English, Hindi and Kannada start exactly as before (an empty box)", () => {
+      expect(Object.keys(AI_AGENT_DEFAULT_INSTRUCTIONS)).toEqual(["ta"]);
+      for (const language of ["en", "hi", "kn"] as const) expect(AI_AGENT_DEFAULT_INSTRUCTIONS[language]).toBeUndefined();
+    });
+
     it("an English agent starts with an empty box, as before", async () => {
       form(null, "en");
       await waitFor(() => expect(box()).toBeTruthy());
