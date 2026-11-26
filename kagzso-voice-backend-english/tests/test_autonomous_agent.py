@@ -309,6 +309,13 @@ def test_compiled_agent_call_per_language(client, auth, fakes, sync_engine, monk
     answer = "It works alongside the software the hospital already uses."
     # All the approved knowledge is offered: what the customer just asked about comes first.
     assert answer in question.split(KNOWLEDGE_TITLE, 1)[1].splitlines()[0]
+    # The real LLM requests of the call: the admin's instructions once, and no built-in conversation rule.
+    from tests.test_instructions_lead import REMOVED
+    for s in systems:
+        assert s.count("Do not talk about pricing.") == 1
+        for name, removed in REMOVED.items():
+            assert removed not in s, name
+        assert "--- Safety rules" in s and "Never claim to be human" in s
     for s in systems:
         assert "AI CONVERSATION INSTRUCTIONS" in s and "Do not talk about pricing." in s
         assert "Kagzso automates billing follow-ups" in s  # the always-on fact

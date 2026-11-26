@@ -30,6 +30,7 @@ from app.core.logging import get_logger
 from app.flows.loader import BUILTIN_FLOWS
 from app.flows.schema import render_blocks
 from app.flows.training import HEADER_LINE as TRAINING_HEADER_LINE, compile_training, estimate_tokens
+from app.flows.training import INSTRUCTIONS_LEAD_KEY as TRAINING_INSTRUCTIONS_LEAD_KEY
 from app.services import turn_tuning
 from app.services.tts import brand_spoken
 
@@ -423,7 +424,8 @@ def render_first_message(template: str, variables: Mapping[str, Optional[str]]) 
 FOLLOW_CUSTOMER_LANGUAGES = ("ta",)
 
 
-def language_instruction(language: Optional[str], style: Optional[str] = None, follow_customer: bool = False) -> str:
+def language_instruction(language: Optional[str], style: Optional[str] = None, follow_customer: bool = False,
+                         instructions_lead: bool = False) -> str:
     """Reply-language rule derived from CALL_LANGUAGE (en adds nothing). `style` is the flow's language
     style: "pure" = that language's own words; anything else = mixed (the rule every call had before).
     follow_customer (AGENT_FOLLOW_CUSTOMER_LANGUAGE, an AI agent's call): in a FOLLOW_CUSTOMER_LANGUAGES language with
@@ -452,6 +454,25 @@ def language_instruction(language: Optional[str], style: Optional[str] = None, f
     else:
         last = (f"- One call, one language: keep every reply in {name} (with everyday English words as above) even if "
                 f"the customer answers in English or another language. Never switch whole replies to another language.")
+    if instructions_lead:
+        # The language and how its words are written (the voice reads the script; English words stay in English
+        # letters) - not how to speak it: register, style and how much English to mix are the instructions' to say.
+        if follow_customer and code in FOLLOW_CUSTOMER_LANGUAGES:
+            last = (f"- Follow the customer's language: when the customer speaks to you in plain English, reply in "
+                    f"English in English letters; when they speak {name} or mix {name} and English, reply in {name}. "
+                    f"Change only when the customer does, and keep one language per reply.")
+        else:
+            last = (f"- One call, one language: keep every reply in {name} even if the customer answers in English or "
+                    f"another language. Never switch whole replies to another language.")
+        return (
+            f"\n- Reply in {name}, the language of this call.\n"
+            f"- Write {name} words in {name} script. Write every English word you use in English (Latin) letters "
+            f"exactly as spelled in English. NEVER transliterate English words into {name} script.\n"
+            f"- Phrases in the instructions may be written in romanized {name}; write their {name} words in "
+            f"{name} script.\n"
+            f"- Write numbers, times and dates as spoken {name} words.\n"
+            + last
+        )
     return (
         f"\n- Always reply in natural, everyday spoken {name} (code-mixed with English the way people "
         f"actually talk on a phone call).\n"
@@ -629,7 +650,10 @@ def training_block(variables: Mapping[str, Optional[str]], user_message: Optiona
     if not raw:
         return ""
     try:
-        compiled = compile_training(json.loads(raw), user_message, last_reply, recent)
+        payload = json.loads(raw)
+        if instructions_lead(variables):  # the persona's pace / length / title defaults give way to the instructions
+            payload[TRAINING_INSTRUCTIONS_LEAD_KEY] = True
+        compiled = compile_training(payload, user_message, last_reply, recent)
         return render_prompt(compiled.text, variables)  # {{title_to_use}} is the only variable allowed
     except Exception as exc:
         log.warning("Training block left out (%s) - the prompt is used without it", type(exc).__name__)
@@ -709,7 +733,8 @@ def build_system_prompt(
         + business_rules
         + brand + followup
         + language_instruction(lang, variables.get("flow_language_style"),
-                               follow_customer=natural and default_settings.AGENT_FOLLOW_CUSTOMER_LANGUAGE)
+                               follow_customer=natural and default_settings.AGENT_FOLLOW_CUSTOMER_LANGUAGE,
+                               instructions_lead=lead)
         + turn_tuning.reply_rule(variables, lang)  # "" unless the call has voice response tuning
         # Below every rule above, above the customer data; "" for a flow without (Active) training.
         + training_block(variables, user_message, last_reply, (recent or []) if natural else None)

@@ -463,12 +463,16 @@ def profile_lines(p: Mapping[str, Any]) -> List[str]:
     return ["Agent profile:"] + lines if lines else []
 
 
-def persona_lines(p: Mapping[str, Any], mixed: bool) -> List[str]:
+def persona_lines(p: Mapping[str, Any], mixed: bool, manner_only: bool = False) -> List[str]:
+    """manner_only: an AI Agent whose admin's instructions lead (llm_service.training_block): the profile and the
+    manner its Personality setting gives, without the compiled defaults for pace, sentence length and titles."""
     lines = profile_lines(p) + ["Persona and tone:"]
     if p.get("role"):
         lines.append(f"- Role: {p['role']}")
     lines.append(f"- Manner: {_FORMALITY[p['formality']]}, {_WARMTH[p['warmth']]}, {_ENERGY[p['energy']]}, "
                  f"{_POLITENESS[p['politeness']]}.")
+    if manner_only:
+        return lines
     lines.append(f"- Pace: {_PACE[p['pace']]}. Sentences: {_LENGTH[p['sentence_length']]}.")
     lines.append(f"- {_TITLE[p['title_use']]}")
     if mixed and p.get("english_mix"):
@@ -480,10 +484,15 @@ def persona_lines(p: Mapping[str, Any], mixed: bool) -> List[str]:
     return lines
 
 
+# Set on a call's payload by llm_service.training_block for an AI Agent whose admin's instructions lead. Never stored.
+INSTRUCTIONS_LEAD_KEY = "instructions_lead"
+
+
 def core_text(payload: Mapping[str, Any]) -> str:
     parts = [HEADER]
     if payload.get("persona"):
-        parts.append("\n" + "\n".join(persona_lines(payload["persona"], bool(payload.get("mixed")))))
+        parts.append("\n" + "\n".join(persona_lines(payload["persona"], bool(payload.get("mixed")),
+                                                    manner_only=bool(payload.get(INSTRUCTIONS_LEAD_KEY)))))
     always = [f for f in payload.get("facts", []) if f.get("always")]
     if always:
         parts.append("\nCompany facts (true; use only when relevant):\n" + "\n".join(f"- {f['text']}" for f in always))

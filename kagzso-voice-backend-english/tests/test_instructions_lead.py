@@ -17,6 +17,7 @@ import pytest
 from app.core.config import settings
 from app.flows.loader import flow_hash, parse_flow
 from app.flows.schema import INSTRUCTIONS_LEAD_LOCKED_TEXT, LOCKED_BLOCKS, CallFlow, render_blocks
+from app.flows.training import runtime_json
 from app.services import call_service as cs
 from app.services import llm_service as llm
 
@@ -36,6 +37,10 @@ REMOVED = {
     "screening name rule": "use only in the first identity question",
     "screening business rule": "Never ask the customer for a missing company name or business type",
     "priority order": "this order decides",
+    "persona pace / length": "Pace: steady and unhurried",
+    "persona title frequency": "Add sir or madam now and then",
+    "language register": "Avoid formal, bookish or literary",
+    "language mix style": "code-mixed with English the way people actually talk",
 }
 
 
@@ -56,6 +61,8 @@ def _call_variables(flow: CallFlow, business: str = "", **extra) -> dict:
                      flow_natural_lines="true" if a.natural_lines else "false")
     if a.contact_business:
         variables["flow_contact_business"] = "true"
+    if training := runtime_json(flow.training, flow.language, flow.language_style):  # as call_service does
+        variables["flow_training"] = training
     if a.instructions_lead and a.natural_lines:  # as call_service does
         variables[cs.INSTRUCTIONS_LEAD_VARIABLE] = "true"
     variables.update(extra)
@@ -109,7 +116,9 @@ def test_a_lead_call_keeps_every_safeguard(monkeypatch, lang):
     # The fixed rules still come after the admin's instructions, so nothing written there can override them.
     assert prompt.index(ADMIN_LINE) < prompt.index("--- Safety rules")
     if lang != "en":
-        assert llm.LANGUAGE_NAMES[lang] in prompt  # the call's language and script rule
+        assert f"Reply in {llm.LANGUAGE_NAMES[lang]}, the language of this call." in prompt  # language + script rule
+        assert "NEVER transliterate English words" in prompt
+    assert "Manner:" in prompt  # the agent's Personality setting still sets the manner
 
 
 @pytest.mark.parametrize("lang", LANGUAGES)
@@ -126,7 +135,7 @@ def test_languages_get_the_same_backend_rules_apart_from_their_language_line(mon
         rendered = render_blocks(flow)
         prompt = llm.build_system_prompt(rendered, _call_variables(flow, "ABC Hospital"), lang, last_reply="Hi.")
         backend = prompt[len(llm.render_prompt(rendered, _call_variables(flow, "ABC Hospital"))):]
-        backend = backend.replace(llm.language_instruction(lang, None), "")  # the language's own script rule
+        backend = backend.replace(llm.language_instruction(lang, None, instructions_lead=True), "")  # its script rule
         backend = backend.replace(llm.BRAND_REST_RULES.get(lang, ""), "")  # Tamil: company-name letters (spelling)
         backend = backend.replace(f"write it exactly as {llm.brand_spoken(lang)}.", "write it exactly as BRAND.")
         return backend.split(llm.CUSTOMER_DATA_TITLE)[0]
@@ -148,6 +157,9 @@ def test_an_agent_published_before_the_flag_builds_the_prompt_it_always_did(monk
     ask = llm.CUSTOMER_BUSINESS_ASK_RULES_TA if lang == "ta" else llm.CUSTOMER_BUSINESS_ASK_RULES
     assert ask.split("{example}")[0] in prompt
     assert llm.AGENT_ADDRESS_RULES in prompt
+    assert "Pace: steady and unhurried" in prompt  # the persona as it was
+    if lang != "en":
+        assert llm.language_instruction(lang, None) in prompt and "Avoid formal, bookish or literary" in prompt
     assert LOCKED_BLOCKS["nila_runtime_data"] in render_blocks(flow)  # the locked text, byte for byte
 
 
