@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
-  AI_AGENT_DEFAULT_INSTRUCTIONS,
   AI_AGENT_INSTRUCTIONS_MAX,
   instructionPlaceholders,
   voiceTuningPreset,
@@ -269,93 +268,51 @@ describe("Settings → AI Voice", () => {
     });
   });
 
-  describe("AI Conversation Instructions (Tamil)", () => {
-    const DISCOVERY = [
-      "புரிஞ்சுக்கறது (முதல்ல இதுதான்)",
-      "- Pitch பண்றதுக்கு முன்னாடி customer-ஓட business, அவங்க பிரச்சனை, இப்போ எப்படி வேலை நடக்குதுன்னு கேட்டுப் புரிஞ்சுக்கோங்க.",
-      "- ஒவ்வொரு பதிலுக்கும் பிறகு, அவங்க சொன்னதை ஒரு சின்ன வாக்கியத்துல உங்க வார்த்தையில சொல்லி புரிஞ்சுக்கிட்டதைக் காட்டுங்க. அப்புறம் அந்த பதில்ல இருந்தே அடுத்த கேள்வி கேளுங்க.",
-      "- Customer ஒரு பிரச்சனை சொன்னா, வேற topic-க்கு போகாம அதையே ஆழமா கேளுங்க: எவ்வளவு பெருசு, எப்போ இருந்து, இப்போ என்ன பண்றாங்க.",
-      "- பிரச்சனை தெளிவா புரிஞ்ச பிறகு மட்டும், அதுக்கு பொருந்துற Kagzso help-ஐ Knowledge-ல இருக்கறபடி சொல்லுங்க. அதுக்கு முன்னாடி எந்த product-ம் சொல்லாதீங்க.",
-      "- Customer-க்கு பிரச்சனை இல்லன்னா, ஏத்துக்கிட்டு மரியாதையா முடிங்க.",
-    ];
-    const box = () => screen.getByPlaceholderText(/Additional business information/) as HTMLTextAreaElement;
+  describe("AI Conversation Instructions (no built-in text, every language)", () => {
+    const box = () => screen.getByPlaceholderText(/How this agent talks and behaves/) as HTMLTextAreaElement;
 
-    it("a new Tamil agent starts with the recommended text: under 4000 characters, no placeholders, no team promises", async () => {
-      form();
-      await waitFor(() => expect(names()).toHaveLength(4));
-      const text = box().value;
-      expect(text).toBe(AI_AGENT_DEFAULT_INSTRUCTIONS.ta);
-      expect(text.length).toBeLessThanOrEqual(AI_AGENT_INSTRUCTIONS_MAX);
-      expect(instructionPlaceholders(text)).toEqual([]);
-      expect(text).not.toMatch(/[{}"“”]/); // no placeholders, no quoted lines
-      expect(text).not.toMatch(/good morning|கிட்டதான் பேசுறேனா/i); // the opening is the system's greeting
-      // No team follow-up is linked to agent calls: nothing says the team will call, explain or confirm anything.
-      expect(text).not.toMatch(/பண்ணுவாங்க|சொல்லுவாங்க|pass பண்றேன்|team தான் confirm|kagzso\.com/);
-      expect(text).toContain("Callback, meeting, demo, team contact பத்தி எந்த வாக்குறுதியும் சொல்லாதீங்க.");
-      // Discovery first: the block as given, before anything about Kagzso.
-      for (const line of DISCOVERY) expect([line, text.includes(line)]).toEqual([line, true]);
-      expect(text.indexOf("புரிஞ்சுக்கறது (முதல்ல இதுதான்)")).toBeLessThan(text.indexOf("Kagzso பத்தி சொல்றப்போ"));
-      expect(text).not.toMatch(/Kagzso எப்படி help பண்ணலாம்னு/); // the old goal that invited an early pitch
-      expect(screen.queryByRole("button", { name: /Use the recommended/ })).toBeNull(); // it is already in the box
-    });
-
-    it("agrees with the built-in agent rules (the six conflicts of 2026-11-26 are gone)", () => {
-      const text = AI_AGENT_DEFAULT_INSTRUCTIONS.ta!;
-      // 1. Reply length = the phone rule "Maximum two short sentences per reply unless the customer asks for more detail."
-      expect(text).not.toMatch(/1-3 சின்ன வாக்கியம்/);
-      expect(text).toContain("ஒரு பதில்ல அதிகபட்சம் ரெண்டு சின்ன வாக்கியம்; customer விவரமா கேட்டா மட்டும் கொஞ்சம் அதிகம்.");
-      // 2. Busy / wrong person = "Do not ask when to call back and never promise a callback." / "thank the person politely and end the call"
-      expect(text).not.toMatch(/எப்போ பேசலாம்னு கேளுங்க|எப்போ பேசலாம்னு கேட்டு/);
-      expect(text).toContain("திரும்ப call பண்ற நேரம் கேக்காதீங்க, callback வாக்குறுதியும் வேண்டாம்.");
-      expect(text).toContain("customer இருக்காங்களான்னு மரியாதையா கேளுங்க. இல்லன்னா நன்றி சொல்லி முடிங்க.");
-      // 3. "Are you an AI" = "[never] add a question of your own ... after they ask who or what you are" / "continue only if they want to"
-      expect(text).not.toContain("அப்புறம் அவங்க business பத்தி கேளுங்க");
-      expect(text).not.toContain("அப்புறம் உங்க கேள்வி."); // "answer first, then your question" put a question after it too
-      expect(text).toContain("உண்மையா சொல்லி நிறுத்துங்க. அதுக்கு அப்புறம் உங்க கேள்வி வேண்டாம்; அவங்க தொடர விரும்பினா மட்டும் தொடருங்க.");
-      // 4. Interested = "Interest is a reason to keep listening, not to end the call"
-      expect(text).not.toContain("அவ்வளவுதான்");
-      expect(text).toContain("அவங்களுக்கு கேள்வி இருந்தா தொடர்ந்து பதில் சொல்லுங்க");
-      // 5. Do-not-call = the built-in line only ("No further questions, no explanation, no recovery attempt.")
-      expect(text).not.toContain("மன்னிப்பு கேட்டு call-ஐ முடிங்க");
-      expect(text).toContain("DO NOT CALL பகுதியில இருக்கற வரியை மட்டும் சொல்லி உடனே call-ஐ முடிங்க.");
-      // 6. How the number was found = "Never invent missing information."
-      expect(text).not.toMatch(/contact list/i);
-      expect(text).toContain("Number எப்படி கிடைச்சுதுன்னு உங்களுக்கு தெரியாது: அதை guess பண்ணாதீங்க, காரணம் சொல்லாதீங்க.");
-      // Kept: spoken Tamil with English business words, verb last, one question, safety.
-      expect(text).toContain("software, billing, GST, WhatsApp, automation மாதிரி வார்த்தைகள் English-லயே இருக்கட்டும்.");
-      expect(text).toContain("வினைச்சொல் வாக்கியத்தோட கடைசியில வரணும்.");
-      expect(text).toContain("ஒரு நேரத்துல ஒரு கேள்வி மட்டும்");
-      expect(text).toContain("Kagzso சார்பா பேசுற AI assistant-னு உண்மையா");
-    });
-
-    it("மொழி: the reply follows the customer's language, the same rules in every language; duplicated lines are gone", () => {
-      const text = AI_AGENT_DEFAULT_INSTRUCTIONS.ta!;
-      const MOZHI = [
-        "மொழி",
-        "- Customer பேசுற மொழியிலயே பதில் சொல்லுங்க: தமிழ்ல பேசினா பேச்சுத் தமிழ், தமிழும் English-ம் கலந்து பேசினா அதே மாதிரி கலந்து, முழுசா English-ல பேசினா எளிமையான spoken English.",
-        "- Customer மொழி மாத்தினா மட்டும் நீங்களும் மாத்துங்க. ஒரு பதில்ல ஒரே மொழி.",
-        "- எந்த மொழியிலயும் அதே விதிகள்: அதிகபட்சம் ரெண்டு சின்ன வாக்கியம், ஒரு கேள்வி, முதல்ல புரிஞ்சுக்கறது.",
-      ];
-      expect(text).toContain(MOZHI.join("\n"));
-      expect(text.indexOf("மொழி\n")).toBeLessThan(text.indexOf("புரிஞ்சுக்கறது (முதல்ல இதுதான்)"));
-      expect(text.length).toBeLessThan(4000);
-      // Nothing left that forces Tamil-only sentences.
-      expect(text).not.toContain("வாக்கியம் Tamil-ஆ இருக்கணும்");
-      // The three lines the built-in rules already give.
-      expect(text).not.toMatch(/emoji|எண்களை வார்த்தையால/);
-      expect(text).not.toContain("ஏற்கனவே பதில் சொன்ன கேள்வியை திரும்பக் கேக்காதீங்க");
-      expect(text).not.toContain("Introduction, pitch திரும்ப சொல்லாதீங்க");
-    });
-
-    it("only Tamil has recommended instructions: English, Hindi and Kannada start exactly as before (an empty box)", () => {
-      expect(Object.keys(AI_AGENT_DEFAULT_INSTRUCTIONS)).toEqual(["ta"]);
-      for (const language of ["en", "hi", "kn"] as const) expect(AI_AGENT_DEFAULT_INSTRUCTIONS[language]).toBeUndefined();
-    });
-
-    it("an English agent starts with an empty box, as before", async () => {
-      form(null, "en");
+    it.each(["ta", "en", "hi", "kn"] as const)("a new %s agent starts with an empty box: nothing is filled in for it", async (language) => {
+      form(null, language);
       await waitFor(() => expect(box()).toBeTruthy());
       expect(box().value).toBe("");
+      expect(screen.getByText(`0/${AI_AGENT_INSTRUCTIONS_MAX}`)).toBeTruthy(); // the counter and the maximum stay
+      expect(box().maxLength).toBe(AI_AGENT_INSTRUCTIONS_MAX);
+    });
+
+    it("no recommended-instructions button and no priority order under the box", async () => {
+      form({ ...AGENT, instructions: "Do not discuss pricing." });
+      await waitFor(() => expect(box().value).toBe("Do not discuss pricing."));
+      expect(screen.queryByRole("button", { name: /Use the recommended/ })).toBeNull();
+      expect(screen.queryByText(/this order decides/)).toBeNull();
+      expect(screen.queryByText(/legal and mandatory disclosures/)).toBeNull();
+    });
+
+    it("the shared package has no built-in instructions any more; the text checks stay", async () => {
+      const shared = await import("@dispatch/shared");
+      expect("AI_AGENT_DEFAULT_INSTRUCTIONS" in shared).toBe(false);
+      expect(instructionPlaceholders("Hi {agent_name}")).toEqual(["{agent_name}"]);
+    });
+
+    it("an existing agent keeps its own saved text exactly, and saves what the admin typed", async () => {
+      const own = "நீங்க ஒரு friendly receptionist மாதிரி பேசுங்க.\nClinic appointments பத்தி கேளுங்க.";
+      form({ ...AGENT, instructions: own });
+      await waitFor(() => expect(box().value).toBe(own));
+      fireEvent.change(box(), { target: { value: own + "\nDo not discuss pricing." } });
+      fireEvent.click(screen.getByRole("button", { name: /^Save/ }));
+      await waitFor(() => expect(sent.find((s) => s.url === "/api/ai-agents/ag1")).toBeTruthy());
+      expect(sent.find((s) => s.url === "/api/ai-agents/ag1")!.body).toMatchObject({
+        agent: { instructions: own + "\nDo not discuss pricing." },
+      });
+    });
+
+    it("a new agent saves an empty box as empty", async () => {
+      form(null, "en");
+      await waitFor(() => expect(box()).toBeTruthy());
+      fill("Agent name (for your list)", "ABC Hospital — Thaara");
+      fill("Calling objective", "Introduce AI for hospitals.");
+      fireEvent.click(screen.getByRole("button", { name: "Create AI agent" }));
+      await waitFor(() => expect(sent.find((s) => s.url === "/api/ai-agents")).toBeTruthy());
+      expect(sent.find((s) => s.url === "/api/ai-agents")!.body).toMatchObject({ language: "en", agent: { instructions: "" } });
     });
 
     it("a placeholder is explained and saving waits until it is removed", async () => {
@@ -370,14 +327,6 @@ describe("Settings → AI Voice", () => {
       fireEvent.change(box(), { target: { value: "நீங்க பணிவா பேசுங்க." } });
       expect(screen.queryByText(/this box fills in nothing/)).toBeNull();
       expect((screen.getByRole("button", { name: "Create AI agent" }) as HTMLButtonElement).disabled).toBe(false);
-    });
-
-    it("an existing agent keeps its own text; the recommended one replaces it only after a confirmation", async () => {
-      form({ ...AGENT, instructions: "Do not discuss pricing." });
-      await waitFor(() => expect(box().value).toBe("Do not discuss pricing."));
-      fireEvent.click(screen.getByRole("button", { name: "Use the recommended Tamil instructions" }));
-      fireEvent.click(await screen.findByRole("button", { name: "Replace" }));
-      await waitFor(() => expect(box().value).toBe(AI_AGENT_DEFAULT_INSTRUCTIONS.ta));
     });
   });
 

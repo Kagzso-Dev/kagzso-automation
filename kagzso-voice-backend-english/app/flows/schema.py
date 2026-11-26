@@ -176,12 +176,17 @@ class FlowAutonomous(_Strict):
         line and the fallback lines (LLM down) stay fixed. False = the fixed lines, as before.
       - contact_business: each call uses the contact's own business (customer_business from Dispatch), or the AI
         asks what it is when there is none on file (llm_service.customer_business_rules), and a business learned that
-        way goes back to Dispatch. Needs natural_lines. False = an agent published before it, as before."""
+        way goes back to Dispatch. Needs natural_lines. False = an agent published before it, as before.
+      - instructions_lead: the admin's AI Conversation Instructions lead the conversation (Dispatch compiler 4+): the
+        backend adds no conversation rules of its own (no question order, no opening or business-question script, no
+        reply length), only the safety, truthfulness, privacy and technical ones (llm_service.build_system_prompt).
+        Only with natural_lines (without them it does nothing). False = an agent published before it, as before."""
     target_duration_sec: int = Field(60, ge=20, le=600)
     dnc_enforce: Literal[True] = True
     natural_lines: bool = False
     voice_pace: Optional[float] = Field(None, ge=0.5, le=2.0)  # the agent's voice speed; None = AGENT_TTS_PACE
     contact_business: bool = False
+    instructions_lead: bool = False
 
 
 class FlowTransfer(_Strict):
@@ -274,6 +279,31 @@ class CallFlow(_Strict):
         return self
 
 
+# An agent whose admin's instructions lead (autonomous.instructions_lead): the runtime-data block keeps its data rules
+# (source of truth, nothing invented or guessed, phone numbers never spoken) without the screening-era conversation
+# rules (use the name only in an identity question; never ask for a missing business) - those would override the
+# admin's instructions. The key and every other flow (Nila, Guided, ordinary flows, older agents) stay as they are.
+INSTRUCTIONS_LEAD_LOCKED_TEXT: Dict[str, str] = {
+    "nila_runtime_data": (
+        "# RUNTIME CUSTOMER DATA\n\n"
+        "The call request may contain:\n\n"
+        "* `contact_name`\n* `gender`\n* `company_name`\n* `business_type`\n* `phone_number`\n* `from_number`\n\n"
+        "Treat supplied runtime data as the **only source of truth**.\n\n"
+        "### FIELD RULES\n\n"
+        "* `contact_name` and `gender` → only as `address_as` and title_to_use in the customer details give them.\n"
+        "* `company_name` → optional business context.\n"
+        "* `business_type` → optional business context.\n"
+        "* `phone_number` and `from_number` → telephony only. Never speak them.\n"
+        "* Never invent missing information.\n"
+        "* Never guess gender from the customer's name.\n"
+        "* Never guess gender from the voice.\n"
+        "* Never guess the business type from the company name.\n\n---\n\n"
+    ),
+}
+
+
 def render_blocks(flow: CallFlow) -> str:
     """The agent system prompt: blocks joined end to end (locked text from code)."""
-    return "".join(LOCKED_BLOCKS[b.locked] if isinstance(b, LockedBlock) else b.text for b in flow.blocks)
+    lead = flow.autonomous is not None and flow.autonomous.instructions_lead and flow.autonomous.natural_lines
+    locked = {**LOCKED_BLOCKS, **INSTRUCTIONS_LEAD_LOCKED_TEXT} if lead else LOCKED_BLOCKS
+    return "".join(locked[b.locked] if isinstance(b, LockedBlock) else b.text for b in flow.blocks)

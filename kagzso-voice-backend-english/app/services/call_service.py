@@ -109,8 +109,19 @@ AGENT_OPENING_ORDER = {
 }
 
 
-def agent_greeting_instruction(language: Optional[str]) -> str:
+# An agent whose admin's instructions lead (autonomous.instructions_lead): how to open is theirs to say, in any
+# language - no set length, no word order. Agents published before it keep the two lines above.
+INSTRUCTIONS_LEAD_VARIABLE = "flow_instructions_lead"
+AGENT_LEAD_GREETING_INSTRUCTION = (
+    "(The customer has just picked up the phone and has not said anything yet. Open the call in your own words, "
+    "the way your instructions describe.)"
+)
+
+
+def agent_greeting_instruction(language: Optional[str], instructions_lead: bool = False) -> str:
     """What an Autonomous AI Agent's LLM is asked when it opens the call (live, or while the phone rings)."""
+    if instructions_lead:
+        return AGENT_LEAD_GREETING_INSTRUCTION
     return AGENT_GREETING_INSTRUCTION + AGENT_OPENING_ORDER.get((language or "").split("-")[0].lower(), "")
 AGENT_SILENCE_REPROMPT_INSTRUCTION = (
     "(The customer has been silent for a while. In one short, natural sentence, check gently whether they can "
@@ -872,6 +883,8 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
                     flow_vars["flow_natural_lines"] = "true"
                 if autonomous.contact_business:  # this contact's own business decides the call's rules
                     flow_vars["flow_contact_business"] = "true"
+                if autonomous.instructions_lead and autonomous.natural_lines:  # the admin's instructions lead
+                    flow_vars[INSTRUCTIONS_LEAD_VARIABLE] = "true"
                 flow_vars["flow_voice_profile"] = AGENT_VOICE_PROFILE  # one calm, steady voice for the whole call
                 if autonomous.voice_pace is not None:  # the agent's own speed, every line of the call
                     flow_vars["flow_voice_pace"] = str(autonomous.voice_pace)
@@ -2431,7 +2444,10 @@ class CallSession:
 
     def greeting_instruction(self) -> str:
         """What the LLM is asked when it opens a call without a fixed greeting."""
-        return agent_greeting_instruction(self.cfg.CALL_LANGUAGE) if self.ctx.natural_lines else GREETING_INSTRUCTION
+        if not self.ctx.natural_lines:
+            return GREETING_INSTRUCTION
+        lead = (self.ctx.variables or {}).get(INSTRUCTIONS_LEAD_VARIABLE) == "true"
+        return agent_greeting_instruction(self.cfg.CALL_LANGUAGE, instructions_lead=lead)
 
 
     async def _greet_at_delay(self) -> None:

@@ -165,6 +165,13 @@ _VOICE_RULES_GUIDED_SWAPS = (
      f"{END_CALL_TOKEN}), set the decision's intent instead (do_not_call, not_interested, busy or end_request) and "
      f"never write {END_CALL_TOKEN} or any other marker yourself."),
 )
+# An agent whose admin's instructions lead (autonomous.instructions_lead): how long a reply is is theirs to say, so
+# the one reply-length line goes. Every other line (speech output, end-of-call marker, data, titles) stays.
+_REPLY_LENGTH_LINE = "\n- Maximum two short sentences per reply unless the customer asks for more detail."
+if _REPLY_LENGTH_LINE not in VOICE_RULES:
+    raise RuntimeError("VOICE_RULES changed: update _REPLY_LENGTH_LINE")  # never a silent mismatch
+VOICE_RULES_INSTRUCTIONS_LEAD = VOICE_RULES.replace(_REPLY_LENGTH_LINE, "")
+
 VOICE_RULES_GUIDED = VOICE_RULES
 for _old, _new in _VOICE_RULES_GUIDED_SWAPS:
     if _old not in VOICE_RULES_GUIDED:
@@ -490,6 +497,12 @@ AGENT_ADDRESS_RULES = """
 - Put the title after the name as the call's language does it: the word ending goes on the title (Tamil: "Ragul sir-கிட்ட", "Priya madam-க்கு"; Hindi: "Ragul ji से"). Never translate sir or madam word for word.
 - Use the name with the title only now and then, such as when you first speak to them and when you thank them at the close. Most replies use neither, and never one in every sentence.
 - If the customer asks to be addressed differently (for example only by name, or as Doctor), use that for the rest of the call. Their request takes priority over `address_as` and title_to_use."""
+# instructions_lead: how often to use the name is the admin's instructions' business; what the name and title are stays.
+_ADDRESS_FREQUENCY_LINE = ("\n- Use the name with the title only now and then, such as when you first speak to them and when "
+                           "you thank them at the close. Most replies use neither, and never one in every sentence.")
+if _ADDRESS_FREQUENCY_LINE not in AGENT_ADDRESS_RULES:
+    raise RuntimeError("AGENT_ADDRESS_RULES changed: update _ADDRESS_FREQUENCY_LINE")
+AGENT_ADDRESS_RULES_INSTRUCTIONS_LEAD = AGENT_ADDRESS_RULES.replace(_ADDRESS_FREQUENCY_LINE, "")
 
 
 # Autonomous AI Agents with natural lines: nobody is asked to confirm who they are, so the conversation is not held
@@ -569,6 +582,26 @@ _CUSTOMER_BUSINESS_HINTS = {
 }
 
 
+# instructions_lead: what customer_business IS and how to treat it (data, unverified, said as written, the customer is
+# believed) - never when or whether to ask about it, or what to do with the answer: that is the admin's instructions'.
+CUSTOMER_BUSINESS_KNOWN_DATA_RULES = """
+- `customer_business` in the customer details is this contact's own business, as the team has it on file. It is not verified. It is the one thing specific to the customer you may say before the person has shown they are the customer.
+- Say the name as it is written in `customer_business`, in the same letters. Never translate it, respell it or read it letter by letter.
+- If they say the business is different or wrong, believe them, go by what they say and do not mention the old one again."""
+CUSTOMER_BUSINESS_UNKNOWN_DATA_RULES = """
+- The customer's business is not known on this call. Never guess it, never say that it is missing, and never say a word such as undefined, null or blank in its place."""
+
+
+def customer_business_data_rules(business: str) -> str:
+    """instructions_lead: the data rules for `customer_business` alone (known or not), the same in every language."""
+    return CUSTOMER_BUSINESS_KNOWN_DATA_RULES if business else CUSTOMER_BUSINESS_UNKNOWN_DATA_RULES
+
+
+def instructions_lead(variables: Mapping[str, Optional[str]]) -> bool:
+    """An agent's call whose admin's instructions lead (call_service sets it from autonomous.instructions_lead)."""
+    return variables.get("flow_instructions_lead") == "true"
+
+
 def customer_business_rules(business: str, language: Optional[str], opening: bool = False) -> str:
     """The rules of one reply: `business` (spoken_business) known, or nothing on file and the AI leads and asks.
     opening: the AI has said nothing yet on this call."""
@@ -635,6 +668,7 @@ def build_system_prompt(
     lang = language if language is not None else default_settings.CALL_LANGUAGE
     agent = agent_call(variables) and not guided
     natural = agent and variables.get("flow_natural_lines") == "true"  # the LLM leads the whole conversation
+    lead = natural and instructions_lead(variables)  # ...and the admin's instructions lead it: no conversation rules here
     if agent:  # structured, every turn: the name with the title for the GIVEN gender, in the call's language
         data["address_as"] = address_as_for(safe["customer_name"], safe["gender"], lang) or None
         data["team_follow_up_configured"] = False
@@ -643,7 +677,8 @@ def build_system_prompt(
     if natural and variables.get("flow_contact_business") == "true":
         business = spoken_business(variables.get("customer_business"))
         data["customer_business"] = business or None
-        business_rules = customer_business_rules(business, lang, opening=not last_reply)
+        business_rules = (customer_business_data_rules(business) if lead
+                          else customer_business_rules(business, lang, opening=not last_reply))
     brand = (
         f"\n- Our company name is spelled Kagzso but pronounced \"Kexo\". "
         f"Whenever you say it, write it exactly as {brand_spoken(lang)}."
@@ -659,7 +694,8 @@ def build_system_prompt(
     else:
         followup = "\n- Team follow-up is NOT configured: never say that the team will contact the customer."
     if natural:
-        who = (AGENT_OPEN_IDENTITY_RULES + AGENT_ADDRESS_RULES) if safe["customer_name"] else NO_NAME_RULE
+        address = AGENT_ADDRESS_RULES_INSTRUCTIONS_LEAD if lead else AGENT_ADDRESS_RULES
+        who = (AGENT_OPEN_IDENTITY_RULES + address) if safe["customer_name"] else NO_NAME_RULE
         if variables.get("flow_fixed_greeting") == "true":  # AGENT_FIXED_GREETING: the system said the greeting
             who += AGENT_FIXED_GREETING_RULE
     elif agent and safe["customer_name"]:
@@ -667,7 +703,7 @@ def build_system_prompt(
     else:
         who = identity_rules(safe["customer_name"])
     return (
-        rendered + (VOICE_RULES_GUIDED if guided else VOICE_RULES) + SAFETY_RULES
+        rendered + (VOICE_RULES_GUIDED if guided else VOICE_RULES_INSTRUCTIONS_LEAD if lead else VOICE_RULES) + SAFETY_RULES
         + (INTERNALS_RULES if default_settings.SAFETY_NO_INTERNALS else "")
         + who
         + business_rules
@@ -701,6 +737,8 @@ def call_timing(variables: Mapping[str, Optional[str]]) -> str:
                        "answer it in one short sentence, then thank them warmly, say goodbye and end the call. Never "
                        "mention the time.")
     if elapsed < target:
+        if instructions_lead(variables):  # how long a reply is is the admin's instructions' business
+            return line + "Never rush or cut off the customer, and never mention the time."
         return line + ("Keep replies short and focused on the most useful next step. Never rush or cut off the "
                        "customer, and never mention the time.")
     return line + ("The target has passed. If the customer is interested and asking relevant questions, continue "

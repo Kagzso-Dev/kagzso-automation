@@ -205,7 +205,8 @@ def test_without_the_switch_an_agent_call_opens_in_the_llms_words_as_before(clie
         _until(ws, "checkpoint")
         ws.send_text(json.dumps({"event": "stop"}))
     assert _lines(sync_engine, call_id) == [OPENING["ta"][0]]
-    assert fakes.llm.seen_messages[0][-1]["content"] == cs.agent_greeting_instruction("ta")
+    # A compiler 4 agent (the admin's instructions lead): asked to open as its instructions describe.
+    assert fakes.llm.seen_messages[0][-1]["content"] == cs.agent_greeting_instruction("ta", instructions_lead=True)
 
 
 # ------------------------------------------------------------------ word order, no quoted lines, one spelling

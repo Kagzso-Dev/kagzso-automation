@@ -215,6 +215,9 @@ export const callFlowDefinition = z
         // Each call uses the contact's own business (the voice backend's FlowAutonomous). Absent = an agent published
         // before it: the business compiled into its flow stays, and no contact's business is sent.
         contact_business: z.boolean().optional(),
+        // The admin's AI Conversation Instructions lead the conversation (compiler 4+): the voice backend adds no
+        // conversation rules of its own, only safety, truthfulness, privacy and technical ones. Absent = as before.
+        instructions_lead: z.boolean().optional(),
       })
       .strict()
       .optional(),

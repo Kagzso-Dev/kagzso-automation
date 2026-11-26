@@ -59,7 +59,7 @@ def test_the_whole_prompt_of_a_natural_call_has_no_fixed_sequence(lang, monkeypa
     assert "Short introduction" not in prompt and "Permission" not in prompt
     assert "No problem, thanks for picking up." not in prompt  # a quoted line for "wrong person"
     assert "Am I speaking" not in prompt
-    assert "This is a real conversation, not a script" in prompt
+    assert "there is no script, no fixed order and no fixed list of questions" in prompt
     # What stays: the honesty and safety rules, whatever the conversation does.
     assert "Never claim to be human" in prompt and "--- Safety rules" in prompt
 

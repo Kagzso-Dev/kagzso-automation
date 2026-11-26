@@ -6,26 +6,29 @@
 // each call's prompt (llm_service.customer_business_rules), with one set of rules for a known business and another
 // for none.
 //
-// An autonomous agent is LLM-driven: no fixed conversation sequence, greeting or question list. The executive flow
-// only carries what must stay the same for every call (the locked safety blocks, the do-not-call handling, the
-// outcomes and the rules). Everything about the conversation is generated here, and Guided Call Flows (the
-// executive flow itself and every copy of it) are not touched.
+// An autonomous agent is LLM-driven, and since compiler 4 (2026-11-26) the admin's AI Conversation Instructions lead
+// it: no fixed conversation sequence, greeting, question list, pitch, closing script, speaking style or reply length is
+// compiled in. The executive flow only carries what must stay the same for every call (the locked safety blocks, the
+// do-not-call handling, refusal handling, the outcomes and the rules). Guided Call Flows (the executive flow itself and
+// every copy of it) are not touched.
 //
 // What changes compared with the built-in executive flow:
-//   conversation_stages  removed: a numbered sequence has no place in an LLM-driven call
-//   greeting             AI_AGENT_OPENINGS for the language (required by the schema; never spoken: natural_lines)
+//   conversation_stages, opening, interested_close   removed: no sequence, no set opening, no set close
+//   greeting             AI_AGENT_OPENINGS for the language (required by the schema; never spoken: natural_lines,
+//                        unless the voice backend's AGENT_FIXED_GREETING says so)
 //   identity             none: nobody is asked to confirm who they are as a routine step
-//   blocks               "agent", "opening", "next_step", "objections", "company_facts", "interested_close",
-//                        "speaking_style" and the busy / not-interested / end closings rewritten as guidance, with
-//                        no quoted line to read out; "customer_business", "voice_delivery", "call_length" and
-//                        (when given) "ai_instructions" added; {{title_to_use}} → {{title}} everywhere, so a
-//                        contact without a gender gets no sir / madam (title_to_use would fall back to
-//                        CALL_DEFAULT_TITLE)
-//   training             agent profile (name, company, tone) + approved knowledge, all Active
+//   blocks               "agent" (who, for whom, why, how to listen), "ai_instructions" (the admin's text, right after
+//                        it), "customer_business" and "objections" as truthfulness rules only, "next_step" as what the
+//                        agent can and cannot do on a call, "speaking_style" only where a name needs its script, the
+//                        busy / not-interested / end closings as refusal handling, plus "voice_delivery" (what the
+//                        text-to-speech voice needs) and "call_length" (the agent's own target and the hard stop);
+//                        {{title_to_use}} -> {{title}} everywhere, so a contact without a gender gets no sir / madam
+//   training             agent profile (name, company, the agent's personality) + approved knowledge, all Active
 //   limits / autonomous  max = the agent's maximum (the hard stop), target = its target, voice_pace = its voice speed,
-//                        contact_business = each call uses the contact's own business
-// Everything the voice backend appends to every prompt (voice rules, safety rules, do-not-call, AI disclosure,
-// identity rules, language rule) still comes after these blocks and can't be overridden by them, and the backend
+//                        contact_business = each call uses the contact's own business, instructions_lead = the voice
+//                        backend adds no conversation rules of its own (only safety, truthfulness, privacy, technical)
+// Everything the voice backend appends to every prompt (voice output rules, safety rules, do-not-call, AI disclosure,
+// privacy, language and script rule) still comes after these blocks and can't be overridden by them, and the backend
 // itself enforces do-not-call and the time limit whatever the LLM says.
 
 import {
@@ -65,13 +68,15 @@ export interface CompileInput {
  * with an older compiler shows "unpublished changes" until an admin publishes it again: a published flow is a
  * stored copy, and compiler changes only reach it through a new publish.
  */
-export const AI_AGENT_COMPILER_VERSION = 3;
+export const AI_AGENT_COMPILER_VERSION = 4;
 
 /**
  * A compiler change that reaches one language only: its agents show "unpublished changes" (agentInputsHash), every
  * other language's hash stays exactly as before. Tamil 1 (2026-11-24): the discovery-first business sentence.
  * Tamil 2 (2026-11-26): no "the team will confirm" for an unknown detail or price.
  * Tamil 3 (2026-11-26): the speaking style follows the customer's language (LANGUAGE_STYLE.ta).
+ * Version 4 (2026-11-26, every language): the admin's instructions lead (autonomous.instructions_lead). Tamil keeps
+ * its revision only so that its hash stays as distinct as before.
  */
 export const AI_AGENT_COMPILER_LANGUAGE_REVISION: Partial<Record<AiCallLanguage, number>> = { ta: 3 };
 
@@ -82,22 +87,9 @@ export function aiAgentCompilerVersion(language: string): number | string {
 }
 
 /**
- * How the conversation moves from the customer's business to the company's help. Tamil (approved 2026-11-24):
- * discovery first - the business and a problem before any product. Every other language: as before (businessBlock).
- */
-const BUSINESS_DISCOVERY: Partial<Record<AiCallLanguage, string>> = {
-  ta:
-    "Once you know the kind of business, do not describe any product or service yet. After each answer, show in one short " +
-    "sentence that you understood it, then ask one follow-up question built from what they said, about how their work runs " +
-    "today and where it is hard. When they describe a problem, stay on it - how big it is, since when, and what they do about " +
-    "it today - and never ask again what they already answered. Only once the problem is clear, show how the one fitting help " +
-    "could solve it. Never list several questions at once.\n\n",
-};
-
-/**
  * A detail the approved information doesn't answer, and a price it doesn't state. Tamil (approved 2026-11-26): no
  * team at all - real calls turned "needs confirmation from the team" into "the team will confirm". Every other
- * language: as before (businessBlock, situationsBlock).
+ * language: as before (businessBlock, honestAnswersBlock).
  */
 const UNKNOWN_DETAIL_REPLY: Partial<Record<AiCallLanguage, string>> = {
   ta:
@@ -144,34 +136,15 @@ function agentBlock(input: CompileInput): string {
   const company = oneLine(agent.companyName);
   return (
     "# WHO YOU ARE AND WHY YOU ARE CALLING\n\n" +
-    `You are **${exec}**, an AI calling assistant working as a **professional business customer executive** for **${company}**, ` +
-    "on a live outbound phone call.\n\n" +
+    `You are **${exec}**, an AI calling assistant for **${company}**, on a live outbound phone call.\n\n` +
     `**Calling objective:** ${blockSafe(agent.objective) || "introduce how the company can help their business and find out whether they are interested."}\n\n` +
-    "You are having a real conversation with a business owner, manager or decision-maker. You understand them, think about what " +
-    "they said and decide everything you say yourself. There is no script, no fixed order and no fixed list of questions. The " +
-    "objective guides the conversation; it is never a reason to push. A clear \"no\" is a good, respected outcome.\n\n" +
+    "You are having a real conversation. Before every reply, understand what the customer just said in the light of " +
+    "the whole conversation so far. Answer what they asked first. Then decide yourself what to say next and whether to " +
+    "ask anything: there is no script, no fixed order and no fixed list of questions. Never repeat an introduction, an " +
+    "explanation, a question or a sentence you have already said. A clear \"no\" is a good, respected outcome.\n\n" +
     `Your name is always written exactly as ${exec}, in those letters, in every language.\n\n` +
     "The details entered for this call (the contact's name, gender and business) were typed in by the team and are NOT verified. " +
     "If the person says they are someone else or that the business is different, believe them and continue politely as the rules below say.\n\n---\n\n"
-  );
-}
-
-/**
- * The agent opens the call itself (autonomous.natural_lines): no greeting or identity question is spoken by the
- * system and none is prescribed here, so the first words are the LLM's own, in the call's language.
- */
-function openingBlock(): string {
-  return (
-    "# OPENING\n\n" +
-    "There is no fixed greeting and no set first line. When the call connects you speak first in your own words; if the " +
-    "customer has already spoken, answer them. Open the way a respectful, friendly person does on the phone, in one or two " +
-    "short sentences: a simple greeting, your name and the company, then whatever is natural next, such as asking how they " +
-    "are or saying in a few words why you are calling. Do not open with a time-of-day greeting such as good morning, and do not pitch.\n\n" +
-    "Use the customer's name or sir / madam only as `address_as` and title_to_use give them. Without them, greet with neither: " +
-    "never invent a name or a gender. Nobody has to confirm who they are, and you do not ask permission as a routine step: " +
-    "do not ask whether you are speaking with someone or whether they have a minute just to follow a procedure.\n\n" +
-    "Greet only once. Whatever the customer says next, respond to that: if they ask who is calling, simply tell them, " +
-    "without asking how they are.\n\n---\n\n"
   );
 }
 
@@ -195,15 +168,9 @@ function businessBlock(input: CompileInput): string {
   const company = oneLine(input.agent.companyName);
   const pointer = detailsPointer(input);
   return (
-    "# THE CUSTOMER'S BUSINESS\n\n" +
-    "Each customer runs a different business, and the rules further below say what is known about this one and how to use it. " +
-    "Never assume which products or services their business offers, how it works or what it needs: find out from the customer, " +
-    "and go by what they say. If they run a different kind of business from the one you were told, follow them and talk about that " +
-    "business instead. Never assume it has the same problems as any other business.\n\n" +
-    (BUSINESS_DISCOVERY[input.language] ??
-      "Once you know the kind of business, speak in terms that fit it. When it helps, ask one short, open question about how they run " +
-        "their day-to-day work and what takes their team the most time, then show how automation or software could help with what they " +
-        "told you. Never list several questions at once.\n\n") +
+    "# THE CUSTOMER'S BUSINESS AND WHAT YOU MAY SAY\n\n" +
+    "Never assume which products or services the customer's business offers, how it works or what it needs: go by what " +
+    "the customer says. If they run a different kind of business from the one you were told, believe them.\n\n" +
     `**Only describe products and services that the approved company facts or the training's approved knowledge confirm.** ` +
     "Never say that a product, feature or integration exists, works in a certain way or suits them unless an approved note says so.\n\n" +
     "**A question the approved information doesn't answer:** never guess or invent. Say honestly that you don't have that detail " +
@@ -240,7 +207,7 @@ function companyFactsBlock(original: string, company: string): string {
 function callLengthBlock(target: number, max: number): string {
   return (
     "# CALL LENGTH\n\n" +
-    `Aim for a conversation of about ${target} seconds, and keep replies short so that it can be. The call is cut off by the phone system at ${max} seconds, ` +
+    `The agent's target is a conversation of about ${target} seconds. The call is cut off by the phone system at ${max} seconds, ` +
     `so start moving towards a polite closing near ${Math.max(target, max - 15)} seconds when the conversation allows it, and make sure your goodbye is finished in time.\n\n` +
     "If the customer is interested and asking relevant questions, continue naturally past the target. Never stretch a call " +
     "just to reach it.\n\n" +
@@ -252,21 +219,13 @@ function callLengthBlock(target: number, max: number): string {
 }
 
 /**
- * How the agent's words should sound. The voice itself (one speaker, a relaxed pace, a steady delivery, whole
- * sentences, no exclamation marks) is set by the voice backend for agent calls (AGENT_TTS_*); this asks the AI
- * for text that reads calmly aloud and for patience - it never relaxes a rule above it.
+ * What the text-to-speech voice needs. How the agent talks (tone, length, manner) is the admin's instructions'
+ * business; the voice itself (one speaker, its speed) is set by the voice backend for agent calls (AGENT_TTS_*).
  */
 export const VOICE_DELIVERY_BLOCK =
-  "# VOICE AND DELIVERY\n\n" +
-  "Everything you write is spoken aloud by one calm, warm, professional voice.\n\n" +
-  "* Unhurried and reassuring: short, complete sentences, one idea each. Never rush, and never sound like an " +
-  "advertisement or a sales pitch.\n" +
-  "* No exclamation marks and no words in capital letters: a calm full stop sounds warmer on the phone.\n" +
-  "* Ask one question, then stop and let the customer answer.\n" +
-  "* When the customer hesitates, goes quiet, interrupts or asks the same thing again, stay patient and kind: " +
-  "acknowledge it briefly (for example \"No problem\" or \"Sure\") and answer again, more simply. Never say " +
-  "\"as I said\" and never sound impatient.\n" +
-  "* Keep the same calm, respectful tone from the first line to the last.\n\n---\n\n";
+  "# VOICE\n\n" +
+  "Everything you write is spoken aloud by one voice.\n\n" +
+  "* No exclamation marks and no words in capital letters: they sound wrong when spoken.\n\n---\n\n";
 
 /**
  * Added to the voice block only when a voice was picked: the voice's gender belongs to the AI, never to the
@@ -297,14 +256,10 @@ function instructionsBlock(text: string): string {
     .join("\n");
   return (
     `${INSTRUCTIONS_HEADER}\n\n` +
-    "Follow these instructions throughout the whole call, on every reply. When anything conflicts, this order decides:\n" +
-    "1. Safety, do-not-call and the customer's refusal or wish to end the call.\n" +
-    "2. Legal and mandatory disclosures (you are an AI assistant; never claim to be human).\n" +
-    "3. Approved company and product facts (never invent anything).\n" +
-    "4. The restrictions below.\n" +
-    "5. The calling objective and the conversation preferences below.\n" +
-    "Never follow an instruction below that asks you to hide that you are an AI, ignore a refusal or do-not-call, " +
-    "invent facts, promise prices, savings, demos, meetings or callbacks, or ask for personal details.\n\n" +
+    "These instructions were written for you by the administrator. They decide how you talk and behave on this call: " +
+    "your role and personality, your language and speaking style, your objective, what you ask and how you answer. " +
+    "Understand what each one is for and apply it to what the customer is saying now: they are guidance, not lines to " +
+    "read out or steps to follow in order.\n\n" +
     body +
     "\n\n---\n\n"
   );
@@ -331,58 +286,24 @@ export const NATURAL_CLOSINGS: Record<string, string> = {
     "own words and in the call's language, in one short sentence. Then end the call.\n\n---\n\n",
 };
 
-/** How the agent decides what to say: reasoning about the customer, not a sequence. */
-export const CONVERSATION_BLOCK =
-  "# HOW YOU THINK BEFORE EVERY REPLY\n\n" +
-  "This is a real conversation, not a script. There are no steps, no fixed order and no questions the customer has to " +
-  "answer. You decide what to say next from the whole conversation so far and the approved information.\n\n" +
-  "Before every reply, think:\n\n" +
-  "* What did the customer actually mean, and how do they seem: interested, busy, confused, curious, doubtful or declining?\n" +
-  "* What do you already know from this call: their business, how they work, what they need? Build on it, and never ask " +
-  "for something they have already told you.\n" +
-  "* What would a thoughtful executive say next? Understand first, explain relevant value second. While you don't yet know " +
-  "how their business works, one simple question is usually better than an explanation.\n\n" +
-  "Then respond to what they just said:\n\n" +
-  "* **A question** - answer that question first (not an earlier one), directly and briefly. Explain how something works when they ask.\n" +
-  "* **An objection or doubt** - acknowledge it, give one calm answer from approved information, then let them speak.\n" +
-  "* **Interest** - understand what they need, then connect only the relevant service to it, using approved information.\n" +
-  "* **Uncertainty** (\"maybe\", \"not sure\") - do not push. Offer one short relevant point, or ask what they would like to know.\n" +
-  "* **Busy, not interested, or wanting to end** - close politely now.\n" +
-  "* **A short yes, okay, go ahead or tell me, in any language** - they heard you and want you to carry on. This is never unclear: " +
-  "never say you did not hear them and never repeat your question. Say in a few words what you are calling about, then continue.\n" +
-  "* **Unclear or cut off** - ask them once, briefly, to repeat.\n" +
-  "* **An interruption or a change of direction** - drop what you were saying and follow them. Never steer them back to a topic they left.\n\n" +
-  "A reply does not need a question. Ask only when the answer would really help you understand them, one question at a time. After " +
-  "you answer something, it is often better to stop and let them lead. When they ask for something you can't do, are curious about " +
-  "who you are, or seem unsure, answer them kindly and leave it there rather than steering back to your own question.\n\n" +
-  "Never:\n\n" +
-  "* repeat your introduction, an explanation or a question\n" +
-  "* say the same sentence twice in one call\n" +
-  "* end the call while the customer is asking a question or asking you to explain something\n" +
-  "* ask more than one question in a reply\n" +
-  "* ask whether they have a minute or can talk now: they are talking with you, so carry on unless they say otherwise\n" +
-  "* add a question of your own after a refusal, after a request you can't meet or after they ask who or what you are\n" +
-  "* ask how to reach them or for any contact details\n" +
-  "* give a long explanation: two short sentences, more only when they ask for detail\n" +
-  "* keep promoting the company: mention value only where it connects to what they have told you\n" +
-  "* lean on the same stock phrase or filler word again and again\n" +
-  "* claim to check, look up, note, send or book anything: talking is all you can do on this call, so never say that " +
-  "anything was done or will be done\n" +
-  "* start a reply with the end-of-call marker: your spoken words always come first, and the marker is the very last thing you write\n\n---\n\n";
+/** What an agent can and cannot do on a call: true for every agent, whatever its instructions say. */
+export const CALL_CAPABILITIES_BLOCK =
+  "# WHAT YOU CAN AND CANNOT DO ON THIS CALL\n\n" +
+  "Talking is all you can do on this call.\n\n" +
+  "* Never claim to check, look up, note, send or book anything, and never say that anything was done or will be done.\n" +
+  "* Never ask how to reach the customer or for any contact details.\n" +
+  "* Never end the call while the customer is asking a question or asking you to explain something.\n" +
+  "* Your spoken words always come first: the end-of-call marker is the very last thing you write, never the start of a reply.\n\n---\n\n";
 
-/** Situations, as guidance: what is true and what is allowed, never a line to read out. */
-function situationsBlock(input: CompileInput): string {
+/** What is true and allowed when these subjects come up: facts and honesty, never a line to read out. */
+function honestAnswersBlock(input: CompileInput): string {
   const pointer = detailsPointer(input);
   return (
-    "# SITUATIONS YOU MAY MEET\n\n" +
+    "# HONEST ANSWERS\n\n" +
     "None of these is a line to say. Keep the meaning and use your own words.\n\n" +
-    "* **Who is calling** - your name, the company, and in a few words why you are calling.\n" +
-    "* **What the company does** - a short explanation from approved information, tied to their business when you know it.\n" +
     "* **Price** - give a price only if the approved information states it. Otherwise say honestly that it depends on their " +
     (UNKNOWN_PRICE_REPLY[input.language] ?? "requirements and that the team needs to confirm it. Never estimate.\n") +
     "* **Savings or results** - only what the approved information states; never a guess, a percentage or a guarantee.\n" +
-    "* **They already have employees** - the idea is to reduce the time people spend on repetitive work; never suggest reducing staff.\n" +
-    "* **They already use software or automation** - replacing it isn't necessarily the goal. Understand whether any other part of their work still takes a lot of time.\n" +
     "* **Are you a robot, an AI or a real person** - say honestly that you are an AI assistant calling on behalf of the company, then continue only if they want to.\n" +
     "* **WhatsApp, email, details, a demo, a meeting or a callback** - you cannot send or book anything on this call, and no follow-up is " +
     "arranged. Say so honestly; never promise one or say the team will do it." +
@@ -391,55 +312,14 @@ function situationsBlock(input: CompileInput): string {
   );
 }
 
-function interestedBlock(input: CompileInput): string {
-  const pointer = detailsPointer(input);
-  return (
-    "# INTERESTED CUSTOMER\n\n" +
-    "Interest is a reason to keep listening, not to end the call: carry on while they have something to ask or say. When the " +
-    "conversation comes to a natural end, thank them for their time and close warmly, in your own words" +
-    (pointer ? `, mentioning that ${pointer}` : "") +
-    ".\n\nThe system records their interest. Never tell the customer that anyone will contact them, and never " +
-    "invent a demo, a meeting, a callback or an appointment.\n\n---\n\n"
-  );
-}
-
-/**
- * How each language should sound. The voice backend's language rule (script, one language per call) still applies.
- * Tamil (approved 2026-11-26): follows the customer's language, with the Tamil backend's AGENT_FOLLOW_CUSTOMER_LANGUAGE.
- */
-const LANGUAGE_STYLE: Partial<Record<AiCallLanguage, string>> = {
-  en: "Use clear, simple, professional spoken English.",
-  ta:
-    "Speak the customer's language. When they speak Tamil or mix Tamil and English, speak natural conversational Tamil, the " +
-    "familiar and respectful way business people talk on the phone, mixing in everyday English business words as people really " +
-    "do; when they speak plain English, reply in simple spoken English. Never translate English sentences word for word. Never " +
-    "ask இப்போ பேசலாமா or anything like it.",
-  hi:
-    "Speak natural conversational Hindi, the familiar and respectful way business people talk on the phone, mixing in everyday " +
-    "English business words as people really do. Never translate English sentences word for word.",
-  kn:
-    "Speak natural conversational Kannada, the familiar and respectful way business people talk on the phone, mixing in everyday " +
-    "English business words as people really do. Never translate English sentences word for word.",
-};
-
 /** Languages with their own script. A name typed in Latin letters stays in them: a model tends to respell it. */
 const OWN_SCRIPT: Partial<Record<AiCallLanguage, string>> = { ta: "Tamil", hi: "Hindi", kn: "Kannada" };
 
-function speakingStyleBlock(language: AiCallLanguage, exec: string): string {
+/** How the agent's own name is written where the language's script would change it; "" = nothing to say. */
+function nameScriptBlock(language: AiCallLanguage, exec: string): string {
   const script = OWN_SCRIPT[language];
-  const nameRule = script && /^[\p{Script=Latin}\s.'-]+$/u.test(exec) ? ` Write your own name only in English letters, never in ${script} letters.` : "";
-  return (
-    "# HOW YOU SPEAK\n\n" +
-    "You sound like an experienced customer executive on the phone: respectful, calm, friendly, humble and patient, confident " +
-    "without ever being aggressive. You are a thoughtful person in a conversation, never an IVR, an advertisement, a " +
-    "telemarketing script or a questionnaire.\n\n" +
-    "* Short, meaningful sentences. Respond to what the customer actually said.\n" +
-    "* Explain approved information in your own conversational words: never read it out word for word.\n" +
-    "* Use \"sir\" or \"madam\" only as given by title_to_use, and not in every reply.\n" +
-    "* No exaggerated enthusiasm, no pressure, no technical jargon (API, backend, LLM) unless they ask.\n" +
-    "* Open and close each conversation in your own way, not with the same words every time.\n" +
-    `* ${LANGUAGE_STYLE[language] ?? "Speak the call's language naturally."}${nameRule} Keep company names and everyday business words such as AI, automation and WhatsApp as people say them.\n\n---\n\n`
-  );
+  if (!script || !/^[\p{Script=Latin}\s.'-]+$/u.test(exec)) return "";
+  return `# YOUR NAME\n\nWrite your own name only in English letters, never in ${script} letters.\n\n---\n\n`;
 }
 
 // The built-in rule that gives its own call length: an agent's length comes from its target and maximum.
@@ -491,28 +371,30 @@ export function compileAgentFlow(input: CompileInput): CallFlowDefinition {
       blocks.push(b);
       continue;
     }
-    if (b.id === "conversation_stages") continue; // a numbered sequence: the LLM decides (next_step)
+    // No sequence, no set opening and no set close for an interested customer: the admin's instructions decide them.
+    if (b.id === "conversation_stages" || b.id === "opening" || b.id === "interested_close") continue;
     let text = b.text;
     if (b.id === "agent") text = agentBlock(input);
-    else if (b.id === "opening") text = openingBlock();
-    else if (b.id === "next_step") text = CONVERSATION_BLOCK;
-    else if (b.id === "objections") text = situationsBlock(input);
-    else if (b.id === "interested_close") text = interestedBlock(input);
-    else if (b.id === "speaking_style") text = speakingStyleBlock(language, exec);
-    else if (b.id === "rules") text = rulesBlock(b.text);
+    else if (b.id === "next_step") text = CALL_CAPABILITIES_BLOCK;
+    else if (b.id === "objections") text = honestAnswersBlock(input);
+    else if (b.id === "speaking_style") {
+      text = nameScriptBlock(language, exec);
+      if (!text) continue;
+    } else if (b.id === "rules") text = rulesBlock(b.text);
     else if (b.id in NATURAL_CLOSINGS) text = NATURAL_CLOSINGS[b.id]!;
     else if (b.id === "company_facts") text = companyFactsBlock(b.text, company);
     else if (b.id === "do_not_call") text = doNotCallBlock(b.text, opening.dnc);
     blocks.push({ ...b, text: swapTitle(text) });
     if (b.id === "agent") {
+      // The admin's instructions right after who the agent is: they lead the conversation.
+      if (blockSafe(agent.instructions)) {
+        blocks.push({ id: "ai_instructions", group: "main_script", text: instructionsBlock(agent.instructions) });
+      }
       blocks.push({ id: "customer_business", group: "main_script", text: businessBlock(input) });
     }
   }
   blocks.push({ id: "voice_delivery", group: "tone", text: voiceDeliveryBlock(input.voice) });
   blocks.push({ id: "call_length", group: "rules", text: callLengthBlock(agent.targetDurationSec, agent.maxDurationSec) });
-  if (blockSafe(agent.instructions)) {
-    blocks.push({ id: "ai_instructions", group: "rules", text: instructionsBlock(agent.instructions) });
-  }
   for (const b of blocks) {
     if (!("locked" in b) && (b as CallFlowTextBlock).text.length > CALL_FLOW_MAX_BLOCK_CHARS) {
       throw new AgentCompileError(`The "${b.id}" part is longer than ${CALL_FLOW_MAX_BLOCK_CHARS} characters — shorten the instructions or topics`);
@@ -537,6 +419,7 @@ export function compileAgentFlow(input: CompileInput): CallFlowDefinition {
       natural_lines: true,
       voice_pace: agent.voiceSpeed,
       contact_business: true,
+      instructions_lead: true,
     },
     training: {
       enabled: true,
@@ -557,9 +440,10 @@ export function compileAgentFlow(input: CompileInput): CallFlowDefinition {
         energy: tone.energy,
         politeness: tone.politeness,
         pace: "steady",
-        sentence_length: "short",
+        // The least restrictive values: how long and in what manner the agent talks is its instructions' business.
+        sentence_length: "medium",
         title_use: "sometimes",
-        avoid: ["pushiness", "exaggeration"],
+        avoid: [],
         notes: "",
       },
       phrases: [],

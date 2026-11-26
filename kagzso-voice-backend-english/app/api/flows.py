@@ -121,6 +121,8 @@ def _sample_variables(flow: Any, s: SampleCustomer, phone: str) -> Dict[str, Opt
     if autonomous is not None and autonomous.contact_business:  # the rules shown are this sample contact's, as in a call
         variables.update(flow_target_sec=str(autonomous.target_duration_sec), flow_contact_business="true",
                          flow_natural_lines="true" if autonomous.natural_lines else "false")
+        if autonomous.instructions_lead and autonomous.natural_lines:
+            variables["flow_instructions_lead"] = "true"
     return variables
 
 

@@ -302,7 +302,8 @@ def test_compiled_agent_call_per_language(client, auth, fakes, sync_engine, monk
     # Four AI replies: "Hello?", "Yes, speaking", "Will it replace our software?" and "Okay, thank you".
     assert len(systems) == 4
     for s in systems:
-        assert "There is no fixed greeting and no set first line" in s
+        assert "WHO YOU ARE AND WHY YOU ARE CALLING" in s and "There is no fixed greeting" not in s
+        assert "Maximum two short sentences per reply" not in s  # the admin's instructions lead (compiler 4)
         assert '"address_as": "Ragul' in s and "time_greeting" not in s
     question = systems[2]
     answer = "It works alongside the software the hospital already uses."

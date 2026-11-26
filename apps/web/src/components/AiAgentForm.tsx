@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  AI_AGENT_DEFAULT_INSTRUCTIONS,
   AI_AGENT_DEFAULT_VOICE,
   AI_AGENT_DEFAULTS,
   AI_AGENT_DURATION_LIMITS,
@@ -71,8 +70,8 @@ function initial(a: AiAgentView | null, autonomousOk: boolean, language: AiCallL
     companyName: a?.companyName ?? AI_AGENT_DEFAULTS.companyName,
     callbackNumber: a?.callbackNumber ?? "",
     personality: a?.personality ?? AI_AGENT_DEFAULTS.personality,
-    // A new agent starts with its language's recommended instructions (Tamil); an existing one keeps its own.
-    instructions: a?.instructions ?? AI_AGENT_DEFAULT_INSTRUCTIONS[language] ?? "",
+    // A new agent starts with an empty box in every language (no built-in instructions); an existing one keeps its own.
+    instructions: a?.instructions ?? "",
     targetDurationSec: a?.targetDurationSec ?? AI_AGENT_DEFAULTS.targetDurationSec,
     maxDurationSec: a?.maxDurationSec ?? AI_AGENT_DEFAULTS.maxDurationSec,
     guidedFlowId: a?.guidedFlowId ?? "",
@@ -126,7 +125,6 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
   const phonesOk = phoneInputOk(f.contactPhone) && phoneInputOk(f.callbackNumber);
   // Tamil agents: "{agent_name}" and the like are read by the AI as written (the box fills nothing), so saving waits.
   const placeholders = language === "ta" && f.mode === "autonomous" ? instructionPlaceholders(f.instructions) : [];
-  const recommended = f.mode === "autonomous" ? AI_AGENT_DEFAULT_INSTRUCTIONS[language] : undefined;
 
   const save = useMutation({
     mutationFn: () =>
@@ -297,38 +295,16 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
               value={f.instructions}
               onChange={(e) => set("instructions", e.target.value)}
               placeholder={
-                "Additional business information, specific objectives, questions to explore, restrictions, topics to avoid, approved statements, follow-up instructions.\n" +
+                "How this agent talks and behaves: its role and personality, language and speaking style, objective, what to ask, how to answer and what to avoid.\n" +
                 "e.g.\nAsk which department spends the most time on manual work.\nDo not discuss pricing.\nAvoid talking about competitors."
               }
             />
-            <p className="text-xs text-slate-550">
-              Applied on every reply of every call. When they conflict with anything, this order decides: 1. safety, do-not-call and refusal ·
-              2. legal and mandatory disclosures · 3. approved company and product facts · 4. these restrictions · 5. the objective and preferences.
-              {` ${f.instructions.length}/${AI_AGENT_INSTRUCTIONS_MAX}`}
-            </p>
+            <p className="text-xs text-slate-550">{`${f.instructions.length}/${AI_AGENT_INSTRUCTIONS_MAX}`}</p>
             {placeholders.length > 0 && (
               <p className="text-xs font-semibold text-crit" role="alert">
                 Remove {placeholders.join(", ")}: this box fills in nothing, so the AI would say it as written. The AI&apos;s name comes
                 from “AI executive name” and the customer&apos;s name is added to every call.
               </p>
-            )}
-            {recommended && f.instructions !== recommended && (
-              <button
-                type="button"
-                className="btn-ghost mt-2 px-2.5 py-1 text-xs"
-                onClick={async () => {
-                  const ok =
-                    !f.instructions.trim() ||
-                    (await confirm({
-                      title: `Use the recommended ${AI_CALL_LANGUAGE_NAMES[language]} instructions?`,
-                      body: "They replace what is in the box now. Save settings and Publish the agent for calls to use them.",
-                      confirmText: "Replace",
-                    }));
-                  if (ok) set("instructions", recommended);
-                }}
-              >
-                Use the recommended {AI_CALL_LANGUAGE_NAMES[language]} instructions
-              </button>
             )}
           </Section>
         </>

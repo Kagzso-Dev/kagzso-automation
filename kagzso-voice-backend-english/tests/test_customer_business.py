@@ -22,7 +22,7 @@ from app.services import call_service as cs
 from app.services import llm_service as llm
 from app.services.llm_service import OUTCOME_SYSTEM
 from tests.test_autonomous_agent import _capture_systems
-from tests.test_autonomous_conversation import OPENING, _converse, _dial, _flow
+from tests.test_autonomous_conversation import OPENING, _converse, _dial, _flow as _compiler4_flow
 from tests.test_call_policy import _rows
 from tests.test_followup_calls import callbacks  # noqa: F401  (a fixture)
 from tests.test_nila_flow import _call
@@ -52,8 +52,19 @@ def _data(prompt: str) -> dict:
     return json.loads(prompt.split(llm.CUSTOMER_DATA_TITLE, 1)[1].split("\n", 1)[0])
 
 
+def _flow(lang: str, monkeypatch) -> dict:
+    """A live call's flow as an agent published before compiler 4 has it (see _compiled)."""
+    flow = _compiler4_flow(lang, monkeypatch)
+    flow["autonomous"].pop("instructions_lead", None)
+    return flow
+
+
 def _compiled(lang: str) -> dict:
-    return json.loads((FIXTURES / "autonomous" / f"{lang}.json").read_text(encoding="utf-8"))
+    """The compiled agent flow as an agent published before compiler 4 calls with: without instructions_lead, so its
+    calls get the backend's business rules tested here. (A compiler 4 agent's: tests/test_instructions_lead.py.)"""
+    flow = json.loads((FIXTURES / "autonomous" / f"{lang}.json").read_text(encoding="utf-8"))
+    flow["autonomous"].pop("instructions_lead", None)
+    return flow
 
 
 # ------------------------------------------------------------------ a business on file

@@ -95,7 +95,9 @@ def test_questions_objections_follow_ups_memory_and_repeats(client, auth, fakes,
     # Every turn: the approved always-on fact, the no-invention rules and the objection handling.
     for s in systems:
         assert ALWAYS in s and NO_INVENTION in s and "don't have that detail" in s
-        assert "An objection or doubt" in s and "answer that question first" in s
+        # The admin's instructions lead (compiler 4): the agent is told to answer first, and no handling script.
+        assert "Answer what they asked first" in s and "An objection or doubt" not in s
+        assert "AI CONVERSATION INSTRUCTIONS" in s
     # All the approved knowledge is offered on every turn (the model reads it, whatever the language or wording),
     # most relevant first, and the rules above say what to do when none of it answers the question.
     first_line = lambda s: s.split(KNOWLEDGE_TITLE, 1)[1].splitlines()[0]  # noqa: E731
@@ -220,9 +222,9 @@ def test_silent_pickup_and_silence_are_said_by_the_ai_in_its_own_words(client, a
             time.sleep(0.05)
     # Each moment was the LLM's own reply to a one-off instruction (never stored as the customer's words).
     asked = [m[-1]["content"] for m in fakes.llm.seen_messages]
-    # The opening instruction carries the call language's word order (Tamil: the verb last); English: as before.
-    assert asked == [cs.agent_greeting_instruction(lang), cs.AGENT_SILENCE_REPROMPT_INSTRUCTION, cs.AGENT_SILENCE_CLOSE_INSTRUCTION]
-    assert (asked[0] == cs.AGENT_GREETING_INSTRUCTION) is (lang != "ta")
+    # The admin's instructions lead (compiler 4): the opening is asked for the same way in every language, with no
+    # length or word order of its own; the silence lines stay technical, as before.
+    assert asked == [cs.AGENT_LEAD_GREETING_INSTRUCTION, cs.AGENT_SILENCE_REPROMPT_INSTRUCTION, cs.AGENT_SILENCE_CLOSE_INSTRUCTION]
     lines = _agent_lines(sync_engine, call_id)
     assert lines == said
     assert flow["silence"]["reprompt"] not in lines and flow["silence"]["closing"] not in lines  # no fixed lines
