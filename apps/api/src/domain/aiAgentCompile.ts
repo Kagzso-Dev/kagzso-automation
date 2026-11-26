@@ -35,6 +35,7 @@ import {
   AI_AGENT_OPENINGS,
   AI_AGENT_PERSONALITY_TONE,
   AI_KNOWLEDGE_MAX_APPROVED,
+  businessDisplayName,
   CALL_FLOW_MAX_BLOCK_CHARS,
   TRAINING_MAX_TOKEN_CAP,
   type AiAgentConfig,
@@ -68,7 +69,7 @@ export interface CompileInput {
  * with an older compiler shows "unpublished changes" until an admin publishes it again: a published flow is a
  * stored copy, and compiler changes only reach it through a new publish.
  */
-export const AI_AGENT_COMPILER_VERSION = 4;
+export const AI_AGENT_COMPILER_VERSION = 5;
 
 /**
  * A compiler change that reaches one language only: its agents show "unpublished changes" (agentInputsHash), every
@@ -77,6 +78,7 @@ export const AI_AGENT_COMPILER_VERSION = 4;
  * Tamil 3 (2026-11-26): the speaking style follows the customer's language (LANGUAGE_STYLE.ta).
  * Version 4 (2026-11-26, every language): the admin's instructions lead (autonomous.instructions_lead). Tamil keeps
  * its revision only so that its hash stays as distinct as before.
+ * Version 5 (2026-11-26, every language): the company name is written with readable casing (businessDisplayName).
  */
 export const AI_AGENT_COMPILER_LANGUAGE_REVISION: Partial<Record<AiCallLanguage, number>> = { ta: 3 };
 
@@ -122,6 +124,12 @@ export function blockSafe(text: string): string {
 /** A one-line value (names, business) for a block or a spoken line. */
 const oneLine = (text: string | null | undefined) => blockSafe(text ?? "").replace(/\s+/g, " ").trim();
 
+/**
+ * The agent's company as the AI writes and says it: readable casing whatever was typed ("KAGZSO TECHNOLOGY SERVICES" ->
+ * "Kagzso Technology Services"; acronyms and brand spellings kept). The saved setting itself is never changed.
+ */
+const companyName = (agent: Pick<AiAgentConfig, "companyName">) => businessDisplayName(oneLine(agent.companyName));
+
 /** "+919876543210" → "+91 98765 43210" (read out digit by digit; the agent is told so). */
 function spacedNumber(e164: string): string {
   const m = /^\+(91)(\d{5})(\d{5})$/.exec(e164);
@@ -133,7 +141,7 @@ const isKagzso = (company: string) => /kagzso/i.test(company);
 function agentBlock(input: CompileInput): string {
   const { agent } = input;
   const exec = oneLine(agent.executiveName);
-  const company = oneLine(agent.companyName);
+  const company = companyName(agent);
   return (
     "# WHO YOU ARE AND WHY YOU ARE CALLING\n\n" +
     `You are **${exec}**, an AI calling assistant for **${company}**, on a live outbound phone call.\n\n` +
@@ -150,7 +158,7 @@ function agentBlock(input: CompileInput): string {
 
 /** How the customer can find out more, if they ask, or "" when nothing is configured. Never a promise of contact. */
 function detailsPointer(input: CompileInput): string {
-  const company = oneLine(input.agent.companyName);
+  const company = companyName(input.agent);
   const ways = [
     ...(isKagzso(company) ? ["visit kagzso.com"] : []),
     ...(input.agent.callbackNumber
@@ -165,7 +173,7 @@ function detailsPointer(input: CompileInput): string {
  * voice backend adds it to each call's prompt (`customer_business` and llm_service.customer_business_rules).
  */
 function businessBlock(input: CompileInput): string {
-  const company = oneLine(input.agent.companyName);
+  const company = companyName(input.agent);
   const pointer = detailsPointer(input);
   return (
     "# THE CUSTOMER'S BUSINESS AND WHAT YOU MAY SAY\n\n" +
@@ -357,7 +365,7 @@ export function compileAgentFlow(input: CompileInput): CallFlowDefinition {
   const opening = AI_AGENT_OPENINGS[language];
   if (!opening) throw new AgentCompileError("AI Agents have no reviewed opening lines in this language yet");
   const exec = oneLine(agent.executiveName);
-  const company = oneLine(agent.companyName);
+  const company = companyName(agent);
   const greeting = fill(opening.greeting, exec, company);
   if (greeting.length > 300) throw new AgentCompileError("The agent and company names make the opening longer than 300 characters");
   if (input.knowledge.length > AI_KNOWLEDGE_MAX_APPROVED) {

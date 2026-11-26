@@ -9,6 +9,7 @@ import {
   AI_AGENT_VOICE_SPEEDS,
   AI_CALL_BUSINESS_MAX,
   aiAgentInput,
+  businessDisplayName,
   callFlowDefinition,
   knowledgeTextIssues,
   knownBusiness,
@@ -498,13 +499,41 @@ describe("knowledge content checks (same rules as the voice backend)", () => {
   });
 });
 
-describe("compiler 4: every agent shows unpublished changes until it is published again", () => {
-  it("every language moves to compiler 4; Tamil keeps its revision so its hash stays distinct", () => {
-    expect(AI_AGENT_COMPILER_VERSION).toBe(4);
-    expect(aiAgentCompilerVersion("en")).toBe(4);
-    expect(aiAgentCompilerVersion("hi")).toBe(4);
-    expect(aiAgentCompilerVersion("kn")).toBe(4);
-    expect(aiAgentCompilerVersion("ta")).toBe("4.ta3");
+describe("compiler 5: every agent shows unpublished changes until it is published again", () => {
+  it("every language moves to compiler 5; Tamil keeps its revision so its hash stays distinct", () => {
+    expect(AI_AGENT_COMPILER_VERSION).toBe(5);
+    expect(aiAgentCompilerVersion("en")).toBe(5);
+    expect(aiAgentCompilerVersion("hi")).toBe(5);
+    expect(aiAgentCompilerVersion("kn")).toBe(5);
+    expect(aiAgentCompilerVersion("ta")).toBe("5.ta3");
+  });
+});
+
+describe("F: the company name reads the same whatever its capitals", () => {
+  const cases: { value: string; display: string }[] = JSON.parse(read("kagzso-voice-backend-english/tests/fixtures/business_display_cases.json"));
+  it.each(cases)("$value -> $display (the same rule as the voice backend)", ({ value, display }) => {
+    expect(businessDisplayName(value)).toBe(display);
+  });
+
+  it.each(["KAGZSO TECHNOLOGY SERVICES", "kagzso technology services", "kAgZsO TeChNoLoGy SeRvIcEs", "  Kagzso   Technology Services "])(
+    "%s: the agent says Kagzso Technology Services, with its facts, greeting and profile",
+    (typed) => {
+      const saved = agent({ companyName: typed });
+      const before = saved.companyName;
+      const flow = compileAgentFlow(input("ta", { agent: saved }));
+      expect(text(flow, "agent")).toContain("an AI calling assistant for **Kagzso Technology Services**");
+      expect(flow.greeting.text).toContain("Kagzso Technology Services");
+      expect(flow.training!.persona!.company).toBe("Kagzso Technology Services");
+      expect(text(flow, "company_facts")).toContain("Kagzso Technology Services helps businesses"); // still a Kagzso company
+      expect(saved.companyName).toBe(before); // the saved setting itself is never changed
+    },
+  );
+
+  it("acronyms, brands and other scripts keep their own spelling; another company stays that company", () => {
+    expect(text(compileAgentFlow(input("en", { agent: agent({ companyName: "ABC HMS HOSPITAL" }) })), "agent")).toContain("**ABC HMS Hospital**");
+    expect(text(compileAgentFlow(input("en", { agent: agent({ companyName: "bright it solutions" }) })), "agent")).toContain("**Bright IT Solutions**");
+    expect(text(compileAgentFlow(input("ta", { agent: agent({ companyName: "ஸ்ரீ லக்ஷ்மி டெக்ஸ்டைல்ஸ்" }) })), "agent")).toContain("**ஸ்ரீ லக்ஷ்மி டெக்ஸ்டைல்ஸ்**");
+    expect(text(compileAgentFlow(input("en", { agent: agent({ companyName: "ACME ROBOTICS" }) })), "company_facts")).toContain("(Acme Robotics)");
   });
 });
 

@@ -274,6 +274,54 @@ _LATIN_WORD_RE = re.compile(r"[A-Za-z]+")
 _SHORT_WORDS = frozenset({"SRI", "SHRI", "NEW", "THE", "AND", "OM"})  # said as words, not spelled like ABC
 
 
+# A business name's readable casing, for AI Agents whose admin's instructions lead only (business_display_name). The
+# same rules as Dispatch's businessDisplayName (packages/shared/src/businessName.ts), checked on both sides by
+# tests/fixtures/business_display_cases.json. Known spellings: brands and acronyms kept as they are written.
+BUSINESS_KNOWN_SPELLINGS = {
+    "kagzso": "Kagzso", "whatsapp": "WhatsApp", "iot": "IoT", "ai": "AI", "crm": "CRM", "erp": "ERP", "gst": "GST",
+    "sms": "SMS", "hms": "HMS", "bpo": "BPO", "hr": "HR",
+}
+# "it" is the acronym only before one of these ("Bright IT Solutions"); "Make It Happen" stays a word.
+_IT_BEFORE = frozenset({"solutions", "solution", "services", "service", "consulting", "consultancy", "consultants",
+                        "systems", "technologies", "park", "hub", "infra", "labs", "company", "academy", "training"})
+_LOWER_CONNECTORS = frozenset({"and", "of", "the", "for", "in", "on", "at", "by", "with", "to"})
+
+
+def _case_switches(word: str) -> int:
+    return sum(1 for a, b in zip(word, word[1:]) if a.islower() and b.isupper())
+
+
+def business_display_name(value: Optional[str]) -> str:
+    """A business name with readable casing, the identity unchanged: "KAGZSO TECHNOLOGY SERVICES", "kagzso technology
+    services" and "kAgZsO TeChNoLoGy SeRvIcEs" -> "Kagzso Technology Services". Known brands and acronyms keep their
+    spelling (HMS, IT, WhatsApp); an all-capitals word is a word when it can be said (4+ letters with a vowel, or SRI /
+    THE ...), else an acronym (ABC, KMCH); a name already in mixed case on purpose (iPhone, McDonald) stays; letters of
+    any other script are never touched. Only the casing of Latin letters and the spaces change - nothing is stored."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    words = list(_LATIN_WORD_RE.finditer(text))
+    out, last = [], 0
+    for i, m in enumerate(words):
+        w, k = m.group(0), m.group(0).lower()
+        nxt = words[i + 1].group(0).lower() if i + 1 < len(words) else ""
+        first = i == 0
+        touches_digit = (m.start() > 0 and text[m.start() - 1].isdigit()) or (m.end() < len(text) and text[m.end()].isdigit())
+        if touches_digit:  # part of 24x7, 4G, B2B: as it is written
+            new = w
+        elif k == "it":  # the acronym in capitals or before an IT word; otherwise the ordinary word
+            new = "IT" if (w.isupper() or nxt in _IT_BEFORE) else "It"
+        elif k in BUSINESS_KNOWN_SPELLINGS:
+            new = BUSINESS_KNOWN_SPELLINGS[k]
+        elif w.isupper():
+            new = w.capitalize() if (w in _SHORT_WORDS or (len(w) >= 4 and re.search(r"[AEIOU]", w))) else w
+        elif w.islower():
+            new = w if (not first and k in _LOWER_CONNECTORS) else w.capitalize()
+        else:
+            new = w.capitalize() if _case_switches(w) >= 2 else w  # kAgZsO -> Kagzso; iPhone, McDonald stay
+        out.append(text[last:m.start()] + new)
+        last = m.end()
+    return "".join(out) + text[last:]
+
+
 def known_business(value: Optional[str]) -> str:
     """The contact's business, cleaned of anything unsafe, or "" when there is none ("—", "N/A", "null", blank...)."""
     text = sanitize_variable(value, BUSINESS_MAX_LEN)
@@ -757,6 +805,8 @@ def build_system_prompt(
     business_rules = ""
     if natural and variables.get("flow_contact_business") == "true":
         business = spoken_business(variables.get("customer_business"))
+        if lead:  # readable casing whatever the contact list has ("KAGZSO TECHNOLOGY" / "kagzso technology")
+            business = business_display_name(business)
         data["customer_business"] = business or None
         business_rules = (customer_business_data_rules(business) if lead
                           else customer_business_rules(business, lang, opening=not last_reply))

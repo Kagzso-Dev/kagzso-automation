@@ -152,6 +152,11 @@ def test_the_switch_turns_it_off(monkeypatch):
 
 
 # ------------------------------------------------------------------ a real call through the API
+# The compiled agent flows (tests/fixtures/autonomous) are compiler 4+ agents whose admin's instructions lead: their
+# insights request also asks for a callback (customer_questions.insights_system). An older agent's stays INSIGHTS_SYSTEM.
+AGENT_INSIGHTS = cq.INSIGHTS_CALLBACK_SYSTEM
+
+
 def _agent_call(client, auth, sync_engine, monkeypatch, known=KNOWN, outcome="interested", customer="Neenga enna service pannreenga?"):
     flow = _flow("en", monkeypatch)
     extra = {} if known is None else {"known_questions": known}
@@ -202,7 +207,7 @@ def test_it_runs_once(client, auth, fakes, sync_engine, monkeypatch, callbacks):
     asked = _spy(fakes, _reply(_q()))
     asyncio.run(cq.learn_after_call(call_id, fakes.llm))
     asyncio.run(cq.learn_after_call(call_id, fakes.llm))
-    assert [a[0] for a in asked] == [cq.QUESTIONS_SYSTEM, cq.INSIGHTS_SYSTEM] and len(_sent(callbacks)) == 1
+    assert [a[0] for a in asked] == [cq.QUESTIONS_SYSTEM, AGENT_INSIGHTS] and len(_sent(callbacks)) == 1
 
 
 @pytest.mark.parametrize("outcome", sorted(cq.SKIP_OUTCOMES))
@@ -313,7 +318,7 @@ def test_the_live_conversation_is_the_same_with_learning_asked_for(client, auth,
         call_id, token = _dial(client, auth, flow, **extra)
         _converse(client, call_id, token, turns=2)
         # The timing line (seconds so far) changes every turn anyway; learning's own request is not a reply.
-        return [s.split("--- Call timing")[0] for s in systems if s not in (cq.QUESTIONS_SYSTEM, cq.INSIGHTS_SYSTEM)]
+        return [s.split("--- Call timing")[0] for s in systems if s not in (cq.QUESTIONS_SYSTEM, cq.INSIGHTS_SYSTEM, cq.INSIGHTS_CALLBACK_SYSTEM)]
 
     without, with_list = run(), run(known_questions=KNOWN)
     assert without and with_list == without
@@ -406,7 +411,7 @@ def test_after_the_call_the_insights_go_back_to_dispatch(client, auth, fakes, sy
     call_id = _agent_call(client, auth, sync_engine, monkeypatch)
     asked = _spy(fakes, _with_insights(_q("What services does the company offer?", known="K1")))
     asyncio.run(cq.learn_after_call(call_id, fakes.llm))
-    assert [a[0] for a in asked] == [cq.QUESTIONS_SYSTEM, cq.INSIGHTS_SYSTEM]
+    assert [a[0] for a in asked] == [cq.QUESTIONS_SYSTEM, AGENT_INSIGHTS]
     assert asked[1][1].startswith("Transcript:\nAgent: Hello") and "Known questions" not in asked[1][1]  # the call alone
     sent = callbacks[-1]
     assert sent["event"] == "questions" and sent["call_insights"]["interest"] == "interested"
@@ -444,7 +449,7 @@ def test_the_insights_switch_turns_only_them_off(client, auth, fakes, sync_engin
 @pytest.mark.parametrize("broken", ["questions", "insights"])
 def test_one_request_failing_keeps_the_other(client, auth, fakes, sync_engine, monkeypatch, callbacks, broken):  # noqa: F811
     call_id = _agent_call(client, auth, sync_engine, monkeypatch)
-    failing = cq.QUESTIONS_SYSTEM if broken == "questions" else cq.INSIGHTS_SYSTEM
+    failing = cq.QUESTIONS_SYSTEM if broken == "questions" else AGENT_INSIGHTS
 
     async def complete_raw(system, user, temperature=0.0):
         if system == failing:

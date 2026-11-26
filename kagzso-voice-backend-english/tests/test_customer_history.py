@@ -231,3 +231,40 @@ def test_other_calls_keep_exactly_the_insights_they_had():
     assert "callback_request" not in cq.parse_insights(raw, (), "completed")
     assert cq.parse_insights(raw, (), "completed") == {
         k: v for k, v in cq.parse_insights(raw, (), "completed", callback=True).items() if k != "callback_request"}
+
+
+# ------------------------------------------------------------------ F: business names whatever their capitals
+_DISPLAY_CASES = json.loads((__import__("pathlib").Path(__file__).resolve().parent / "fixtures" / "business_display_cases.json")
+                            .read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("case", _DISPLAY_CASES, ids=lambda c: c["value"] or "<empty>")
+def test_business_display_name_matches_dispatch(case):
+    """The same rule as Dispatch's businessDisplayName (packages/shared/src/businessName.ts): same verdicts."""
+    assert llm.business_display_name(case["value"]) == case["display"]
+
+
+@pytest.mark.parametrize("lang", LANGUAGES)
+@pytest.mark.parametrize("stored", ["KAGZSO TECHNOLOGY SERVICES", "kagzso technology services",
+                                    "Kagzso Technology Services", "kAgZsO TeChNoLoGy SeRvIcEs"])
+def test_a_lead_agent_reads_the_contacts_business_the_same_whatever_its_capitals(monkeypatch, lang, stored):
+    prompt = _prompt(lang, monkeypatch, business=stored)
+    assert _data(prompt)["customer_business"] == "Kagzso Technology Services"
+    assert stored not in prompt or stored == "Kagzso Technology Services"
+
+
+@pytest.mark.parametrize("stored,said", [("HMS HOSPITAL", "HMS Hospital"), ("bright it solutions", "Bright IT Solutions"),
+                                         ("SRI LAKSHMI TEXTILES PVT LTD", "Sri Lakshmi Textiles"),
+                                         ("ஸ்ரீ லக்ஷ்மி டெக்ஸ்டைல்ஸ்", "ஸ்ரீ லக்ஷ்மி டெக்ஸ்டைல்ஸ்"),
+                                         ("अग्रवाल स्वीट्स", "अग्रवाल स्वीट्स"), ("  city   care hospital ", "City Care Hospital")])
+def test_acronyms_legal_forms_and_other_scripts(monkeypatch, stored, said):
+    assert _data(_prompt("ta", monkeypatch, business=stored))["customer_business"] == said
+
+
+def test_older_agents_and_other_calls_keep_the_business_as_before():
+    """Outside lead agents the business reads exactly as spoken_business always made it (lowercase stays lowercase)."""
+    assert llm.spoken_business("kagzso technology services") == "kagzso technology services"
+    v = llm.build_call_variables("Ragul", "male", "+919876543210", customer_business="kagzso technology services")
+    v.update(flow_target_sec="60", flow_max_sec="105", flow_natural_lines="true", flow_contact_business="true")
+    older = llm.build_system_prompt("SCRIPT", v, "en", last_reply="Hello.")  # no flow_instructions_lead
+    assert _data(older)["customer_business"] == "kagzso technology services"
