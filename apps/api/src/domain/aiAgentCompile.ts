@@ -70,8 +70,9 @@ export const AI_AGENT_COMPILER_VERSION = 3;
 /**
  * A compiler change that reaches one language only: its agents show "unpublished changes" (agentInputsHash), every
  * other language's hash stays exactly as before. Tamil 1 (2026-11-24): the discovery-first business sentence.
+ * Tamil 2 (2026-11-26): no "the team will confirm" for an unknown detail or price.
  */
-export const AI_AGENT_COMPILER_LANGUAGE_REVISION: Partial<Record<AiCallLanguage, number>> = { ta: 1 };
+export const AI_AGENT_COMPILER_LANGUAGE_REVISION: Partial<Record<AiCallLanguage, number>> = { ta: 2 };
 
 /** What agentInputsHash hashes as the compiler: AI_AGENT_COMPILER_VERSION itself for a language without a revision. */
 export function aiAgentCompilerVersion(language: string): number | string {
@@ -90,6 +91,19 @@ const BUSINESS_DISCOVERY: Partial<Record<AiCallLanguage, string>> = {
     "today and where it is hard. When they describe a problem, stay on it - how big it is, since when, and what they do about " +
     "it today - and never ask again what they already answered. Only once the problem is clear, show how the one fitting help " +
     "could solve it. Never list several questions at once.\n\n",
+};
+
+/**
+ * A detail the approved information doesn't answer, and a price it doesn't state. Tamil (approved 2026-11-26): no
+ * team at all - real calls turned "needs confirmation from the team" into "the team will confirm". Every other
+ * language: as before (businessBlock, situationsBlock).
+ */
+const UNKNOWN_DETAIL_REPLY: Partial<Record<AiCallLanguage, string>> = {
+  ta:
+    "right now. Never say that the team, the company or anyone else will confirm it, explain it or get back to them.",
+};
+const UNKNOWN_PRICE_REPLY: Partial<Record<AiCallLanguage, string>> = {
+  ta: "requirements and that you don't have the exact price. Never estimate, and never say that the team or anyone else will confirm it.\n",
 };
 
 export class AgentCompileError extends Error {
@@ -192,7 +206,8 @@ function businessBlock(input: CompileInput): string {
     `**Only describe products and services that the approved company facts or the training's approved knowledge confirm.** ` +
     "Never say that a product, feature or integration exists, works in a certain way or suits them unless an approved note says so.\n\n" +
     "**A question the approved information doesn't answer:** never guess or invent. Say honestly that you don't have that detail " +
-    `and that it needs confirmation from the ${company} team. That is a statement about the detail, not a promise that anyone will contact them.` +
+    (UNKNOWN_DETAIL_REPLY[input.language] ??
+      `and that it needs confirmation from the ${company} team. That is a statement about the detail, not a promise that anyone will contact them.`) +
     (pointer ? ` If they want to know more, ${pointer}.` : "") +
     "\n\nNever promise a callback, a demo, a meeting, a visit, a WhatsApp message or an email.\n\n---\n\n"
   );
@@ -363,7 +378,7 @@ function situationsBlock(input: CompileInput): string {
     "* **Who is calling** - your name, the company, and in a few words why you are calling.\n" +
     "* **What the company does** - a short explanation from approved information, tied to their business when you know it.\n" +
     "* **Price** - give a price only if the approved information states it. Otherwise say honestly that it depends on their " +
-    "requirements and that the team needs to confirm it. Never estimate.\n" +
+    (UNKNOWN_PRICE_REPLY[input.language] ?? "requirements and that the team needs to confirm it. Never estimate.\n") +
     "* **Savings or results** - only what the approved information states; never a guess, a percentage or a guarantee.\n" +
     "* **They already have employees** - the idea is to reduce the time people spend on repetitive work; never suggest reducing staff.\n" +
     "* **They already use software or automation** - replacing it isn't necessarily the goal. Understand whether any other part of their work still takes a lot of time.\n" +

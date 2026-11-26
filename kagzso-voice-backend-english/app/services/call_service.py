@@ -248,16 +248,30 @@ _VOICEMAIL_RE = re.compile(
     re.IGNORECASE,
 )
 MACHINE_LONG_WORDS = 12  # one utterance this long right after answering is a recorded greeting
-MACHINE_LONG_SPEECH_MS = 6000  # or this long without a pause
+MACHINE_LONG_SPEECH_MS = 6000  # or this long without a pause (MACHINE_DETECTION_STRICT_WORDS: once words were heard)
+# MACHINE_DETECTION_STRICT_WORDS: a recognised hello on its own ("Hello", "Hello hello", "ஹலோ", "வணக்கம்"), in English
+# letters or Tamil script as STT writes it, is a person picking up. It is never hung up on as a machine.
+_HELLO_RE = re.compile(r"^\W*(?:(?:hello|helo|hallo|halo|hi|hey|ஹலோ|ஹல்லோ|வணக்கம்)\W*){1,3}$", re.IGNORECASE)
 
 
-def machine_evidence(texts: List[str], speaking_ms: int = 0) -> Optional[str]:
-    """What the customer audio says about Plivo's "machine" verdict: "machine", "human" or None."""
+def machine_evidence(texts: List[str], speaking_ms: int = 0, strict_words: bool = False) -> Optional[str]:
+    """What the customer audio says about Plivo's "machine" verdict: "machine", "human" or None.
+    strict_words (MACHINE_DETECTION_STRICT_WORDS): only customer words decide "machine" - a voicemail phrase, a long
+    monologue, or long speech once words were heard. Sound alone never does, and a recognised hello is always a person."""
+    if not strict_words:  # exactly as before
+        if any(_VOICEMAIL_RE.search(t) for t in texts):
+            return "machine"
+        if any(len(_words(t)) > MACHINE_LONG_WORDS for t in texts) or speaking_ms > MACHINE_LONG_SPEECH_MS:
+            return "machine"
+        return "human" if any(_words(t) for t in texts) else None
+    if any(_HELLO_RE.match(t or "") for t in texts):
+        return "human"
     if any(_VOICEMAIL_RE.search(t) for t in texts):
         return "machine"
-    if any(len(_words(t)) > MACHINE_LONG_WORDS for t in texts) or speaking_ms > MACHINE_LONG_SPEECH_MS:
+    heard_words = any(_words(t) for t in texts)
+    if any(len(_words(t)) > MACHINE_LONG_WORDS for t in texts) or (heard_words and speaking_ms > MACHINE_LONG_SPEECH_MS):
         return "machine"
-    return "human" if any(_words(t) for t in texts) else None
+    return "human" if heard_words else None
 
 
 def needs_script_at_opening(text: str) -> bool:
@@ -1913,8 +1927,14 @@ class CallSession:
         return clean, (None if self.cfg.NOISE_SUPPRESSION_STT_AUDIO == "cleaned" else raw)
 
     def machine_evidence(self) -> Optional[str]:
-        speaking_ms = len(self.endpointer.utterance_so_far()) * 1000 // (audio.TELEPHONY_SAMPLE_RATE * audio.SAMPLE_WIDTH)
-        return machine_evidence(self._customer_texts, speaking_ms)
+        strict = self.cfg.MACHINE_DETECTION_STRICT_WORDS
+        if strict and self._opening_playing():
+            # Sound while the greeting plays (a customer listening on a noisy line, the greeting coming back) never
+            # counts toward the long-speech rule.
+            speaking_ms = 0
+        else:
+            speaking_ms = len(self.endpointer.utterance_so_far()) * 1000 // (audio.TELEPHONY_SAMPLE_RATE * audio.SAMPLE_WIDTH)
+        return machine_evidence(self._customer_texts, speaking_ms, strict_words=strict)
 
     def verify_machine(self, uuid: Optional[str], telephony_provider: str) -> None:
         self._spawn(self._verify_machine(uuid, telephony_provider))
@@ -1922,7 +1942,9 @@ class CallSession:
     async def _verify_machine(self, uuid: Optional[str], telephony_provider: str) -> None:
         """Plivo said "machine" before any words were heard: wait up to MACHINE_VERIFY_SECONDS for
         them (longer only while the customer is still talking or being transcribed). A person's
-        reply keeps the call; a voicemail phrase, a monologue or no words at all hang up as before."""
+        reply keeps the call; a voicemail phrase, a monologue or no words at all hang up as before.
+        MACHINE_DETECTION_STRICT_WORDS: no words at all keep the call too - the silence re-prompt and polite close
+        decide, never silence alone."""
         with call_context(self.call_id):
             start = time.monotonic()
             verdict: Optional[str] = None
@@ -1940,6 +1962,11 @@ class CallSession:
             if verdict == "human":
                 log.info("Customer answered like a person - Plivo's answering-machine verdict ignored, call continues")
                 self._event("machine_detection_overruled", {"reason": "customer_words"})
+                return
+            if verdict is None and self.cfg.MACHINE_DETECTION_STRICT_WORDS:
+                log.info("Plivo said answering machine but no customer words were heard - call continues "
+                         "(the silence re-prompt and close decide)")
+                self._event("machine_detection_undecided", {"reason": "no_words"})
                 return
             self._event("machine_detection_confirmed", {"reason": verdict or "no_words"})
             async with session_factory()() as db:

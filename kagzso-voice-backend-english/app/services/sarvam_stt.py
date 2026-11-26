@@ -24,6 +24,8 @@ from app.core.logging import get_logger
 
 log = get_logger("stt.sarvam")
 
+RETRY_PAUSE_SECONDS = 0.25  # before the one retry of a failed request (a rate limit: STT_RATE_LIMIT_RETRY_SECONDS)
+
 
 class STTResult(TypedDict):
     text: str
@@ -153,7 +155,8 @@ class SarvamSTT(STTProvider):
         data = self._form(model)
         started = time.monotonic()
         last_exc: Optional[STTError] = None
-        for attempt in range(attempts):  # one quick retry on transient failures
+        for attempt in range(attempts):  # one quick retry on transient failures (a rate limit may wait longer)
+            resp: Optional[httpx.Response] = None
             try:
                 resp = await self._client.post(
                     "/speech-to-text",
@@ -176,10 +179,27 @@ class SarvamSTT(STTProvider):
                 if last_exc.kind not in ("rate_limit", "provider", "timeout"):
                     break
             if attempt + 1 < attempts:
-                log.warning("Sarvam STT %s, retrying once", last_exc.kind)
-                await asyncio.sleep(0.25)
+                pause = self._retry_pause(last_exc, resp)
+                if pause == RETRY_PAUSE_SECONDS:
+                    log.warning("Sarvam STT %s, retrying once", last_exc.kind)
+                else:
+                    log.warning("Sarvam STT %s, retrying once in %.2fs", last_exc.kind, pause)
+                await asyncio.sleep(pause)
         assert last_exc is not None
         raise last_exc
+
+    def _retry_pause(self, exc: STTError, resp: Optional[httpx.Response]) -> float:
+        """Seconds before the one retry. A rate limit waits STT_RATE_LIMIT_RETRY_SECONDS, or Sarvam's Retry-After when
+        that is longer, at most STT_RATE_LIMIT_RETRY_MAX_SECONDS (never less than STT_RATE_LIMIT_RETRY_SECONDS). The
+        defaults (0.25 / 0.25) are today's pause. Any other failure: RETRY_PAUSE_SECONDS, as before."""
+        if exc.kind != "rate_limit":
+            return RETRY_PAUSE_SECONDS
+        pause = max(0.0, self.cfg.STT_RATE_LIMIT_RETRY_SECONDS)
+        try:
+            hinted = float((resp.headers.get("retry-after") or "").strip()) if resp is not None else 0.0
+        except ValueError:
+            hinted = 0.0
+        return min(max(pause, hinted), max(pause, self.cfg.STT_RATE_LIMIT_RETRY_MAX_SECONDS))
 
     @staticmethod
     def _parse(resp: httpx.Response) -> STTResult:

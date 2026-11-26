@@ -460,6 +460,39 @@ describe("Tamil discovery first (approved 2026-11-24): Tamil only", () => {
     expect(aiAgentCompilerVersion("en")).toBe(AI_AGENT_COMPILER_VERSION); // hashed exactly as before (the number 3)
     expect(aiAgentCompilerVersion("hi")).toBe(AI_AGENT_COMPILER_VERSION);
     expect(aiAgentCompilerVersion("kn")).toBe(AI_AGENT_COMPILER_VERSION);
-    expect(aiAgentCompilerVersion("ta")).toBe(`${AI_AGENT_COMPILER_VERSION}.ta1`); // Tamil agents: "unpublished changes"
+    expect(aiAgentCompilerVersion("ta")).toBe(`${AI_AGENT_COMPILER_VERSION}.ta2`); // Tamil agents: "unpublished changes"
+  });
+});
+
+describe("Tamil: no 'the team will confirm' (approved 2026-11-26): Tamil only", () => {
+  const OLD_DETAIL =
+    "Say honestly that you don't have that detail and that it needs confirmation from the Kagzso Technology Services team. " +
+    "That is a statement about the detail, not a promise that anyone will contact them.";
+  const OLD_PRICE =
+    "Otherwise say honestly that it depends on their requirements and that the team needs to confirm it. Never estimate.\n";
+  const text = (language: AiCallLanguage, id: string) =>
+    (compileAgentFlow(input(language)).blocks.find((b) => b.id === id) as CallFlowTextBlock).text;
+
+  it("a Tamil agent says it doesn't have the detail or the exact price, and never that the team will confirm it", () => {
+    const business = text("ta", "customer_business");
+    const situations = text("ta", "objections");
+    expect(business).toContain(
+      "Say honestly that you don't have that detail right now. Never say that the team, the company or anyone else will confirm it, " +
+        "explain it or get back to them.",
+    );
+    expect(situations).toContain(
+      "Otherwise say honestly that it depends on their requirements and that you don't have the exact price. Never estimate, " +
+        "and never say that the team or anyone else will confirm it.\n",
+    );
+    for (const t of [business, situations]) {
+      expect(t).not.toContain("needs confirmation from");
+      expect(t).not.toContain("the team needs to confirm");
+    }
+  });
+
+  it.each(["en", "hi", "kn"] as const)("%s keeps both sentences exactly as before (the fixture test checks the whole flow)", (language) => {
+    expect(text(language, "customer_business")).toContain(OLD_DETAIL);
+    expect(text(language, "objections")).toContain(OLD_PRICE);
+    expect(text(language, "customer_business")).not.toContain("right now. Never say that the team");
   });
 });

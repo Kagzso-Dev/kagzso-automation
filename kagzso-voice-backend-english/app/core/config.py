@@ -156,6 +156,11 @@ class Settings(BaseSettings):
     # If a request with SARVAM_STT_MODEL fails (after its own retry), try once with this model.
     # Only used when it differs from SARVAM_STT_MODEL; empty = no second model.
     STT_FALLBACK_MODEL: str = "saaras:v3"
+    # Pause before the one retry of a Sarvam STT request that got 429 (rate limit). Sarvam's Retry-After, when longer,
+    # is used instead, up to STT_RATE_LIMIT_RETRY_MAX_SECONDS. The defaults keep today's 0.25 s; other failures always
+    # wait 0.25 s. Set per backend (.env.ta: 0.8 and 1.5).
+    STT_RATE_LIMIT_RETRY_SECONDS: float = 0.25
+    STT_RATE_LIMIT_RETRY_MAX_SECONDS: float = 0.25
     # Send STT a level-normalised copy of the customer's audio (soft voices lifted, loud ones never
     # clipped). Live call audio, speech detection, barge-in and recordings are unchanged. Off = as before.
     STT_NORMALIZE_AUDIO: bool = False
@@ -354,6 +359,11 @@ class Settings(BaseSettings):
     # hangs up at once; with no words yet, wait up to MACHINE_VERIFY_SECONDS, then trust Plivo.
     MACHINE_DETECTION_VERIFY: bool = True
     MACHINE_VERIFY_SECONDS: float = 3.0
+    # Only customer words decide "machine" (with MACHINE_DETECTION_VERIFY): a recognised hello ("Hello", "ஹலோ",
+    # "வணக்கம்") is always a person, sound with no words never decides it, sound while the greeting plays never counts
+    # toward the long-speech rule, and no words after MACHINE_VERIFY_SECONDS let the call go on (the silence re-prompt
+    # and polite close decide). Off (default) = exactly as before. Turned on per backend (.env.ta).
+    MACHINE_DETECTION_STRICT_WORDS: bool = False
 
     # --- Voice activity detection / turn taking ---
     VAD_AGGRESSIVENESS: int = 2  # webrtcvad 0-3
