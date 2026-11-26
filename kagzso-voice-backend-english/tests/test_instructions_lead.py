@@ -176,6 +176,18 @@ def test_the_switch_off_prompt_is_exactly_the_old_one(monkeypatch):
     assert "Keep replies short and focused on the most useful next step" in llm.call_timing(off)
 
 
+def test_a_guided_call_is_unchanged_even_with_every_agent_variable(monkeypatch):
+    """A guided call never gets agent variables (call_service), and even if it did, its prompt is the old one."""
+    from app.flows.loader import load_builtin
+    agentish = {**llm.build_call_variables("Ragul", "male", "+919876543210"), "flow_target_sec": "60",
+                "flow_natural_lines": "true", "flow_contact_business": "true", cs.INSTRUCTIONS_LEAD_VARIABLE: "true",
+                "call_elapsed_sec": "10", "flow_max_sec": "105"}
+    plain = {k: v for k, v in agentish.items() if k != cs.INSTRUCTIONS_LEAD_VARIABLE}
+    script = render_blocks(load_builtin("executive"))
+    assert llm.build_system_prompt(script, agentish, "en", guided=True) == llm.build_system_prompt(script, plain, "en", guided=True)
+    assert "Keep replies short and focused" in llm.build_system_prompt(script, agentish, "en", guided=True)
+
+
 def test_guided_and_ordinary_calls_never_read_the_flag():
     variables = llm.build_call_variables("Ragul", "male", "+919876543210")
     variables[cs.INSTRUCTIONS_LEAD_VARIABLE] = "true"  # even if it were set, it needs an agent's natural call
@@ -207,11 +219,13 @@ def test_the_opening_request_follows_the_instructions_in_every_language():
 
 def test_the_timing_line_keeps_the_hard_stop_without_reply_advice():
     base = {"flow_target_sec": "60", "flow_max_sec": "105"}
-    lead = {**base, cs.INSTRUCTIONS_LEAD_VARIABLE: "true"}
-    assert "Keep replies short" not in llm.call_timing({**lead, "call_elapsed_sec": "10"})
-    assert "Never rush or cut off the customer" in llm.call_timing({**lead, "call_elapsed_sec": "10"})
-    assert "close now" in llm.call_timing({**lead, "call_elapsed_sec": "90"})  # the hard stop stays
-    assert llm.call_timing({**lead, "call_elapsed_sec": "70"}) == llm.call_timing({**base, "call_elapsed_sec": "70"})
+    lead = dict(instructions_lead=True)
+    assert "Keep replies short" not in llm.call_timing({**base, "call_elapsed_sec": "10"}, **lead)
+    assert "Never rush or cut off the customer" in llm.call_timing({**base, "call_elapsed_sec": "10"}, **lead)
+    assert "close now" in llm.call_timing({**base, "call_elapsed_sec": "90"}, **lead)  # the hard stop stays
+    assert llm.call_timing({**base, "call_elapsed_sec": "70"}, **lead) == llm.call_timing({**base, "call_elapsed_sec": "70"})
+    # The variable alone never changes it: only build_system_prompt's agent-call decision does (never on a guided call).
+    assert llm.call_timing({**base, "call_elapsed_sec": "10", cs.INSTRUCTIONS_LEAD_VARIABLE: "true"}) ==         llm.call_timing({**base, "call_elapsed_sec": "10"})
 
 
 def test_the_flag_does_nothing_without_natural_lines_and_absent_keeps_the_hash(monkeypatch):
