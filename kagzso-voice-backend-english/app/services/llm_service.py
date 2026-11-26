@@ -412,9 +412,15 @@ def render_first_message(template: str, variables: Mapping[str, Optional[str]]) 
     return re.sub(r"\s{2,}", " ", text).strip()
 
 
-def language_instruction(language: Optional[str], style: Optional[str] = None) -> str:
+# AGENT_FOLLOW_CUSTOMER_LANGUAGE: the languages whose AI agent calls may follow the customer into plain English.
+FOLLOW_CUSTOMER_LANGUAGES = ("ta",)
+
+
+def language_instruction(language: Optional[str], style: Optional[str] = None, follow_customer: bool = False) -> str:
     """Reply-language rule derived from CALL_LANGUAGE (en adds nothing). `style` is the flow's language
-    style: "pure" = that language's own words; anything else = mixed (the rule every call had before)."""
+    style: "pure" = that language's own words; anything else = mixed (the rule every call had before).
+    follow_customer (AGENT_FOLLOW_CUSTOMER_LANGUAGE, an AI agent's call): in a FOLLOW_CUSTOMER_LANGUAGES language with
+    the mixed style, the last line lets the reply follow a customer who speaks plain English. Anything else: as before."""
     code = (language or "en").split("-")[0].strip().lower()
     name = LANGUAGE_NAMES.get(code)
     if not name or code == "en":
@@ -432,6 +438,13 @@ def language_instruction(language: Optional[str], style: Optional[str] = None) -
             f"- One call, one language: keep every reply in {name} even if the customer answers in English or "
             f"another language. Never switch whole replies to another language."
         )
+    if follow_customer and code in FOLLOW_CUSTOMER_LANGUAGES:
+        last = (f"- Follow the customer's language: when the customer speaks to you in plain English, reply in simple "
+                f"spoken English in English letters; when they speak {name} or mix {name} and English, reply in "
+                f"natural spoken {name} as above. Change only when the customer does, and keep one language per reply.")
+    else:
+        last = (f"- One call, one language: keep every reply in {name} (with everyday English words as above) even if "
+                f"the customer answers in English or another language. Never switch whole replies to another language.")
     return (
         f"\n- Always reply in natural, everyday spoken {name} (code-mixed with English the way people "
         f"actually talk on a phone call).\n"
@@ -441,8 +454,7 @@ def language_instruction(language: Optional[str], style: Optional[str] = None) -
         f"- Example phrases in the instructions may be written in romanized {name} (e.g. Tanglish); convert only "
         f"the {name} words to {name} script.\n"
         f"- Avoid formal, bookish or literary {name}. Write numbers, times and dates as spoken {name} words.\n"
-        f"- One call, one language: keep every reply in {name} (with everyday English words as above) even if "
-        f"the customer answers in English or another language. Never switch whole replies to another language."
+        + last
     )
 
 
@@ -660,7 +672,8 @@ def build_system_prompt(
         + who
         + business_rules
         + brand + followup
-        + language_instruction(lang, variables.get("flow_language_style"))
+        + language_instruction(lang, variables.get("flow_language_style"),
+                               follow_customer=natural and default_settings.AGENT_FOLLOW_CUSTOMER_LANGUAGE)
         + turn_tuning.reply_rule(variables, lang)  # "" unless the call has voice response tuning
         # Below every rule above, above the customer data; "" for a flow without (Active) training.
         + training_block(variables, user_message, last_reply, (recent or []) if natural else None)

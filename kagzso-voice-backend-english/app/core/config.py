@@ -352,6 +352,10 @@ class Settings(BaseSettings):
     # True only if your team really follows up interested leads (rows are written to
     # `followups`). Controls whether the agent may say "our team will contact you".
     TEAM_FOLLOWUP_ENABLED: bool = False
+    # AI agent calls follow the customer's language: plain English from the customer gets a simple spoken-English reply;
+    # the call's language (or a mix with English) gets the call's language as before. Off (default) = one language per
+    # call, exactly as before. Turned on per backend (.env.ta). Guided calls never change.
+    AGENT_FOLLOW_CUSTOMER_LANGUAGE: bool = False
     # Plivo answering-machine detection (async); voicemail -> hang up, outcome=voicemail.
     PLIVO_MACHINE_DETECTION: bool = True
     # Plivo's "machine" verdict sometimes fires on a person saying "Hello? Hello?". Before hanging up,

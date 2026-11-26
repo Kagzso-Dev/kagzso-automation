@@ -71,8 +71,9 @@ export const AI_AGENT_COMPILER_VERSION = 3;
  * A compiler change that reaches one language only: its agents show "unpublished changes" (agentInputsHash), every
  * other language's hash stays exactly as before. Tamil 1 (2026-11-24): the discovery-first business sentence.
  * Tamil 2 (2026-11-26): no "the team will confirm" for an unknown detail or price.
+ * Tamil 3 (2026-11-26): the speaking style follows the customer's language (LANGUAGE_STYLE.ta).
  */
-export const AI_AGENT_COMPILER_LANGUAGE_REVISION: Partial<Record<AiCallLanguage, number>> = { ta: 2 };
+export const AI_AGENT_COMPILER_LANGUAGE_REVISION: Partial<Record<AiCallLanguage, number>> = { ta: 3 };
 
 /** What agentInputsHash hashes as the compiler: AI_AGENT_COMPILER_VERSION itself for a language without a revision. */
 export function aiAgentCompilerVersion(language: string): number | string {
@@ -402,13 +403,17 @@ function interestedBlock(input: CompileInput): string {
   );
 }
 
-/** How each language should sound. The voice backend's language rule (script, one language per call) still applies. */
+/**
+ * How each language should sound. The voice backend's language rule (script, one language per call) still applies.
+ * Tamil (approved 2026-11-26): follows the customer's language, with the Tamil backend's AGENT_FOLLOW_CUSTOMER_LANGUAGE.
+ */
 const LANGUAGE_STYLE: Partial<Record<AiCallLanguage, string>> = {
   en: "Use clear, simple, professional spoken English.",
   ta:
-    "Speak natural conversational Tamil, the familiar and respectful way business people talk on the phone, mixing in everyday " +
-    "English business words as people really do. Never translate English sentences word for word. Never ask இப்போ பேசலாமா or " +
-    "anything like it.",
+    "Speak the customer's language. When they speak Tamil or mix Tamil and English, speak natural conversational Tamil, the " +
+    "familiar and respectful way business people talk on the phone, mixing in everyday English business words as people really " +
+    "do; when they speak plain English, reply in simple spoken English. Never translate English sentences word for word. Never " +
+    "ask இப்போ பேசலாமா or anything like it.",
   hi:
     "Speak natural conversational Hindi, the familiar and respectful way business people talk on the phone, mixing in everyday " +
     "English business words as people really do. Never translate English sentences word for word.",

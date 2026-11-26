@@ -460,7 +460,7 @@ describe("Tamil discovery first (approved 2026-11-24): Tamil only", () => {
     expect(aiAgentCompilerVersion("en")).toBe(AI_AGENT_COMPILER_VERSION); // hashed exactly as before (the number 3)
     expect(aiAgentCompilerVersion("hi")).toBe(AI_AGENT_COMPILER_VERSION);
     expect(aiAgentCompilerVersion("kn")).toBe(AI_AGENT_COMPILER_VERSION);
-    expect(aiAgentCompilerVersion("ta")).toBe(`${AI_AGENT_COMPILER_VERSION}.ta2`); // Tamil agents: "unpublished changes"
+    expect(aiAgentCompilerVersion("ta")).toBe(`${AI_AGENT_COMPILER_VERSION}.ta3`); // Tamil agents: "unpublished changes"
   });
 });
 
@@ -494,5 +494,32 @@ describe("Tamil: no 'the team will confirm' (approved 2026-11-26): Tamil only", 
     expect(text(language, "customer_business")).toContain(OLD_DETAIL);
     expect(text(language, "objections")).toContain(OLD_PRICE);
     expect(text(language, "customer_business")).not.toContain("right now. Never say that the team");
+  });
+});
+
+describe("Tamil: the speaking style follows the customer's language (approved 2026-11-26): Tamil only", () => {
+  const OLD_TA =
+    "Speak natural conversational Tamil, the familiar and respectful way business people talk on the phone, mixing in everyday " +
+    "English business words as people really do. Never translate English sentences word for word.";
+  const style = (language: AiCallLanguage) =>
+    (compileAgentFlow(input(language)).blocks.find((b) => b.id === "speaking_style") as CallFlowTextBlock).text;
+
+  it("a Tamil agent speaks the customer's language: spoken Tamil with English business words, or simple English", () => {
+    const ta = style("ta");
+    expect(ta).toContain("Speak the customer's language.");
+    expect(ta).toContain("When they speak Tamil or mix Tamil and English, speak natural conversational Tamil");
+    expect(ta).toContain("when they speak plain English, reply in simple spoken English.");
+    expect(ta).toContain("Never ask இப்போ பேசலாமா or anything like it.");
+    expect(ta).not.toContain(OLD_TA);
+  });
+
+  it.each(["hi", "kn"] as const)("%s keeps its own style exactly as before (the fixture test checks the whole flow)", (language) => {
+    expect(style(language)).not.toContain("Speak the customer's language.");
+    expect(style(language)).toContain("English business words as people really do. Never translate English sentences word for word.");
+  });
+
+  it("English keeps its style exactly as before", () => {
+    expect(style("en")).toContain("Use clear, simple, professional spoken English.");
+    expect(style("en")).not.toContain("Speak the customer's language.");
   });
 });

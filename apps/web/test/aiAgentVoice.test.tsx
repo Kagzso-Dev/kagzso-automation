@@ -328,6 +328,25 @@ describe("Settings → AI Voice", () => {
       expect(text).toContain("Kagzso சார்பா பேசுற AI assistant-னு உண்மையா");
     });
 
+    it("மொழி: the reply follows the customer's language, the same rules in every language; duplicated lines are gone", () => {
+      const text = AI_AGENT_DEFAULT_INSTRUCTIONS.ta!;
+      const MOZHI = [
+        "மொழி",
+        "- Customer பேசுற மொழியிலயே பதில் சொல்லுங்க: தமிழ்ல பேசினா பேச்சுத் தமிழ், தமிழும் English-ம் கலந்து பேசினா அதே மாதிரி கலந்து, முழுசா English-ல பேசினா எளிமையான spoken English.",
+        "- Customer மொழி மாத்தினா மட்டும் நீங்களும் மாத்துங்க. ஒரு பதில்ல ஒரே மொழி.",
+        "- எந்த மொழியிலயும் அதே விதிகள்: அதிகபட்சம் ரெண்டு சின்ன வாக்கியம், ஒரு கேள்வி, முதல்ல புரிஞ்சுக்கறது.",
+      ];
+      expect(text).toContain(MOZHI.join("\n"));
+      expect(text.indexOf("மொழி\n")).toBeLessThan(text.indexOf("புரிஞ்சுக்கறது (முதல்ல இதுதான்)"));
+      expect(text.length).toBeLessThan(4000);
+      // Nothing left that forces Tamil-only sentences.
+      expect(text).not.toContain("வாக்கியம் Tamil-ஆ இருக்கணும்");
+      // The three lines the built-in rules already give.
+      expect(text).not.toMatch(/emoji|எண்களை வார்த்தையால/);
+      expect(text).not.toContain("ஏற்கனவே பதில் சொன்ன கேள்வியை திரும்பக் கேக்காதீங்க");
+      expect(text).not.toContain("Introduction, pitch திரும்ப சொல்லாதீங்க");
+    });
+
     it("only Tamil has recommended instructions: English, Hindi and Kannada start exactly as before (an empty box)", () => {
       expect(Object.keys(AI_AGENT_DEFAULT_INSTRUCTIONS)).toEqual(["ta"]);
       for (const language of ["en", "hi", "kn"] as const) expect(AI_AGENT_DEFAULT_INSTRUCTIONS[language]).toBeUndefined();
