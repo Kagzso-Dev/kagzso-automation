@@ -115,7 +115,8 @@ async function agentConfig(a: AiAgent): Promise<AiAgentConfig> {
 /** The AI's voice as the agent's voice backend lists it (resolved by the caller from GET /api/flows/builtin). */
 export interface AgentVoice {
   voiceId: string;
-  voiceGender: AiAgentVoiceGender;
+  /** null only for a Bulbul v4 Flash voice, which Sarvam lists without a gender. */
+  voiceGender: AiAgentVoiceGender | null;
   voiceDisplayName: string;
   voiceLanguage: AiCallLanguage;
 }

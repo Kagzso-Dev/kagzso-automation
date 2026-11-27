@@ -44,7 +44,7 @@ import httpx
 
 from app.core.config import Settings, settings as default_settings
 from app.core.logging import get_logger
-from app.core.voices import is_cloned_voice, offered_voice
+from app.core.voices import is_cloned_voice, is_v4_voice, offered_voice, voice_model
 from app.services import audio_service as audio
 from app.services.tts import TTSError, TTSProvider, TTSStream, apply_pronunciations
 
@@ -117,6 +117,16 @@ class SarvamTTS(TTSProvider):
                                                    timeout=httpx.Timeout(20.0, connect=5.0),
                                                    limits=self.cfg.http_limits())
 
+    @property
+    def model(self) -> str:
+        """The Bulbul model of this voice: bulbul:v4-flash for an offered v4 persona (SARVAM_TTS_V4_VOICES), else
+        SARVAM_TTS_MODEL - the model always goes with its speaker."""
+        return voice_model(self.voice_id, self.cfg.SARVAM_TTS_MODEL)
+
+    @property
+    def v4_persona(self) -> bool:
+        return not self.cloned and is_v4_voice(self.voice_id)
+
     def _check(self) -> str:
         key = self.cfg.SARVAM_API_KEY.get_secret_value()
         if not key or not self.voice_id:
@@ -133,7 +143,7 @@ class SarvamTTS(TTSProvider):
             return {"voice_id": self.voice_id, "pace": self._pace(pace),
                     **({"language_code": language} if language != "unknown" else {})}
         return {
-            "model": self.cfg.SARVAM_TTS_MODEL,
+            "model": self.model,
             "language_code": self.cfg.sarvam_language_code,
             "speaker": self.voice_id,
             # bulbul:v3 accepts 0.5-2.0, per request (REST) or per config message (stream)
@@ -332,7 +342,7 @@ class SarvamStream(TTSStream):
         if self.tts.cloned:  # Sarvam's voice-clone socket: same messages, no model
             url = f"{cfg.SARVAM_TTS_CLONE_WS_URL}?{urlencode({'send_completion_event': 'true'})}"
         else:
-            url = f"{cfg.SARVAM_TTS_WS_URL}?{urlencode({'model': cfg.SARVAM_TTS_MODEL, 'send_completion_event': 'true'})}"
+            url = f"{cfg.SARVAM_TTS_WS_URL}?{urlencode({'model': self.tts.model, 'send_completion_event': 'true'})}"
         try:
             self._ws = await asyncio.wait_for(
                 connect(url, additional_headers={"Api-Subscription-Key": self._key}, max_size=None, open_timeout=5),

@@ -161,7 +161,13 @@ const CLONES = [
 ];
 const FAKE_VOICES: Record<string, { id: string; name: string; gender?: string; language: string }[]> = {
   en: FEMALE.map((v) => ({ ...v, language: "English (India)" })),
-  ta: [...CLONES, ...FEMALE, { id: "shubh", name: "Shubh", gender: "male" }, { id: "priya", name: "Priya" }].map((v) => ({ ...v, language: "Tamil (India)" })),
+  ta: [
+    ...CLONES,
+    ...FEMALE,
+    { id: "shubh", name: "Shubh", gender: "male" },
+    { id: "priya", name: "Priya" },
+    { id: "vijay_ta_narration", name: "Vijay (Narration)", model: "bulbul:v4-flash", style: "narration" }, // Sarvam: no gender
+  ].map((v) => ({ ...v, language: "Tamil (India)" })),
 };
 let server: Server;
 let voice: Server;
@@ -947,6 +953,14 @@ describe("AI Voice (Settings → AI Voice): the AI's own voice, independent of t
     expect((await req("POST", "/api/ai-agents", { language: "ta", agent: { ...AGENT, voiceId: "bad id!" } })).status).toBe(400);
     expect((await req("POST", "/api/ai-agents", { language: "en", agent: { ...AGENT, voiceId: "shubh" } })).status).toBe(400); // not offered in English
     expect(T("aiAgent")).toHaveLength(0);
+  });
+
+  it("a Bulbul v4 Flash voice (Sarvam states no gender) can be picked: saved with no gender, published with its exact id", async () => {
+    const a = await createAgent("ta", { ...AGENT, voiceId: "vijay_ta_narration" });
+    expect(a).toMatchObject({ voiceId: "vijay_ta_narration", voiceGender: null, voiceDisplayName: "Vijay (Narration)" });
+    const def = await publishLive(a.id);
+    expect(def.voice_id).toBe("vijay_ta_narration");
+    expect(voiceBlock(def)).not.toContain("Your voice is a"); // no gender claimed for it
   });
 
   it("an agent without a voice compiles and hashes exactly as before; the Tamil Roopa default then shows as unpublished", async () => {

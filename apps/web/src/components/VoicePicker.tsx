@@ -42,6 +42,13 @@ export function sampleLanguage(code: string | undefined): string {
   return (AI_CALL_LANGUAGE_NAMES as Record<string, string>)[base] ?? code!;
 }
 
+/** A voice's model as its card label: "bulbul:v4-flash" → "v4 Flash", "bulbul:v3" → "v3". */
+export function voiceModelLabel(model: string | undefined): string | null {
+  const m = (model ?? "").trim().toLowerCase().replace(/^bulbul:/, "");
+  if (!m) return null;
+  return m.split("-").map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1))).join(" ");
+}
+
 /** Previews already fetched this session: language + voice + text + pause lengths → object URL (the oldest is revoked past 20). */
 const played = new Map<string, string>();
 const PLAYED_MAX = 20;
@@ -114,6 +121,7 @@ export function VoicePicker({
   flowLine,
   languageStyle,
   missingNote,
+  showModels,
 }: {
   voices: VoiceOption[];
   defaultVoice: string;
@@ -137,6 +145,8 @@ export function VoicePicker({
    * a voice that is no longer offered is reported, never silently replaced). Absent = the Call Flows behaviour.
    */
   missingNote?: string;
+  /** Label each voice with its model (the full list mixes models although this part may not); absent = only when this list mixes them. */
+  showModels?: boolean;
 }) {
   const fallback = (languageStyle === "mixed" ? AI_CALL_VOICE_SAMPLES_MIXED[language] : undefined) ?? AI_CALL_VOICE_SAMPLES[language];
   const defaultSample = sampleLine(flowLine) ?? fallback;
@@ -161,6 +171,8 @@ export function VoicePicker({
   const known = !value || voices.some((v) => v.id === value);
   const selected = value && known ? value : missingNote ? null : defaultVoice;
   const defaultName = voices.find((v) => v.id === defaultVoice)?.name ?? defaultVoice;
+  // Model labels only when the list mixes Bulbul models (a Tamil list with v4 Flash voices); every other list as before.
+  const mixedModels = showModels ?? new Set(voices.map((v) => v.model).filter(Boolean)).size > 1;
 
   function stop() {
     request.current++; // a sample still loading doesn't start after Stop
@@ -226,6 +238,16 @@ export function VoicePicker({
                         title="Your own cloned voice (Sarvam voice cloning)"
                       >
                         Custom
+                      </span>
+                    )}
+                    {mixedModels && voiceModelLabel(v.model) && (
+                      <span
+                        className={`shrink-0 rounded border px-1 text-[10px] font-semibold uppercase leading-4 ${
+                          v.model?.includes("v4") ? "border-accent/40 bg-tint text-accent" : "border-line text-slate-550"
+                        }`}
+                        title={`Spoken with Sarvam ${v.model}${v.style ? ` · ${v.style} style` : ""}`}
+                      >
+                        {voiceModelLabel(v.model)}
                       </span>
                     )}
                     {v.cloned && (

@@ -280,6 +280,10 @@ export interface VoiceOption {
   language?: string;
   /** A Sarvam cloned voice (SARVAM_TTS_VOICE_<LANG>_*), not a stock Bulbul speaker. */
   cloned?: boolean;
+  /** The Sarvam model this voice is spoken with ("bulbul:v3", "bulbul:v4-flash"), when the list mixes models. */
+  model?: string;
+  /** A Bulbul v4 persona's style ("narration", "ads" ...). */
+  style?: string;
 }
 
 export interface VoiceFlowPreview {

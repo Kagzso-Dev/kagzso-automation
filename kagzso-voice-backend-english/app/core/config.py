@@ -178,6 +178,13 @@ class Settings(BaseSettings):
     # Bulbul speaker ids, each optionally id:gender, e.g. "kavitha:female,mani:male". Empty = Roopa,
     # Ritu, Simran and Ishita (today's English list; Bulbul speakers speak every language).
     SARVAM_TTS_VOICES: str = ""
+    # Bulbul v4 Flash personas offered besides them (2026-11-27). Each is always spoken with bulbul:v4-flash, whatever
+    # SARVAM_TTS_MODEL says: the model goes with the voice, so no other voice changes. "auto" = the personas Sarvam lists
+    # for this backend's language (Tamil: aravind_ta_ads, aravind_ta_suspense, gokul_ta_narration, vijay_ta_narration;
+    # other languages: none). "" or "off" = none. Or a list like SARVAM_TTS_VOICES, e.g.
+    # "vijay_ta_narration:male,gokul_ta_narration:male". Sarvam's docs give these personas no gender, so a voice has
+    # one only from a ":male" / ":female" tag here (an AI Agent lists only voices with a gender).
+    SARVAM_TTS_V4_VOICES: str = "auto"
     SARVAM_TTS_PACE: float = 1.0  # 0.5-2.0
     SARVAM_TTS_TEMPERATURE: float = 0.6  # 0.01-1.0
     # Streamed calls: characters Sarvam collects before it starts speaking (its min_buffer_size).

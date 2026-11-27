@@ -192,6 +192,9 @@ function ReplySpeed({ speed, onChange }: { speed: VoiceTuningSetting | null; onC
   );
 }
 
+/** A filter of the voice list: a gender, or the Sarvam Bulbul v4 Flash voices. */
+type VoiceGroup = AiAgentVoiceGender | "v4";
+
 /**
  * Settings → AI Voice (autonomous agents): the AI's own voice, from the voices the language's voice backend offers
  * with a gender (its list is the only one). Female / Male only filters the list; picking a voice changes the form,
@@ -227,7 +230,7 @@ export function AiAgentVoice({
   onExecutiveNameChange?: (name: string) => void;
 }) {
   const catalog = useCallFlowCatalog(language);
-  const [picked, setPicked] = useState<AiAgentVoiceGender | null>(null);
+  const [picked, setPicked] = useState<VoiceGroup | null>(null);
   // Needs nothing from the voice backend, so it stays on screen while the voices load or can't be listed.
   const reply = isVoiceTuningLanguage(language) ? <ReplySpeed speed={replySpeed} onChange={onReplySpeedChange} /> : null;
   if (catalog.isLoading || catalog.error) {
@@ -244,22 +247,32 @@ export function AiAgentVoice({
   // The language's default voice first (its cloned voice, else Roopa for Tamil), then the backend's order; a clone made
   // in another language last, so picking a gender never starts on it.
   const foreign = (v: VoiceOption) => voiceLanguageMismatch(v.source_language, language);
-  const ofGender = (g: AiAgentVoiceGender): VoiceOption[] =>
-    all
-      .filter((v) => v.gender === g)
-      .sort((a, b) => Number(foreign(a)) - Number(foreign(b)) || Number(b.id === preferred) - Number(a.id === preferred));
+  // Sarvam Bulbul v4 Flash voices: their own group (Sarvam states no gender for them, so they're not in Female / Male
+  // unless the backend tags one).
+  const isV4 = (v: VoiceOption) => !!v.model?.startsWith("bulbul:v4");
+  const v4Voices = all.filter(isV4);
+  const ofGender = (g: VoiceGroup): VoiceOption[] =>
+    g === "v4"
+      ? v4Voices
+      : all
+          .filter((v) => v.gender === g)
+          .sort((a, b) => Number(foreign(a)) - Number(foreign(b)) || Number(b.id === preferred) - Number(a.id === preferred));
   const current = all.find((v) => v.id === value);
-  const gender: AiAgentVoiceGender = picked ?? (isGender(current?.gender) ? current.gender : "female");
+  const gender: VoiceGroup =
+    picked ?? (isGender(current?.gender) ? current.gender : current && isV4(current) ? "v4" : "female");
   const voices = ofGender(gender);
+  const groups: VoiceGroup[] = v4Voices.length ? [...AI_AGENT_VOICE_GENDERS, "v4"] : [...AI_AGENT_VOICE_GENDERS];
+  const showModels = new Set(all.map((v) => v.model).filter(Boolean)).size > 1;
   const where = `the ${AI_CALL_LANGUAGE_NAMES[language]} voice backend`;
   const missing = !!value && !current;
   const backendDefault = all.find((v) => v.id === catalog.data?.default_voice);
 
-  function chooseGender(g: AiAgentVoiceGender) {
+  function chooseGender(g: VoiceGroup) {
     setPicked(g);
     // Switching the gender picks that gender's first voice (unless the current voice already is one).
     const first = ofGender(g)[0];
-    if (first && current?.gender !== g) onChange(first.id);
+    const inGroup = g === "v4" ? !!current && isV4(current) : current?.gender === g;
+    if (first && !inGroup) onChange(first.id);
   }
 
   return (
@@ -267,7 +280,7 @@ export function AiAgentVoice({
       <div>
         <label className="label">Voice gender</label>
         <div role="radiogroup" aria-label="Voice gender" className="flex flex-wrap gap-2">
-          {AI_AGENT_VOICE_GENDERS.map((g) => {
+          {groups.map((g) => {
             const count = ofGender(g).length;
             return (
               <button
@@ -279,7 +292,7 @@ export function AiAgentVoice({
                 onClick={() => chooseGender(g)}
                 className={`rounded-lg border px-3 py-1.5 ${gender === g ? "border-accent bg-tint font-semibold" : "border-line"} disabled:opacity-50`}
               >
-                {AI_AGENT_VOICE_GENDER_LABELS[g]}
+                {g === "v4" ? "Sarvam v4 Flash" : AI_AGENT_VOICE_GENDER_LABELS[g]}
                 <span className="ml-1 text-xs font-normal text-slate-550">({count})</span>
               </button>
             );
@@ -301,14 +314,21 @@ export function AiAgentVoice({
           language={language}
           pace={speed}
           listenOff={!!speedError}
+          showModels={showModels}
           missingNote={
             missing
               ? `This agent's saved voice "${value}" is not offered by ${where} any more. Pick a voice: publishing and calls are refused until you do.`
-              : current && !isGender(current.gender)
+              : current && !isGender(current.gender) && !isV4(current)
                 ? `${current.name} has no gender in ${where}'s list. Pick a listed voice.`
                 : undefined
           }
         />
+      )}
+      {gender === "v4" && (
+        <p className="text-xs text-slate-550">
+          Sarvam Bulbul v4 Flash voices: each is always spoken with the v4 Flash model, and a call falls back to a v3 voice if
+          Sarvam refuses it. Sarvam states no gender for them, so listen before you pick. Every other voice stays on its own model.
+        </p>
       )}
       {current && foreign(current) && (
         <p className="rounded-lg border border-warn/40 bg-warn-soft px-3 py-2 text-xs text-warn" role="alert">

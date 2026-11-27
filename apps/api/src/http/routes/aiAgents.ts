@@ -143,20 +143,23 @@ const guard = <T>(p: Promise<T>) => p.catch(domainError);
 /**
  * An agent's voice must be one the language's voice backend offers WITH a gender (its GET /api/flows/builtin list
  * is the only list): the id, name and gender stored are the backend's own. Never a voice typed in the browser.
+ * A Bulbul v4 Flash voice (model "bulbul:v4-flash" in that list) may have none: Sarvam states no gender for them.
  */
 const lookupVoice: AgentVoiceLookup = async (language, voiceId) => {
   const catalog = await builtins(language);
   const v = (catalog.voices ?? []).find((x) => x.id === voiceId);
   const where = `the ${AI_CALL_LANGUAGE_NAMES[language]} voice backend`;
   if (!v) throw new AppError(400, `The voice "${voiceId}" is not offered by ${where} — pick one of the listed voices`, "bad_request");
-  if (v.gender !== "female" && v.gender !== "male") {
+  const v4 = (v.model ?? "").startsWith("bulbul:v4");
+  if (v.gender !== "female" && v.gender !== "male" && !v4) {
     throw new AppError(
       400,
       `${v.name} has no gender in ${where}'s voice list, so it can't be picked here. Tag it in that backend's SARVAM_TTS_VOICES (e.g. ${v.id}:male) once you have confirmed it.`,
       "bad_request",
     );
   }
-  return { voiceId: v.id, voiceGender: v.gender, voiceDisplayName: (v.name || v.id).slice(0, 40), voiceLanguage: language };
+  const gender = v.gender === "female" || v.gender === "male" ? v.gender : null;
+  return { voiceId: v.id, voiceGender: gender, voiceDisplayName: (v.name || v.id).slice(0, 40), voiceLanguage: language };
 };
 
 const agentParam = z.object({ id: z.string().min(1).max(64) });

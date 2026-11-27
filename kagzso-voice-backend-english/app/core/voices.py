@@ -7,6 +7,10 @@ too). SARVAM_TTS_VOICES replaces the list for this backend (one backend per lang
 voice id (an old flow, or SARVAM_TTS_SPEAKER naming a voice that is not offered) plays as DEFAULT_VOICE.
 Nothing is removed from the Sarvam account; it just isn't offered here.
 
+Bulbul v4 Flash personas (SARVAM_TTS_V4_VOICES, 2026-11-27) come after the stock voices. Each is spoken with
+bulbul:v4-flash whatever SARVAM_TTS_MODEL says (voice_model: the model goes with the voice), and a failed request
+falls back to a stock voice (provider_registry.with_clone_fallback). Every other voice keeps SARVAM_TTS_MODEL.
+
 Cloned voices (SARVAM_TTS_VOICE_<LANG>_FEMALE / _MALE_1 / _MALE_2, "svc-<uuid>") come first, each with its gender.
 The female one is DEFAULT_VOICE. The stock list is unchanged; a failed cloned voice falls back to a stock voice of
 its gender (app/services/provider_registry.with_clone_fallback).
@@ -67,6 +71,46 @@ def offered_voices(voices_env: str, speaker: str, language: str) -> Tuple[List[D
     return voices, wanted if any(v["id"] == wanted for v in voices) else voices[0]["id"]
 
 
+V4_MODEL = "bulbul:v4-flash"
+# The Bulbul v4 Flash personas Sarvam lists per language: (voice id, speaker, style). Source: docs.sarvam.ai
+# api/api-guides-tutorials/text-to-speech/voices, "Tamil (ta-IN) (4 voices)" (checked 2026-11-27). The docs state no
+# gender for them, and no female Tamil persona exists, so none is given a gender here.
+V4_PERSONAS: Dict[str, Tuple[Tuple[str, str, str], ...]] = {
+    "ta": (("aravind_ta_ads", "Aravind", "Ads"), ("aravind_ta_suspense", "Aravind", "Suspense"),
+           ("gokul_ta_narration", "Gokul", "Narration"), ("vijay_ta_narration", "Vijay", "Narration")),
+}
+_V4_PERSONA_RE = re.compile(r"^[a-z]+(?:_[a-z0-9]+){1,3}$")  # name_language_style (as provider_registry._PERSONA_RE)
+
+
+def v4_voice_entries(voices_env: str, language: str, taken: Tuple[str, ...] = ()) -> List[Dict[str, object]]:
+    """The Bulbul v4 Flash voices a backend speaking `language` offers (SARVAM_TTS_V4_VOICES): "auto" = V4_PERSONAS of
+    the language, ""/"off" = none, else "id[:gender],..." (a v3 name such as "ishita" is not a persona: ignored). An id
+    already offered (`taken`) is skipped. A gender only from a tag, never guessed."""
+    raw = (voices_env or "").strip()
+    if raw.lower() in ("", "off", "none"):
+        return []
+    items = [p[0] for p in V4_PERSONAS.get(language, ())] if raw.lower() == "auto" else raw.split(",")
+    known = {pid: (speaker, style) for personas in V4_PERSONAS.values() for pid, speaker, style in personas}
+    label = f"{LANGUAGE_NAMES.get(language, LANGUAGE_NAMES['en'])} (India)"
+    out: List[Dict[str, object]] = []
+    for item in items:
+        voice_id, _, gender = item.strip().partition(":")
+        voice_id, gender = voice_id.strip().lower(), gender.strip().lower()
+        if not voice_id:
+            continue
+        if not _V4_PERSONA_RE.match(voice_id):
+            log.warning("SARVAM_TTS_V4_VOICES: %r is not a Bulbul v4 persona id (name_language_style) - ignored", voice_id)
+            continue
+        if voice_id in taken or any(v["id"] == voice_id for v in out):
+            continue
+        parts = voice_id.split("_")
+        speaker, style = known.get(voice_id) or (parts[0].capitalize(), " ".join(parts[2:] or parts[1:]).capitalize())
+        out.append({"id": voice_id, "name": f"{speaker} ({style})",
+                    **({"gender": gender} if gender in ("male", "female") else {}),
+                    "language": label, "model": V4_MODEL, "style": style.lower()})
+    return out
+
+
 def cloned_voice_entries(cfg: Settings) -> List[Dict[str, object]]:
     """This backend's cloned voices as voice-list entries ("cloned": True; the picker labels them "Custom"), female
     first, then male, named by SARVAM_TTS_VOICE_*_NAME. A setting that is set but holds no cloned voice id is reported
@@ -93,8 +137,13 @@ STOCK_VOICES, STOCK_DEFAULT_VOICE = offered_voices(settings.SARVAM_TTS_VOICES, s
                                                    settings.call_language)
 STOCK_VOICE_IDS: Tuple[str, ...] = tuple(v["id"] for v in STOCK_VOICES)
 CLONED_VOICES = cloned_voice_entries(settings)
+V4_VOICES = v4_voice_entries(settings.SARVAM_TTS_V4_VOICES, settings.call_language,
+                             tuple(str(v["id"]) for v in CLONED_VOICES) + STOCK_VOICE_IDS)
+V4_VOICE_IDS = frozenset(str(v["id"]) for v in V4_VOICES)
+if V4_VOICES:  # the list mixes models: each stock voice says its own (a list without v4 voices is exactly as before)
+    STOCK_VOICES = [{**v, "model": settings.SARVAM_TTS_MODEL} for v in STOCK_VOICES]
 
-VOICES: List[Dict[str, object]] = CLONED_VOICES + STOCK_VOICES
+VOICES: List[Dict[str, object]] = CLONED_VOICES + STOCK_VOICES + V4_VOICES
 # The language's default voice: the female cloned voice, else the first cloned voice, else the stock default
 # (settings.tts_speaker, as one list). An AI agent with no saved voice speaks in it.
 DEFAULT_VOICE: str = next((str(v["id"]) for v in CLONED_VOICES if v["gender"] == "female"),
@@ -112,6 +161,23 @@ def offered_voice(voice_id: Optional[str]) -> Optional[str]:
 def voice_or_default(voice_id: Optional[str]) -> str:
     """The voice a call actually uses for this id: itself when offered, else DEFAULT_VOICE."""
     return offered_voice(voice_id) or DEFAULT_VOICE
+
+
+def is_v4_voice(voice_id: Optional[str]) -> bool:
+    """An offered Bulbul v4 Flash persona (SARVAM_TTS_V4_VOICES)."""
+    return (voice_id or "").strip().lower() in V4_VOICE_IDS
+
+
+def voice_model(voice_id: Optional[str], default_model: str) -> str:
+    """The Bulbul model a stock voice is spoken with: bulbul:v4-flash for an offered v4 persona, else `default_model`
+    (SARVAM_TTS_MODEL), so the right model and speaker always go together."""
+    return V4_MODEL if is_v4_voice(voice_id) else default_model
+
+
+def voice_gender(voice_id: Optional[str]) -> str:
+    """The offered voice's gender ("male" / "female"), or "" when it has none."""
+    v = (voice_id or "").strip().lower()
+    return next((str(e.get("gender") or "") for e in VOICES if e["id"] == v), "")
 
 
 def stock_voice_or_default(voice_id: Optional[str]) -> str:

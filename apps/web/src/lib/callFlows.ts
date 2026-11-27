@@ -78,6 +78,10 @@ export interface VoiceOption {
   cloned?: boolean;
   /** A cloned voice's sample language as Sarvam has it (e.g. "en-IN"), when the voice backend knows it. */
   source_language?: string;
+  /** The Sarvam model this voice is spoken with ("bulbul:v3", "bulbul:v4-flash"), when the list mixes models. */
+  model?: string;
+  /** A Bulbul v4 persona's style ("narration", "ads" ...). */
+  style?: string;
 }
 
 export interface CallFlowPreview {

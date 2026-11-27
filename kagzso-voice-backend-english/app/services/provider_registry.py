@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, settings as default_settings
 from app.core.logging import call_id_var, get_logger, redact_secret
-from app.core.voices import VOICE_IDS
+from app.core.voices import VOICE_IDS, voice_gender
 from app.db.database import session_factory
 from app.db.models import AiProviderAudit, AiProviderSelection, AiProviderSetting, utcnow
 from app.services import provider_secrets as secrets
@@ -518,6 +518,19 @@ class ClonedVoiceFallback(FallbackTTS):
         return await self.fallback.open_stream(pace=pace)
 
 
+class V4VoiceFallback(ClonedVoiceFallback):
+    """One call's Bulbul v4 Flash persona (SARVAM_TTS_V4_VOICES) backed the same way by a stock bulbul voice: a v4
+    request that fails before any audio (persona refused, no account access, no audio in time) is said again in the
+    stock voice, and the rest of the call stays on it."""
+
+    def _warn(self, what: str, exc: TTSError) -> None:
+        self._on_fallback = True
+        log.warning("V4 VOICE FALLBACK (call %s): %s with %s voice %s failed (%s%s: %s) - this call continues in the "
+                    "stock voice %s", call_id_var.get(), what, getattr(self.primary, "model", "?"),
+                    getattr(self.primary, "voice_id", "?"), exc.kind, f" {exc.status_code}" if exc.status_code else "",
+                    str(exc)[:200], getattr(self.fallback, "voice_id", "?"))
+
+
 _CLOSING_STREAMS: "set[asyncio.Task]" = set()  # abandoned cloned streams being closed (strong references)
 
 
@@ -677,6 +690,15 @@ def with_clone_fallback(tts: TTSProvider) -> TTSProvider:
             log.warning("Cloned voice %s has no gender on this backend (not in SARVAM_TTS_VOICE_%s_*): its fallback is "
                         "the default voice %s, which may not match it", tts.voice_id, tts.cfg.call_language.upper(), stock)
         return ClonedVoiceFallback(tts, SarvamTTS(tts.cfg, voice_id=stock, client=tts._client, exact_voice=True))
+    if isinstance(tts, SarvamTTS) and tts.v4_persona:
+        # A Bulbul v4 Flash persona: the stock voice of its tagged gender (SARVAM_TTS_FALLBACK_VOICE_*) on
+        # SARVAM_TTS_MODEL. Untagged (Sarvam states no gender): the default stock voice.
+        gender = voice_gender(tts.voice_id)
+        stock = tts.cfg.fallback_speaker(gender)
+        if not gender:
+            log.warning("Bulbul v4 voice %s has no gender in SARVAM_TTS_V4_VOICES: its fallback is the default voice %s, "
+                        "which may not match it", tts.voice_id, stock)
+        return V4VoiceFallback(tts, SarvamTTS(tts.cfg, voice_id=stock, client=tts._client, exact_voice=True))
     return tts
 
 
@@ -724,10 +746,11 @@ def _call_providers_class():
             agent's voice on the working bulbul:v3 setup for every line - one voice, never switching mid-call."""
             base = super().tts_for_voice(voice_id)
             if self.fixed_tts is not None:
+                model = getattr(base, "model", "bulbul:v3")
                 log.warning("AI Providers TTS %s / %s not used for this AI Agent call: the agent's saved voice %s "
-                            "is a bulbul:v3 speaker (calls with it use bulbul:v3)",
+                            "is a %s speaker (calls with it use %s)",
                             getattr(getattr(self.fixed_tts, "cfg", None), "SARVAM_TTS_MODEL", "?"),
-                            getattr(self.fixed_tts, "voice_id", "?"), voice_id)
+                            getattr(self.fixed_tts, "voice_id", "?"), voice_id, model, model)
             return base
 
     return CallProviders
@@ -740,7 +763,7 @@ def _tts_view(tts: TTSProvider) -> Dict[str, Any]:
     cfg = getattr(tts, "cfg", None)
     view: Dict[str, Any] = {"provider": getattr(tts, "name", type(tts).__name__)}
     if cfg is not None:
-        view["model"] = "voice-clone" if getattr(tts, "cloned", False) else cfg.SARVAM_TTS_MODEL
+        view["model"] = "voice-clone" if getattr(tts, "cloned", False) else getattr(tts, "model", cfg.SARVAM_TTS_MODEL)
         if getattr(tts, "cloned", False):
             view["clone_stream"] = (cfg.SARVAM_TTS_CLONE_STREAM or "rest").strip().lower()
             view["first_audio_limit_s"] = cfg.SARVAM_TTS_CLONE_FIRST_AUDIO_SECONDS

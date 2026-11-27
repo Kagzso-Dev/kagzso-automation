@@ -268,6 +268,70 @@ describe("Settings → AI Voice", () => {
     });
   });
 
+  describe("Bulbul v4 Flash voices (the Tamil backend's SARVAM_TTS_V4_VOICES)", () => {
+    const v3 = (id: string, name: string, gender: string) => Object.assign(TA(id, name, gender), { model: "bulbul:v3" });
+    const v4 = (id: string, name: string, style: string, gender?: string) =>
+      Object.assign(TA(id, name, gender), { model: "bulbul:v4-flash", style });
+    const STOCK = [v3("roopa", "Roopa", "female"), v3("ishita", "Ishita", "female"), v3("ritu", "Ritu", "female"), v3("ratan", "Ratan", "male")];
+    const V4 = [
+      v4("aravind_ta_ads", "Aravind (Ads)", "ads"),
+      v4("aravind_ta_suspense", "Aravind (Suspense)", "suspense"),
+      v4("gokul_ta_narration", "Gokul (Narration)", "narration"),
+      v4("vijay_ta_narration", "Vijay (Narration)", "narration"),
+    ];
+    const group = () => within(screen.getByRole("radiogroup", { name: "Voice gender" })).getByRole("radio", { name: /^Sarvam v4 Flash/ });
+
+    it("a Sarvam v4 Flash group lists the four Tamil v4 voices; Female / Male keep their voices, each labelled with its model", async () => {
+      catalogVoices = [...STOCK, ...V4];
+      form();
+      await waitFor(() => expect(names()).toHaveLength(3));
+      expect(names()[0]).toBe("Roopav3Tamil (India) · female · default");
+      expect(genderButton("Male").textContent).toBe("Male(1)");
+      expect(group().textContent).toBe("Sarvam v4 Flash(4)");
+      fireEvent.click(group());
+      expect(names()).toEqual([
+        "Aravind (Ads)v4 FlashTamil (India)",
+        "Aravind (Suspense)v4 FlashTamil (India)",
+        "Gokul (Narration)v4 FlashTamil (India)",
+        "Vijay (Narration)v4 FlashTamil (India)",
+      ]); // no gender shown: Sarvam states none
+      expect(checked()).toEqual(["Aravind (Ads)v4 FlashTamil (India)"]);
+      expect(screen.getByText(/always spoken with the v4 Flash model/)).toBeTruthy();
+    });
+
+    it("Vijay narration: Listen speaks it and picking it saves its exact id", async () => {
+      catalogVoices = [...STOCK, ...V4];
+      form();
+      await waitFor(() => expect(names()).toHaveLength(3));
+      fireEvent.click(group());
+      fireEvent.click(screen.getByRole("button", { name: "Listen to Vijay (Narration)" }));
+      await waitFor(() => expect(sent.find((s) => s.url === "/api/voices/preview")).toBeTruthy());
+      expect(sent.find((s) => s.url === "/api/voices/preview")!.body).toMatchObject({ voice_id: "vijay_ta_narration", language: "ta" });
+      fireEvent.click(within(voiceList()).getAllByRole("radio")[3]!);
+      fill("Agent name (for your list)", "ABC Hospital — Vijay");
+      fill("Calling objective", "Introduce AI for hospitals.");
+      fireEvent.click(screen.getByRole("button", { name: "Create AI agent" }));
+      await waitFor(() => expect(sent.find((s) => s.url === "/api/ai-agents")).toBeTruthy());
+      expect(sent.find((s) => s.url === "/api/ai-agents")!.body).toMatchObject({ agent: { voiceId: "vijay_ta_narration" } });
+    });
+
+    it("an agent saved with a v4 voice opens on it; an existing agent keeps its saved v3 voice", async () => {
+      catalogVoices = [...STOCK, ...V4];
+      form({ ...AGENT, voiceId: "gokul_ta_narration", voiceGender: null, voiceDisplayName: "Gokul (Narration)" });
+      await waitFor(() => expect(checked()).toEqual(["Gokul (Narration)v4 FlashTamil (India)"]));
+      cleanup();
+      form(AGENT);
+      await waitFor(() => expect(checked()).toEqual(["Rituv3Tamil (India) · female"]));
+    });
+
+    it("a list without v4 voices: no v4 group and no model labels (as before)", async () => {
+      form();
+      await waitFor(() => expect(names()).toHaveLength(4));
+      expect(names().some((n) => /v3|v4/.test(n))).toBe(false);
+      expect(within(screen.getByRole("radiogroup", { name: "Voice gender" })).getAllByRole("radio")).toHaveLength(2);
+    });
+  });
+
   describe("AI Conversation Instructions (no built-in text, every language)", () => {
     const box = () => screen.getByPlaceholderText(/How this agent talks and behaves/) as HTMLTextAreaElement;
 
