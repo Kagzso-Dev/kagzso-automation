@@ -600,3 +600,30 @@ describe("identity opening (2026-11-27): only an agent that switches it on, Tami
     expect(withIt(language)).toEqual(compileAgentFlow(input(language)));
   });
 });
+
+describe("speak only Tamil (2026-11-27): one agent's own switch, Tamil only", () => {
+  it("on: the flow gets the voice backend's pure language style, and nothing else changes", () => {
+    const before = compileAgentFlow(input("ta"));
+    const out = compileAgentFlow(input("ta", { agent: agent({ pureLanguage: true }) }));
+    expect(callFlowDefinition.safeParse(out).success).toBe(true);
+    expect(out.language_style).toBe("pure");
+    const { language_style: _style, ...rest } = out;
+    expect(rest).toEqual(before);
+  });
+
+  it("off or left out: no language style, exactly as before", () => {
+    expect(compileAgentFlow(input("ta")).language_style).toBeUndefined();
+    expect(compileAgentFlow(input("ta", { agent: agent({ pureLanguage: false }) }))).toEqual(compileAgentFlow(input("ta")));
+  });
+
+  it.each(["en", "hi", "kn"] as const)("%s: switching it on changes nothing", (language) => {
+    expect(compileAgentFlow(input(language, { agent: agent({ pureLanguage: true }) }))).toEqual(compileAgentFlow(input(language)));
+  });
+
+  it("works together with the identity opening", () => {
+    const out = compileAgentFlow(input("ta", { agent: agent({ pureLanguage: true, identityOpening: true }) }));
+    expect(out.language_style).toBe("pure");
+    expect(out.autonomous?.fixed_greeting).toBe(true);
+    expect(out.greeting.text.startsWith("Hello. {{time_greeting}}")).toBe(true);
+  });
+});

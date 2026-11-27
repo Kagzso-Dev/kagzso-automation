@@ -701,6 +701,21 @@ describe("Identity opening (2026-11-27): one Tamil agent's own switch, followed 
     expect((await call(offFlow))[3]).toBeUndefined(); // another agent: exactly as before
   });
 
+  it("speak only Tamil: its own switch in Settings, published as the pure style; off keeps the hash", async () => {
+    const a = await createAgent("ta", { ...AGENT, pureLanguage: true });
+    expect(((await (await req("GET", `/api/ai-agents/${a.id}`)).json()) as { pureLanguage: boolean }).pureLanguage).toBe(true);
+    expect(T("setting").find((s) => s.key === `aiAgentPureLanguage:${a.id}`)?.value).toBe(true);
+    expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
+    expect((previews.at(-1)!.flow as { language_style?: string }).language_style).toBe("pure");
+    const plain = await createAgent("ta");
+    expect((await req("POST", `/api/ai-agents/${plain.id}/publish`)).status).toBe(200);
+    expect(previews.at(-1)!.flow).not.toHaveProperty("language_style");
+    await req("PUT", `/api/ai-agents/${plain.id}`, { agent: { ...AGENT, pureLanguage: false } });
+    expect(((await (await req("GET", `/api/ai-agents/${plain.id}`)).json()) as { unpublishedChanges: boolean }).unpublishedChanges).toBe(false);
+    const en = await createAgent("en", { ...AGENT, pureLanguage: true });
+    expect(T("setting").some((s) => s.key === `aiAgentPureLanguage:${en.id}`)).toBe(false);
+  });
+
   it("a language without an identity opening never keeps it", async () => {
     const a = await createAgent("en", { ...AGENT, identityOpening: true });
     expect((await get(a.id)).identityOpening).toBe(false);

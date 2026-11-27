@@ -177,6 +177,12 @@ export const aiAgentInput = z
      * Absent / false = the opening as before. Only this agent changes, and only once it is published again.
      */
     identityOpening: z.boolean().optional(),
+    /**
+     * Autonomous, in a language in AI_AGENT_PURE_LANGUAGES (Tamil): every reply in that language only (the flow's
+     * "pure" language style, as a Call Flow can have): its own script, English only for names, the company name and
+     * words people only say in English, and never a whole reply in English. Absent / false = as before (mixed).
+     */
+    pureLanguage: z.boolean().optional(),
   })
   .strict()
   .superRefine((a, ctx) => {
@@ -381,6 +387,13 @@ export const AI_AGENT_IDENTITY_OPENINGS: Partial<Record<AiCallLanguage, string>>
     "Hello. {{time_greeting}}, {{title_to_use}}. நான் {agent}, {company}-ல இருந்து பேசுறேன். " +
     "Am I speaking with {{customer_name}}, {{title_to_use}}?",
 };
+
+/** The languages whose agents can speak only that language (pureLanguage). */
+export const AI_AGENT_PURE_LANGUAGES: readonly AiCallLanguage[] = ["ta"];
+
+export function aiAgentPureLanguageSupported(language: AiCallLanguage): boolean {
+  return AI_AGENT_PURE_LANGUAGES.includes(language);
+}
 
 export function aiAgentIdentityOpeningSupported(language: AiCallLanguage): boolean {
   return !!AI_AGENT_IDENTITY_OPENINGS[language];

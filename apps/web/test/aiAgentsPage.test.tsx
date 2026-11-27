@@ -189,6 +189,25 @@ describe("AI Agents page", () => {
     expect(screen.queryByRole("checkbox", { name: /fixed identity greeting/ })).toBeNull();
   });
 
+  it("speak only Tamil: a Tamil agent's own switch, off by default and sent when ticked; English has none", async () => {
+    page("ta");
+    fireEvent.click(await screen.findByRole("button", { name: "Create agent" }));
+    const box = screen.getByRole("checkbox", { name: /Speak only Tamil/ }) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    fireEvent.click(box);
+    fireEvent.change(field("Agent name"), { target: { value: "Kayal" } });
+    fireEvent.change(field("Calling objective"), { target: { value: "Introduce AI and automation." } });
+    const create = screen.getByRole("button", { name: "Create AI agent" }) as HTMLButtonElement;
+    await waitFor(() => expect(create.disabled).toBe(false));
+    fireEvent.click(create);
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect((posts[0]!.body.agent as Record<string, unknown>).pureLanguage).toBe(true);
+    cleanup();
+    page("en");
+    fireEvent.click(await screen.findByRole("button", { name: "Create agent" }));
+    expect(screen.queryByRole("checkbox", { name: /Speak only/ })).toBeNull();
+  });
+
   it("a language without reviewed opening lines offers guided agents only", async () => {
     page("te");
     expect(await screen.findByText(/only guided agents/)).toBeTruthy();

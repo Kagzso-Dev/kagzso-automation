@@ -10,6 +10,7 @@ import {
   AI_AGENT_DEFAULTS,
   AI_KNOWLEDGE_MAX_APPROVED,
   aiAgentIdentityOpeningSupported,
+  aiAgentPureLanguageSupported,
   aiCallLanguage,
   callFlowDefinition,
   type AiAgentConfig,
@@ -87,12 +88,27 @@ async function saveIdentityOpening(agentId: string, language: AiCallLanguage, on
   else await prisma.setting.deleteMany({ where: { key: identityOpeningKey(agentId) } });
 }
 
+/** Likewise "speak only Tamil" (pureLanguage): in Settings, absent = off, only a language that has it. */
+const pureLanguageKey = (agentId: string) => `aiAgentPureLanguage:${agentId}`;
+
+async function agentPureLanguage(a: AiAgent): Promise<boolean> {
+  if (!aiAgentPureLanguageSupported(aiCallLanguage.parse(a.language))) return false;
+  return (await getSetting<unknown>(pureLanguageKey(a.id), false)) === true;
+}
+
+async function savePureLanguage(agentId: string, language: AiCallLanguage, on: boolean | undefined): Promise<void> {
+  if (on === undefined) return;
+  if (on && aiAgentPureLanguageSupported(language)) await setSetting(pureLanguageKey(agentId), true);
+  else await prisma.setting.deleteMany({ where: { key: pureLanguageKey(agentId) } });
+}
+
 async function agentConfig(a: AiAgent): Promise<AiAgentConfig> {
   return {
     ...configFromRow(a),
     voiceSpeed: await getSetting(voiceSpeedKey(a.id), AI_AGENT_DEFAULTS.voiceSpeed),
     replySpeed: await agentReplySpeed(a.id, a.language),
     identityOpening: await agentIdentityOpening(a),
+    pureLanguage: await agentPureLanguage(a),
   };
 }
 
@@ -207,6 +223,7 @@ export async function createAgent(
   await setSetting(voiceSpeedKey(a.id), c.voiceSpeed);
   await saveAgentReplySpeed(a.id, language, c.replySpeed);
   await saveIdentityOpening(a.id, language, c.identityOpening);
+  await savePureLanguage(a.id, language, c.pureLanguage);
   return view(a);
 }
 
@@ -220,6 +237,7 @@ export async function updateAgent(id: string, c: AiAgentConfig, lookupVoice: Age
   await setSetting(voiceSpeedKey(a.id), c.voiceSpeed);
   await saveAgentReplySpeed(a.id, language, c.replySpeed);
   await saveIdentityOpening(a.id, language, c.identityOpening);
+  await savePureLanguage(a.id, language, c.pureLanguage);
   return view(a);
 }
 
@@ -470,11 +488,16 @@ export async function agentInputsHash(a: AiAgent): Promise<string> {
   // No voice picked: hashed exactly as before that setting existed. The reply speed is read when a call is dialled, not
   // published, so it stays out: hashing it would show every published agent as changed.
   // Likewise the identity opening: off, an agent is hashed exactly as before it existed.
-  const { voiceId, replySpeed: _dialTimeOnly, identityOpening, ...config } = await agentConfig(a);
+  const { voiceId, replySpeed: _dialTimeOnly, identityOpening, pureLanguage, ...config } = await agentConfig(a);
   return definitionHash({
     // A language's own compiler revision (Tamil) changes only that language's hash: English agents stay published.
     compiler: aiAgentCompilerVersion(a.language),
-    config: { ...config, ...(voiceId ? { voiceId } : {}), ...(identityOpening ? { identityOpening } : {}) },
+    config: {
+      ...config,
+      ...(voiceId ? { voiceId } : {}),
+      ...(identityOpening ? { identityOpening } : {}),
+      ...(pureLanguage ? { pureLanguage } : {}),
+    },
     knowledge: knowledge.map((k) => [k.kind, k.topic, k.text, k.questions, k.always]),
   });
 }

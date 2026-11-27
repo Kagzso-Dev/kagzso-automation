@@ -14,6 +14,7 @@ import {
   AI_AGENT_IDENTITY_OPENINGS,
   AI_CALL_LANGUAGE_NAMES,
   aiAgentInput,
+  aiAgentPureLanguageSupported,
   aiAgentLanguageSupported,
   femaleNameForMaleVoice,
   instructionPlaceholders,
@@ -81,6 +82,7 @@ function initial(a: AiAgentView | null, autonomousOk: boolean, language: AiCallL
     voiceSpeed: a?.voiceSpeed ?? AI_AGENT_DEFAULTS.voiceSpeed,
     replySpeed: a?.replySpeed ?? null,
     identityOpening: a?.identityOpening ?? false,
+    pureLanguage: a?.pureLanguage ?? false,
   };
 }
 
@@ -122,6 +124,7 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
     voiceSpeed: f.mode === "autonomous" ? f.voiceSpeed : (agent?.voiceSpeed ?? AI_AGENT_DEFAULTS.voiceSpeed),
     replySpeed: f.mode === "autonomous" ? f.replySpeed : (agent?.replySpeed ?? null),
     identityOpening: f.mode === "autonomous" ? f.identityOpening : (agent?.identityOpening ?? false),
+    pureLanguage: f.mode === "autonomous" ? f.pureLanguage : (agent?.pureLanguage ?? false),
   };
   const check = aiAgentInput.safeParse(body);
   const fieldError = (k: string) => (!check.success ? check.error.issues.find((i) => i.path[0] === k)?.message : undefined);
@@ -310,6 +313,24 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
                     Said word for word, e.g. “{identityLine}” Good morning / afternoon / evening follows India time; Sir or Madam follows the
                     contact&apos;s gender (sir when it is not specified, never guessed from the name). Without a customer name the question is left
                     out. The AI never repeats the introduction. Takes effect once the agent is published again.
+                  </span>
+                </span>
+              </label>
+            )}
+            {aiAgentPureLanguageSupported(language) && (
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={f.pureLanguage}
+                  onChange={(e) => set("pureLanguage", e.target.checked)}
+                />
+                <span>
+                  <span className="font-medium">Speak only {AI_CALL_LANGUAGE_NAMES[language]}</span>
+                  <span className="block text-xs text-slate-550">
+                    Every reply in {AI_CALL_LANGUAGE_NAMES[language]} script, even when the customer answers in English: English only for names,
+                    the company name and words like WhatsApp or email. Off = {AI_CALL_LANGUAGE_NAMES[language]} mixed with everyday English words.
+                    The fixed greeting above is not changed. Takes effect once the agent is published again.
                   </span>
                 </span>
               </label>

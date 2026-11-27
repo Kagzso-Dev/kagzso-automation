@@ -36,6 +36,7 @@ import {
   AI_AGENT_IDENTITY_OPENINGS,
   AI_AGENT_OPENINGS,
   AI_AGENT_PERSONALITY_TONE,
+  aiAgentPureLanguageSupported,
   AI_KNOWLEDGE_MAX_APPROVED,
   businessDisplayName,
   CALL_FLOW_MAX_BLOCK_CHARS,
@@ -420,6 +421,8 @@ export function compileAgentFlow(input: CompileInput): CallFlowDefinition {
     // The picked voice speaks every line of every call of this flow (greeting, replies, fixed lines).
     ...(input.voice ? { voice_id: input.voice.id } : {}),
     name: oneLine(agent.name).slice(0, 100) || "AI Agent",
+    // "Speak only Tamil" (pureLanguage): the voice backend's pure language style. Off = no style, as before (mixed).
+    ...(agent.pureLanguage && aiAgentPureLanguageSupported(language) ? { language_style: "pure" as const } : {}),
     greeting: { text: greeting },
     blocks,
     limits: { max_duration_sec: agent.maxDurationSec },
