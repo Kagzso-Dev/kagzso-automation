@@ -101,6 +101,8 @@ FIXED_GREETING_VARIABLE = "flow_fixed_greeting"
 # Only these calls get the opening's own titles and lose its question when there is no name (opening_line); a greeting
 # that AGENT_FIXED_GREETING makes fixed is said exactly as before.
 IDENTITY_OPENING_VARIABLE = "flow_identity_opening"
+# Identity opening + AI Greeting Delay: the most the greeting waits past the delay for the customer to stop talking.
+IDENTITY_GREETING_MAX_EXTRA_SEC = 8.0
 # Set with it when the customer has a name, so the opening asked whether this is them: the prompt then says the question
 # was asked and the first reply answers it (llm_service.GREETING_IDENTITY_RULES).
 GREETING_IDENTITY_VARIABLE = "flow_greeting_identity"
@@ -1569,6 +1571,7 @@ class CallSession:
         self.greeting_delay = greeting_delay_of(ctx.variables)  # seconds after answer; None = configured timing
         self._answered_mono: Optional[float] = None  # the answer, on the monotonic clock (set at stream start)
         self._opening_speech = False  # the customer's current words began before the greeting (AI Greeting Delay)
+        self._opening_words_end: Optional[float] = None  # when the customer's words before the greeting ended
         self._bg_tasks: Set[asyncio.Task] = set()
         self._last_prewarm = 0.0
         self._db_queue: "asyncio.Queue[Callable[[AsyncSession], Awaitable[None]]]" = asyncio.Queue()
@@ -1887,6 +1890,7 @@ class CallSession:
             return
         self._last_speech_end = t0
         if opening:
+            self._opening_words_end = t0
             # AI Greeting Delay: words that began before the greeting don't start, move or cut it
             # (it plays at the delay); only a do-not-call / AI question among them gets the script.
             self._spawn(self._check_opening_words(ev.audio, stt_stream, t0))
@@ -2499,17 +2503,33 @@ class CallSession:
         happens before (the customer's first words don't start or move it). Once per call; never
         after a hang-up or after a do-not-call / AI question took the opening (_check_opening_words)."""
         with call_context(self.call_id):
-            due = (self._answered_mono or time.monotonic()) + (self.greeting_delay or 0.0)
+            base = (self._answered_mono or time.monotonic()) + (self.greeting_delay or 0.0)
+            # Identity opening (an AI Agent's fixed identity greeting) only: never over the customer's words.
+            wait_for_words = (self.ctx.variables or {}).get(IDENTITY_OPENING_VARIABLE) == "true"
+            due = self._identity_greeting_due(base) if wait_for_words else base
             while not self._closed:
                 await asyncio.sleep(max(0.0, min(0.05, due - time.monotonic())))
                 # Agents without a fixed greeting answer the customer's first words themselves.
                 if self._opening_taken or self._agent_spoke or (not self.ctx.first_message and self._customer_spoke):
                     return
+                if wait_for_words:
+                    due = self._identity_greeting_due(base)
                 if time.monotonic() < due:
                     continue
                 log.info("AI greeting delay %.1fs after answer - greeting", self.greeting_delay)
                 self._greet_now("delay")
                 return
+
+    def _identity_greeting_due(self, base: float) -> float:
+        """When an identity-opening greeting starts: at the AI Greeting Delay, but never while the customer is
+        speaking - if they spoke first ("Hello?"), the same delay counts again from the end of their words.
+        A line that never goes quiet still gets the greeting IDENTITY_GREETING_MAX_EXTRA_SEC after the delay."""
+        cap = base + IDENTITY_GREETING_MAX_EXTRA_SEC
+        if self.endpointer.in_speech:
+            return cap
+        if self._opening_words_end is not None:
+            return min(cap, max(base, self._opening_words_end + (self.greeting_delay or 0.0)))
+        return base
 
     async def _check_opening_words(self, audio_pcm: bytes, stt_stream: Optional[STTStream], t0: float) -> None:
         """Words the customer said before the greeting (AI Greeting Delay): recorded, not answered -
