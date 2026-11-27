@@ -1,7 +1,9 @@
 """AI Greeting Delay with a Tamil AI Agent's identity opening (2026-11-27): the greeting never starts over the
 customer's words. It plays at the set delay after the answer; if the customer is talking then, it waits until they
-stop, and if they spoke first ("Hello?") the same delay counts again from the end of their words. Every other agent
-keeps the delay exactly as before (tests/test_greeting_delay.py). Fake STT / LLM / TTS / Plivo: nothing real is called."""
+stop, and if they spoke first ("Hello?") the same delay counts again from the end of their words - but never more than
+IDENTITY_GREETING_MAX_EXTRA_SEC (1 s) past the delay, so a 2 s delay greets at 2-3 s (live calls had greeted at 10 s).
+Every other agent keeps the delay exactly as before (tests/test_greeting_delay.py). Fake STT / LLM / TTS / Plivo:
+nothing real is called."""
 from __future__ import annotations
 
 import json
@@ -61,11 +63,11 @@ def test_talking_when_the_delay_ends_waits_until_they_stop(client, auth, fakes, 
         ws.send_text(json.dumps(_start_msg()))
         time.sleep(0.3)
         _send_audio(ws, tone_mulaw(1200))  # the customer starts talking and is still talking at 1 s
-        time.sleep(1.7)
-        assert greeted_at == []  # 2 s in: not greeted over their words
+        time.sleep(1.0)
+        assert greeted_at == []  # 1.3 s in: not greeted over their words
         _send_audio(ws, silence_mulaw(900))  # they stop
         events = _receive_until_checkpoint(ws)
-    assert len(greeted_at) == 1 and 2.0 <= greeted_at[0] < 3.5  # the 1 s delay again after their words ended
+    assert len(greeted_at) == 1 and 1.3 <= greeted_at[0] < 2.3  # after their words, within 1 s of the delay
     assert "clearAudio" not in events
     lines = _lines(sync_engine, call_id)
     assert len(lines) == 1 and lines[0].startswith("Hello. Good")
@@ -82,12 +84,12 @@ def test_hello_first_then_the_delay_counts_from_the_end_of_their_words(
         time.sleep(0.4)
         _send_audio(ws, silence_mulaw(900))  # ... ends at about 1.6 s
         _receive_until_checkpoint(ws)
-    # Not at 2 s (0.4 s after their words) but the full 2 s after they stopped.
-    assert len(greeted_at) == 1 and 2.9 <= greeted_at[0] < 4.3
+    # Not at 2 s (0.4 s after their words): the delay counts again from their words, capped at 1 s past the delay.
+    assert len(greeted_at) == 1 and 2.6 <= greeted_at[0] < 3.4
 
 
 def test_a_line_that_never_goes_quiet_still_gets_the_greeting(client, auth, fakes, monkeypatch, greeted_at):
-    monkeypatch.setattr(cs, "IDENTITY_GREETING_MAX_EXTRA_SEC", 1.0)
+    assert cs.IDENTITY_GREETING_MAX_EXTRA_SEC == 1.0  # a 2 s delay greets at 2-3 s, never 10 s
     call_id, token = _dial(client, auth, _identity_flow(monkeypatch), greeting_delay_sec=0.5)
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         ws.send_text(json.dumps(_start_msg()))

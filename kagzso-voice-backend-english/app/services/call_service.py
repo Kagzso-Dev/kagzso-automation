@@ -102,7 +102,9 @@ FIXED_GREETING_VARIABLE = "flow_fixed_greeting"
 # that AGENT_FIXED_GREETING makes fixed is said exactly as before.
 IDENTITY_OPENING_VARIABLE = "flow_identity_opening"
 # Identity opening + AI Greeting Delay: the most the greeting waits past the delay for the customer to stop talking.
-IDENTITY_GREETING_MAX_EXTRA_SEC = 8.0
+# 1 s (was 8 s): a 2 s delay greets at 2-3 s. Callers who hear silence keep saying "Hello?", and each one pushed the
+# greeting back until the cap, so live calls greeted at 10 s.
+IDENTITY_GREETING_MAX_EXTRA_SEC = 1.0
 # Set with it when the customer has a name, so the opening asked whether this is them: the prompt then says the question
 # was asked and the first reply answers it (llm_service.GREETING_IDENTITY_RULES).
 GREETING_IDENTITY_VARIABLE = "flow_greeting_identity"
