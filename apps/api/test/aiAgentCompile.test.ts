@@ -569,3 +569,34 @@ describe("Tamil: no 'the team will confirm' (approved 2026-11-26): Tamil only", 
     expect(text(language, "customer_business")).not.toContain("right now. Never say that the team");
   });
 });
+
+describe("identity opening (2026-11-27): only an agent that switches it on, Tamil only", () => {
+  const TAMIL_LINE =
+    "Hello. {{time_greeting}}, {{title_to_use}}. நான் Thaara, Kagzso Technology Services-ல இருந்து பேசுறேன். " +
+    "Am I speaking with {{customer_name}}, {{title_to_use}}?";
+  const withIt = (language: AiCallLanguage, over: Partial<AiAgentConfig> = {}) =>
+    compileAgentFlow(input(language, { agent: agent({ identityOpening: true, ...over }) }));
+
+  it("a Tamil agent with it on opens with the line, word for word, and nothing else in its flow changes", () => {
+    const before = compileAgentFlow(input("ta"));
+    const out = withIt("ta");
+    expect(callFlowDefinition.safeParse(out).success).toBe(true);
+    expect(out.greeting.text).toBe(TAMIL_LINE);
+    expect(out.autonomous).toEqual({ ...before.autonomous, fixed_greeting: true });
+    expect({ ...out, greeting: before.greeting, autonomous: before.autonomous }).toEqual(before);
+  });
+
+  it("the agent's own executive and company names go into it", () => {
+    const out = withIt("ta", { executiveName: "Kayal", companyName: "Kagzso Automation" });
+    expect(out.greeting.text).toBe(TAMIL_LINE.replace("Thaara", "Kayal").replace("Kagzso Technology Services", "Kagzso Automation"));
+  });
+
+  it("off, or left out, the flow is exactly as before (so are other agents)", () => {
+    expect(compileAgentFlow(input("ta", { agent: agent({ identityOpening: false }) }))).toEqual(compileAgentFlow(input("ta")));
+    expect(compileAgentFlow(input("ta")).autonomous).not.toHaveProperty("fixed_greeting");
+  });
+
+  it.each(["en", "hi", "kn"] as const)("%s has no identity opening: switching it on changes nothing", (language) => {
+    expect(withIt(language)).toEqual(compileAgentFlow(input(language)));
+  });
+});

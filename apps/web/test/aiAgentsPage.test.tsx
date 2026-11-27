@@ -167,6 +167,28 @@ describe("AI Agents page", () => {
     expect(console.error).not.toHaveBeenCalled();
   });
 
+  it("identity opening: a Tamil agent's own switch, off by default, with the line it would say; no other language shows it", async () => {
+    page("ta");
+    fireEvent.click(await screen.findByRole("button", { name: "Create agent" }));
+    const box = screen.getByRole("checkbox", { name: /Open every call with the fixed identity greeting/ }) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    expect(
+      screen.getByText(/Hello\. Good morning, sir\. நான் Thaara, Kagzso Technology Services-ல இருந்து பேசுறேன்\. Am I speaking with Kumar, sir\?/),
+    ).toBeTruthy();
+    fireEvent.click(box);
+    fireEvent.change(field("Agent name"), { target: { value: "Kayal" } });
+    fireEvent.change(field("Calling objective"), { target: { value: "Introduce AI and automation." } });
+    const create = screen.getByRole("button", { name: "Create AI agent" }) as HTMLButtonElement;
+    await waitFor(() => expect(create.disabled).toBe(false));
+    fireEvent.click(create);
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect((posts[0]!.body.agent as Record<string, unknown>).identityOpening).toBe(true);
+    cleanup();
+    page("en");
+    fireEvent.click(await screen.findByRole("button", { name: "Create agent" }));
+    expect(screen.queryByRole("checkbox", { name: /fixed identity greeting/ })).toBeNull();
+  });
+
   it("a language without reviewed opening lines offers guided agents only", async () => {
     page("te");
     expect(await screen.findByText(/only guided agents/)).toBeTruthy();

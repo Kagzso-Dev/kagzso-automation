@@ -80,6 +80,8 @@ def flow_hash(flow: CallFlow) -> str:
         data["autonomous"].pop("contact_business", None)  # likewise
     if isinstance(data.get("autonomous"), dict) and not data["autonomous"].get("instructions_lead"):
         data["autonomous"].pop("instructions_lead", None)  # likewise
+    if isinstance(data.get("autonomous"), dict) and not data["autonomous"].get("fixed_greeting"):
+        data["autonomous"].pop("fixed_greeting", None)  # likewise
     canonical = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

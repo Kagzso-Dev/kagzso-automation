@@ -180,13 +180,17 @@ class FlowAutonomous(_Strict):
       - instructions_lead: the admin's AI Conversation Instructions lead the conversation (Dispatch compiler 4+): the
         backend adds no conversation rules of its own (no question order, no opening or business-question script, no
         reply length), only the safety, truthfulness, privacy and technical ones (llm_service.build_system_prompt).
-        Only with natural_lines (without them it does nothing). False = an agent published before it, as before."""
+        Only with natural_lines (without them it does nothing). False = an agent published before it, as before.
+      - fixed_greeting: the flow's greeting is the call's first line, word for word (a Dispatch agent's identity
+        opening), whatever AGENT_FIXED_GREETING says; everything after it is the LLM's own. Only with natural_lines.
+        False = the opening as before (AGENT_FIXED_GREETING decides)."""
     target_duration_sec: int = Field(60, ge=20, le=600)
     dnc_enforce: Literal[True] = True
     natural_lines: bool = False
     voice_pace: Optional[float] = Field(None, ge=0.5, le=2.0)  # the agent's voice speed; None = AGENT_TTS_PACE
     contact_business: bool = False
     instructions_lead: bool = False
+    fixed_greeting: bool = False
 
 
 class FlowTransfer(_Strict):

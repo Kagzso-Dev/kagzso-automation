@@ -15,7 +15,8 @@
 // What changes compared with the built-in executive flow:
 //   conversation_stages, opening, interested_close   removed: no sequence, no set opening, no set close
 //   greeting             AI_AGENT_OPENINGS for the language (required by the schema; never spoken: natural_lines,
-//                        unless the voice backend's AGENT_FIXED_GREETING says so)
+//                        unless the voice backend's AGENT_FIXED_GREETING says so). An agent with identityOpening on
+//                        (Tamil): AI_AGENT_IDENTITY_OPENINGS instead, spoken word for word (autonomous.fixed_greeting)
 //   identity             none: nobody is asked to confirm who they are as a routine step
 //   blocks               "agent" (who, for whom, why, how to listen), "ai_instructions" (the admin's text, right after
 //                        it), "customer_business" and "objections" as truthfulness rules only, "next_step" as what the
@@ -32,6 +33,7 @@
 // itself enforces do-not-call and the time limit whatever the LLM says.
 
 import {
+  AI_AGENT_IDENTITY_OPENINGS,
   AI_AGENT_OPENINGS,
   AI_AGENT_PERSONALITY_TONE,
   AI_KNOWLEDGE_MAX_APPROVED,
@@ -366,7 +368,9 @@ export function compileAgentFlow(input: CompileInput): CallFlowDefinition {
   if (!opening) throw new AgentCompileError("AI Agents have no reviewed opening lines in this language yet");
   const exec = oneLine(agent.executiveName);
   const company = companyName(agent);
-  const greeting = fill(opening.greeting, exec, company);
+  // The agent's identity opening (identityOpening, Tamil only): the call's one fixed line, said word for word.
+  const identityOpening = agent.identityOpening ? AI_AGENT_IDENTITY_OPENINGS[language] : undefined;
+  const greeting = fill(identityOpening ?? opening.greeting, exec, company);
   if (greeting.length > 300) throw new AgentCompileError("The agent and company names make the opening longer than 300 characters");
   if (input.knowledge.length > AI_KNOWLEDGE_MAX_APPROVED) {
     throw new AgentCompileError(`At most ${AI_KNOWLEDGE_MAX_APPROVED} approved knowledge items per agent — reject or merge some`);
@@ -428,6 +432,8 @@ export function compileAgentFlow(input: CompileInput): CallFlowDefinition {
       voice_pace: agent.voiceSpeed,
       contact_business: true,
       instructions_lead: true,
+      // Only with the identity opening: the voice backend speaks the greeting above as the first line.
+      ...(identityOpening ? { fixed_greeting: true } : {}),
     },
     training: {
       enabled: true,

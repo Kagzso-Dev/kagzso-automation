@@ -218,6 +218,9 @@ export const callFlowDefinition = z
         // The admin's AI Conversation Instructions lead the conversation (compiler 4+): the voice backend adds no
         // conversation rules of its own, only safety, truthfulness, privacy and technical ones. Absent = as before.
         instructions_lead: z.boolean().optional(),
+        // The greeting is spoken word for word as the call's first line (an agent's identity opening), whatever the
+        // voice backend's AGENT_FIXED_GREETING says. Absent = as before.
+        fixed_greeting: z.boolean().optional(),
       })
       .strict()
       .optional(),

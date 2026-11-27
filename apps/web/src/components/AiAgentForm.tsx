@@ -11,6 +11,7 @@ import {
   AI_AGENT_OBJECTIVE_MAX,
   AI_AGENT_PERSONALITIES,
   AI_AGENT_PERSONALITY_LABELS,
+  AI_AGENT_IDENTITY_OPENINGS,
   AI_CALL_LANGUAGE_NAMES,
   aiAgentInput,
   aiAgentLanguageSupported,
@@ -79,6 +80,7 @@ function initial(a: AiAgentView | null, autonomousOk: boolean, language: AiCallL
     voiceId: a ? (a.voiceId ?? "") : (AI_AGENT_DEFAULT_VOICE[language] ?? ""),
     voiceSpeed: a?.voiceSpeed ?? AI_AGENT_DEFAULTS.voiceSpeed,
     replySpeed: a?.replySpeed ?? null,
+    identityOpening: a?.identityOpening ?? false,
   };
 }
 
@@ -119,12 +121,20 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
     // Likewise the speed; a guided agent doesn't show it, so a speed typed before switching can't block saving.
     voiceSpeed: f.mode === "autonomous" ? f.voiceSpeed : (agent?.voiceSpeed ?? AI_AGENT_DEFAULTS.voiceSpeed),
     replySpeed: f.mode === "autonomous" ? f.replySpeed : (agent?.replySpeed ?? null),
+    identityOpening: f.mode === "autonomous" ? f.identityOpening : (agent?.identityOpening ?? false),
   };
   const check = aiAgentInput.safeParse(body);
   const fieldError = (k: string) => (!check.success ? check.error.issues.find((i) => i.path[0] === k)?.message : undefined);
   const phonesOk = phoneInputOk(f.contactPhone) && phoneInputOk(f.callbackNumber);
   // Tamil agents: "{agent_name}" and the like are read by the AI as written (the box fills nothing), so saving waits.
   const placeholders = language === "ta" && f.mode === "autonomous" ? instructionPlaceholders(f.instructions) : [];
+  // The identity opening as the agent would say it (only a language that has one shows the switch).
+  const identityLine = AI_AGENT_IDENTITY_OPENINGS[language]
+    ?.replace("{agent}", f.executiveName.trim() || "…")
+    .replace("{company}", f.companyName.trim() || "…")
+    .replace("{{time_greeting}}", "Good morning")
+    .replace(/\{\{title_to_use\}\}/g, "sir")
+    .replace("{{customer_name}}", "Kumar");
 
   const save = useMutation({
     mutationFn: () =>
@@ -286,6 +296,24 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
               After the target the AI moves to a polite close (never cutting the customer off); the phone system ends the call at the maximum. A
               customer who is busy, refuses or asks not to be called again ends the call at once, and do-not-call is always enforced by the system.
             </p>
+            {identityLine && (
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={f.identityOpening}
+                  onChange={(e) => set("identityOpening", e.target.checked)}
+                />
+                <span>
+                  <span className="font-medium">Open every call with the fixed identity greeting</span>
+                  <span className="block text-xs text-slate-550">
+                    Said word for word, e.g. “{identityLine}” Good morning / afternoon / evening follows India time; sir or madam follows the
+                    contact&apos;s gender (sir when it is not specified, never guessed from the name). Without a customer name the question is left
+                    out. The AI never repeats the introduction. Takes effect once the agent is published again.
+                  </span>
+                </span>
+              </label>
+            )}
           </Section>
 
           <Section title="AI Conversation Instructions">

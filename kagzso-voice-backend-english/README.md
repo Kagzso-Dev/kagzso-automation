@@ -414,6 +414,11 @@ WS /ws/plivo/media   "start" event (callId, streamId)                    status:
   as the call connects (or at once as the answer to a "Hello?"). The LLM is told it was said and leads from there.
   Off = the LLM writes the opening after the answer. A greeting word ("ஹலோ", "ஹாய்", "Hello சார்") said over the
   opening never cuts or restarts it (`INDIC_WORD_SPLIT`), and `BARGE_EARLY_STOP` never cuts the opening on voice alone.
+  - **One agent's identity opening (`autonomous.fixed_greeting`):** a Tamil agent with "Open every call with the fixed
+    identity greeting" ticked in Dispatch is published with this flag, and its greeting ("Hello. Good morning, sir. நான்
+    …, …-ல இருந்து பேசுறேன். Am I speaking with <name>, sir?") opens its calls word for word whatever
+    `AGENT_FIXED_GREETING` says. Time of day = India time; sir / madam from the given gender, sir when none; without a
+    name the question is left out. The LLM is told the question was asked, so it never asks it again. Other agents: as before.
 - **Outcomes:**
   - Values: `interested`, `not_interested`, `callback_requested`, `do_not_call`, `wrong_person`, `busy`, `voicemail`, `no_answer`, `call_failed`, `completed`, `unknown`, `hung_up_early`, `voice_error`.
   - Busy, no-answer and failed calls get their outcome from Plivo's hangup callback; voicemail from machine detection.

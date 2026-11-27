@@ -29,10 +29,11 @@ from app.flows.training import (MOCK_WITHOUT, compile_training, estimate_tokens,
                                 worst_case_tokens)
 from app.schemas.calls import normalize_gender
 from app.services import provider_registry as registry
-from app.services.call_service import identity_after_greeting, identity_lines
+from app.services.call_service import (FIXED_GREETING_VARIABLE, GREETING_IDENTITY_VARIABLE, greets_by_name,
+                                       identity_after_greeting, identity_lines, opening_line)
 from app.services.llm_service import (LLMError, LLMProvider, build_call_variables, build_system_prompt,
                                       clean_spoken_text, extract_end_call, render_first_message, render_prompt,
-                                      strip_pause_markers)
+                                      safe_variables, strip_pause_markers)
 
 router = APIRouter(prefix="/api/flows", tags=["flows"], dependencies=[Depends(require_api_key)])
 log = get_logger("flows")
@@ -123,6 +124,10 @@ def _sample_variables(flow: Any, s: SampleCustomer, phone: str) -> Dict[str, Opt
                          flow_natural_lines="true" if autonomous.natural_lines else "false")
         if autonomous.instructions_lead and autonomous.natural_lines:
             variables["flow_instructions_lead"] = "true"
+        if autonomous.fixed_greeting and autonomous.natural_lines:  # the agent's identity opening, as in a call
+            variables[FIXED_GREETING_VARIABLE] = "true"
+            if greets_by_name(flow.greeting.text) and safe_variables(variables)["customer_name"]:
+                variables[GREETING_IDENTITY_VARIABLE] = "true"
     return variables
 
 
@@ -150,7 +155,8 @@ async def preview_flow(body: PreviewRequest) -> PreviewResponse:
                        if identity_after_greeting(flow.greeting.text) else (None, None))
     return PreviewResponse(
         valid=True,
-        greeting=render_first_message(flow.greeting.text, variables),
+        greeting=(opening_line(flow.greeting.text, variables) if variables.get(FIXED_GREETING_VARIABLE) == "true"
+                  else render_first_message(flow.greeting.text, variables)),
         system_prompt=build_system_prompt(script, variables, user_message=body.training_message),
         script_chars=len(script),
         silence_reprompt=render_first_message(flow.silence.reprompt, variables),

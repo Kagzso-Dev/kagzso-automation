@@ -130,6 +130,7 @@ def test_voice_pace_is_bounded_and_agents_published_without_it_keep_their_hash(m
         if data.get(optional) is None:
             data.pop(optional, None)
     del data["autonomous"]["voice_pace"]  # the hash as it was before the field existed
+    del data["autonomous"]["fixed_greeting"]  # likewise the later identity opening (off)
     assert flow_hash(flow) == hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":"),
                                                         ensure_ascii=False).encode("utf-8")).hexdigest()
 

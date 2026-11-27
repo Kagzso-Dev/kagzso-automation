@@ -641,6 +641,53 @@ describe("Voice speed (Settings → AI Voice): each agent's own, followed by its
   });
 });
 
+describe("Identity opening (2026-11-27): one Tamil agent's own switch, followed by its flow", () => {
+  let n = 0;
+  beforeEach(() => void (adminSub = `u-admin-identity-${++n}`));
+  afterAll(() => void (adminSub = "u-ADMIN"));
+  type Got = { identityOpening: boolean; unpublishedChanges: boolean };
+  const get = async (id: string) => (await (await req("GET", `/api/ai-agents/${id}`)).json()) as Got;
+  const lastFlow = () => previews.at(-1)!.flow as { greeting: { text: string }; autonomous: Record<string, unknown> };
+
+  it("off unless switched on, kept in Settings (no ai_agents column), and only on the agent that switched it", async () => {
+    const plain = await createAgent("ta", { ...AGENT, name: "Other Tamil agent" });
+    const a = await createAgent("ta", { ...AGENT, identityOpening: true });
+    expect(plain.identityOpening).toBe(false);
+    expect((await get(a.id)).identityOpening).toBe(true);
+    expect(T("aiAgent").find((r) => r.id === a.id)).not.toHaveProperty("identityOpening");
+    expect(T("setting").find((s) => s.key === `aiAgentIdentityOpening:${a.id}`)?.value).toBe(true);
+    expect(T("setting").some((s) => s.key === `aiAgentIdentityOpening:${plain.id}`)).toBe(false);
+  });
+
+  it("its next publish speaks the line word for word; switching it off goes back to the opening as before", async () => {
+    const a = await createAgent("ta", { ...AGENT, identityOpening: true });
+    expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
+    expect(lastFlow().greeting.text).toMatch(/^Hello\. \{\{time_greeting\}\}, \{\{title_to_use\}\}\. .*Am I speaking with \{\{customer_name\}\}, \{\{title_to_use\}\}\?$/);
+    expect(lastFlow().autonomous.fixed_greeting).toBe(true);
+    expect((await get(a.id)).unpublishedChanges).toBe(false);
+    await req("PUT", `/api/ai-agents/${a.id}`, { agent: { ...AGENT, identityOpening: false } });
+    expect(await get(a.id)).toMatchObject({ identityOpening: false, unpublishedChanges: true });
+    expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
+    expect(lastFlow().autonomous).not.toHaveProperty("fixed_greeting");
+    expect(lastFlow().greeting.text).not.toContain("Am I speaking with");
+  });
+
+  it("a published agent that never had it stays published (its hash is as before)", async () => {
+    const a = await createAgent("ta");
+    expect((await req("POST", `/api/ai-agents/${a.id}/publish`)).status).toBe(200);
+    await req("PUT", `/api/ai-agents/${a.id}`, { agent: { ...AGENT, identityOpening: false } });
+    expect((await get(a.id)).unpublishedChanges).toBe(false);
+    await req("PUT", `/api/ai-agents/${a.id}`, { agent: AGENT }); // an older client that doesn't send it
+    expect(await get(a.id)).toMatchObject({ identityOpening: false, unpublishedChanges: false });
+  });
+
+  it("a language without an identity opening never keeps it", async () => {
+    const a = await createAgent("en", { ...AGENT, identityOpening: true });
+    expect((await get(a.id)).identityOpening).toBe(false);
+    expect(T("setting").some((s) => s.key === `aiAgentIdentityOpening:${a.id}`)).toBe(false);
+  });
+});
+
 describe("Maximum duration (Call settings): typed by hand, followed by the agent's flow", () => {
   let n = 0;
   beforeEach(() => void (adminSub = `u-admin-max-${++n}`));

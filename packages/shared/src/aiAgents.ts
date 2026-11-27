@@ -171,6 +171,12 @@ export const aiAgentInput = z
       .default(AI_AGENT_DEFAULTS.voiceSpeed),
     /** Autonomous, in a language with voice response tuning: how soon the AI answers, a preset or Manual waits. Null = the language's setting. */
     replySpeed: agentReplySpeedInput.nullable().default(null),
+    /**
+     * Autonomous, in a language with an identity opening (AI_AGENT_IDENTITY_OPENINGS: Tamil): the call opens with that
+     * one fixed line, word for word (time of day, sir / madam, the agent, the company, "am I speaking with <name>?").
+     * Absent / false = the opening as before. Only this agent changes, and only once it is published again.
+     */
+    identityOpening: z.boolean().optional(),
   })
   .strict()
   .superRefine((a, ctx) => {
@@ -361,6 +367,24 @@ export const AI_AGENT_OPENINGS: Partial<Record<AiCallLanguage, AiAgentOpening>> 
     dnc: "ಸರಿ, ಅರ್ಥ ಆಯ್ತು. ನಿಮ್ಮ request-ಅನ್ನು ಗೌರವಿಸುತ್ತೇವೆ. ಧನ್ಯವಾದಗಳು.",
   },
 };
+
+/**
+ * The identity opening an agent can switch on (identityOpening), per language: spoken word for word as the call's
+ * first line (the flow's greeting, with autonomous.fixed_greeting). {agent} / {company} are filled in when the agent
+ * is compiled; when the call is placed the voice backend fills {{time_greeting}} (Good morning / afternoon / evening,
+ * India time), {{title_to_use}} (sir / madam from a GIVEN gender, sir when it is not specified: never guessed from the
+ * name) and {{customer_name}}. A contact without a name gets the line without its last sentence (the question).
+ * Tamil: the user's own wording (2026-11-27).
+ */
+export const AI_AGENT_IDENTITY_OPENINGS: Partial<Record<AiCallLanguage, string>> = {
+  ta:
+    "Hello. {{time_greeting}}, {{title_to_use}}. நான் {agent}, {company}-ல இருந்து பேசுறேன். " +
+    "Am I speaking with {{customer_name}}, {{title_to_use}}?",
+};
+
+export function aiAgentIdentityOpeningSupported(language: AiCallLanguage): boolean {
+  return !!AI_AGENT_IDENTITY_OPENINGS[language];
+}
 
 export function aiAgentLanguageSupported(language: AiCallLanguage): boolean {
   return !!AI_AGENT_OPENINGS[language];

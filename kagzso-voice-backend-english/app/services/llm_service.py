@@ -583,6 +583,17 @@ AGENT_OPEN_IDENTITY_RULES = """
 - If the person says they are not the customer or that this is the wrong number: politely ask whether the customer (by `address_as`) is available to speak. If the customer comes to the phone, greet them briefly and continue with them.
 - If the customer is not available, thank the person politely and end the call. Never pitch to them, never leave a message and never promise a callback.
 - A request not to be called again always ends the call. This replaces any wrong-person instruction above."""
+# An agent whose fixed greeting (its identity opening, call variable flow_greeting_identity) already asked whether this
+# is the customer: the same rules, except that the question has been asked once and the first reply answers it.
+_OPEN_IDENTITY_FIRST_LINE = (
+    "- There is no identity check on this call: talk with whoever answered. The customer's name in the details is "
+    "unverified, so never ask someone to confirm it as a routine step.")
+GREETING_IDENTITY_RULES = AGENT_OPEN_IDENTITY_RULES.replace(_OPEN_IDENTITY_FIRST_LINE, (
+    "- Your greeting has already asked whether you are speaking with the customer (by `address_as`), so the person's "
+    "first reply answers that question: never ask it again. If they say yes, they have shown that they are the "
+    "customer. If their reply does not answer it, talk with whoever answered."))
+assert GREETING_IDENTITY_RULES != AGENT_OPEN_IDENTITY_RULES
+
 # Autonomous AI Agents: a follow-up needs a real workflow behind it (an owner, an approval), and these calls have none
 # yet, so what TEAM_FOLLOWUP_ENABLED says doesn't decide what the customer is promised.
 AGENT_NO_FOLLOW_UP = ("\n- No team follow-up is linked to this call: never say that the team or anyone else will contact "
@@ -834,7 +845,9 @@ def build_system_prompt(
         followup = "\n- Team follow-up is NOT configured: never say that the team will contact the customer."
     if natural:
         address = AGENT_ADDRESS_RULES_INSTRUCTIONS_LEAD if lead else AGENT_ADDRESS_RULES
-        who = (AGENT_OPEN_IDENTITY_RULES + address) if safe["customer_name"] else NO_NAME_RULE
+        identity = (GREETING_IDENTITY_RULES if variables.get("flow_greeting_identity") == "true"
+                    else AGENT_OPEN_IDENTITY_RULES)  # the identity opening asked it already
+        who = (identity + address) if safe["customer_name"] else NO_NAME_RULE
         if variables.get("flow_fixed_greeting") == "true":  # AGENT_FIXED_GREETING: the system said the greeting
             who += AGENT_FIXED_GREETING_RULE
     elif agent and safe["customer_name"]:

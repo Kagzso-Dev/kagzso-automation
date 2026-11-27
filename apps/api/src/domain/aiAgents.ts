@@ -9,6 +9,7 @@ import { Prisma, type AiAgent, type AiAgentKnowledgeItem } from "@prisma/client"
 import {
   AI_AGENT_DEFAULTS,
   AI_KNOWLEDGE_MAX_APPROVED,
+  aiAgentIdentityOpeningSupported,
   aiCallLanguage,
   callFlowDefinition,
   type AiAgentConfig,
@@ -68,11 +69,30 @@ function configFromRow(a: AiAgent): Omit<AiAgentConfig, "voiceSpeed" | "replySpe
 /** An agent's speaking speed lives in Settings, beside its row (no ai_agents column); absent = the default speed. */
 const voiceSpeedKey = (agentId: string) => `aiAgentVoiceSpeed:${agentId}`;
 
+/**
+ * An agent's identity opening (identityOpening) lives in Settings too; absent = off. Only a language with one
+ * (AI_AGENT_IDENTITY_OPENINGS: Tamil) ever has it on.
+ */
+const identityOpeningKey = (agentId: string) => `aiAgentIdentityOpening:${agentId}`;
+
+async function agentIdentityOpening(a: AiAgent): Promise<boolean> {
+  if (!aiAgentIdentityOpeningSupported(aiCallLanguage.parse(a.language))) return false;
+  return (await getSetting<unknown>(identityOpeningKey(a.id), false)) === true;
+}
+
+/** Left out (an older client) = unchanged; off, or a language without one, removes it. */
+async function saveIdentityOpening(agentId: string, language: AiCallLanguage, on: boolean | undefined): Promise<void> {
+  if (on === undefined) return;
+  if (on && aiAgentIdentityOpeningSupported(language)) await setSetting(identityOpeningKey(agentId), true);
+  else await prisma.setting.deleteMany({ where: { key: identityOpeningKey(agentId) } });
+}
+
 async function agentConfig(a: AiAgent): Promise<AiAgentConfig> {
   return {
     ...configFromRow(a),
     voiceSpeed: await getSetting(voiceSpeedKey(a.id), AI_AGENT_DEFAULTS.voiceSpeed),
     replySpeed: await agentReplySpeed(a.id, a.language),
+    identityOpening: await agentIdentityOpening(a),
   };
 }
 
@@ -186,6 +206,7 @@ export async function createAgent(
   const a = await prisma.aiAgent.create({ data: { ...rowData(c), ...voice, language, createdById: user.id, createdByEmail: user.email } });
   await setSetting(voiceSpeedKey(a.id), c.voiceSpeed);
   await saveAgentReplySpeed(a.id, language, c.replySpeed);
+  await saveIdentityOpening(a.id, language, c.identityOpening);
   return view(a);
 }
 
@@ -198,6 +219,7 @@ export async function updateAgent(id: string, c: AiAgentConfig, lookupVoice: Age
   const a = await prisma.aiAgent.update({ where: { id }, data: { ...rowData(c), ...voice } });
   await setSetting(voiceSpeedKey(a.id), c.voiceSpeed);
   await saveAgentReplySpeed(a.id, language, c.replySpeed);
+  await saveIdentityOpening(a.id, language, c.identityOpening);
   return view(a);
 }
 
@@ -435,11 +457,12 @@ export async function agentInputsHash(a: AiAgent): Promise<string> {
   const knowledge = await approvedKnowledge(a.id);
   // No voice picked: hashed exactly as before that setting existed. The reply speed is read when a call is dialled, not
   // published, so it stays out: hashing it would show every published agent as changed.
-  const { voiceId, replySpeed: _dialTimeOnly, ...config } = await agentConfig(a);
+  // Likewise the identity opening: off, an agent is hashed exactly as before it existed.
+  const { voiceId, replySpeed: _dialTimeOnly, identityOpening, ...config } = await agentConfig(a);
   return definitionHash({
     // A language's own compiler revision (Tamil) changes only that language's hash: English agents stay published.
     compiler: aiAgentCompilerVersion(a.language),
-    config: { ...config, ...(voiceId ? { voiceId } : {}) },
+    config: { ...config, ...(voiceId ? { voiceId } : {}), ...(identityOpening ? { identityOpening } : {}) },
     knowledge: knowledge.map((k) => [k.kind, k.topic, k.text, k.questions, k.always]),
   });
 }
