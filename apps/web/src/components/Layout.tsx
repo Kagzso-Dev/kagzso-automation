@@ -12,6 +12,7 @@ import { BrandIcon, type Brand } from "./automation/BrandIcons";
 import { aiCallLanguagePath, splitAiCallLanguagePath, type AiCallLanguageInfo, type HideableNavItem } from "@dispatch/shared";
 import { Icon, type IconName } from "./icons";
 import { Logo } from "./Logo";
+import { sidebarIcons } from "./SidebarIcons";
 
 type NavEntry = {
   to: string;
@@ -412,7 +413,9 @@ export function Layout({ children }: { children: ReactNode }) {
             const labelId = `nav-group-${gi}`;
             const links = (
               <ul className="flex flex-col gap-0.5">
-                {g.items.map((n) => (
+                {g.items.map((n) => {
+                  const SidebarIcon = sidebarIcons[n.label];
+                  return (
                   <li key={n.to}>
                     <NavLink
                       to={n.to}
@@ -426,7 +429,13 @@ export function Layout({ children }: { children: ReactNode }) {
                         )
                       }
                     >
-                      {n.brand ? <BrandIcon brand={n.brand} size={18} className="shrink-0" /> : <Icon name={n.icon} size={18} className="shrink-0" />}
+                      {n.brand ? (
+                        <BrandIcon brand={n.brand} size={18} className="shrink-0" />
+                      ) : SidebarIcon ? (
+                        <SidebarIcon />
+                      ) : (
+                        <Icon name={n.icon} size={18} className="shrink-0" />
+                      )}
                       <span className={cx("nav-label truncate", collapsed && "md:hidden")}>{n.label}</span>
                       {n.to === "/whatsapp-inbox" && inboxUnread > 0 && (
                         <span
@@ -441,7 +450,8 @@ export function Layout({ children }: { children: ReactNode }) {
                       )}
                     </NavLink>
                   </li>
-                ))}
+                  );
+                })}
               </ul>
             );
             return (
