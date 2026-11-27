@@ -36,6 +36,7 @@ import asyncio
 import base64
 import io
 import json
+import time
 import wave
 from typing import AsyncIterator, List, Optional
 from urllib.parse import urlencode
@@ -254,6 +255,87 @@ class SarvamTTS(TTSProvider):
         await self._client.aclose()
 
 
+def _edge_silence_ms(mulaw: bytes, threshold: int = 500) -> tuple:
+    """(leading, trailing) silence of 8 kHz mu-law audio in ms: samples quieter than `threshold` at each end."""
+    pcm = audio.mulaw_to_pcm16(mulaw)
+    samples = memoryview(pcm).cast("h") if len(pcm) >= 2 else memoryview(b"").cast("h")
+    n = len(samples)
+    lead = next((i for i in range(n) if abs(samples[i]) > threshold), n)
+    trail = next((i for i in range(n) if abs(samples[n - 1 - i]) > threshold), n - lead) if lead < n else 0
+    return lead // 8, trail // 8
+
+
+class CloneReplyTiming:
+    """SARVAM_TTS_CLONE_TIMING_LOG: where the silence between one cloned reply's sentences comes from.
+
+    The phone plays what it is sent in order, so a sentence starts when the previous one has finished playing or when
+    its audio reaches the call, whichever is later. At each boundary: the silence heard = the stall (nothing left to
+    play) + the silence at the end and start of Sarvam's own audio (measured on the audio). A stall happens when the
+    next sentence's text was written less than its synthesis time before the previous sentence finished playing, so
+    both are logged: text_ahead (negative = written after it finished) and that sentence's synth time. Numbers only,
+    never the text."""
+
+    def __init__(self) -> None:
+        self.rows: List[dict] = []
+        self._rows_by_job: dict = {}
+        self._end: Optional[float] = None  # when the last sentence handed to the call finishes playing
+        self._logged = False
+
+    def sent(self, job: asyncio.Future, chars: int) -> None:
+        row = {"chars": chars, "sent": time.monotonic(), "ready": None}
+        self.rows.append(row)
+        self._rows_by_job[id(job)] = row
+        job.add_done_callback(lambda _job: row.__setitem__("ready", time.monotonic()))
+
+    def got(self, job: asyncio.Future, mulaw: bytes) -> None:
+        row = self._rows_by_job[id(job)]
+        now = time.monotonic()
+        row["audio"] = len(mulaw) / SAMPLE_RATE
+        row["lead"], row["trail"] = _edge_silence_ms(mulaw) if mulaw else (0, 0)
+        if self._end is not None:  # a later sentence: playing as soon as it is sent
+            row["stall"] = max(0.0, now - self._end)
+            row["start"] = max(now, self._end)
+            self._end = row["start"] + row["audio"]
+
+    def handed_over(self, job: asyncio.Future) -> None:
+        row = self._rows_by_job[id(job)]
+        if self._end is None:  # the first sentence: the call plays it once it takes it
+            row["start"] = time.monotonic()
+            self._end = row["start"] + row["audio"]
+
+    @staticmethod
+    def _synth(row: dict) -> float:
+        return (row["ready"] or row["sent"]) - row["sent"]
+
+    def boundaries(self) -> List[dict]:
+        """Each boundary between two played sentences, in ms: silence = stall + edges; text_ahead and synth explain
+        the stall (stall > 0 when synth > text_ahead)."""
+        played = [r for r in self.rows if "start" in r]
+        out = []
+        for prev, row in zip(played, played[1:]):
+            prev_end = prev["start"] + prev["audio"]
+            stall = int(row.get("stall", 0.0) * 1000)
+            edges = prev["trail"] + row["lead"]
+            out.append({"silence": stall + edges, "stall": stall, "edges": edges,
+                        "text_ahead": int((prev_end - row["sent"]) * 1000), "synth": int(self._synth(row) * 1000)})
+        return out
+
+    def log(self, finished: bool) -> None:
+        played = [r for r in self.rows if "start" in r]
+        if self._logged or not played:
+            return
+        self._logged = True
+        b = self.boundaries()
+        total = played[-1]["start"] + played[-1]["audio"] - played[0]["start"]
+        log.info("Clone reply timing: sentences=%d%s chars=%s synth_ms=%s audio_ms=%s lead/trail_ms=%s | boundary "
+                 "silence_ms=%s = stall_ms=%s + audio_edges_ms=%s | next_text_ahead_ms=%s next_synth_ms=%s | total_ms=%d",
+                 len(played), "" if finished else " (stopped)", [r["chars"] for r in played],
+                 [int(self._synth(r) * 1000) for r in played],
+                 [int(r["audio"] * 1000) for r in played], [f"{r['lead']}/{r['trail']}" for r in played],
+                 [x["silence"] for x in b], [x["stall"] for x in b], [x["edges"] for x in b],
+                 [x["text_ahead"] for x in b], [x["synth"] for x in b], int(total * 1000))
+
+
 class CloneSentenceStream(TTSStream):
     """A cloned voice's live reply through Sarvam's REST clone API (SARVAM_TTS_CLONE_STREAM=rest, the default).
 
@@ -272,6 +354,9 @@ class CloneSentenceStream(TTSStream):
         self._pending: List[asyncio.Future] = []
         self._closed = False
         self._ended = False
+        # SARVAM_TTS_CLONE_TIMING_LOG: measurements only, the audio is the same.
+        self._timing: Optional[CloneReplyTiming] = (
+            CloneReplyTiming() if getattr(tts.cfg, "SARVAM_TTS_CLONE_TIMING_LOG", False) else None)
 
     async def send_text(self, text: str) -> None:
         text = text.strip()
@@ -281,6 +366,8 @@ class CloneSentenceStream(TTSStream):
             raise TTSError("provider", "Sarvam voice clone stream is closed")
         job = asyncio.ensure_future(self.tts.synthesize(text) if self._pace is None
                                     else self.tts.synthesize(text, pace=self._pace))
+        if self._timing is not None:
+            self._timing.sent(job, len(text))
         self._pending.append(job)
         await self._jobs.put(job)
 
@@ -296,13 +383,28 @@ class CloneSentenceStream(TTSStream):
         self._pace = pace  # for the sentences sent from now on
 
     async def audio(self) -> AsyncIterator[bytes]:
-        while True:
-            job = await self._jobs.get()
-            if job is None:
-                return
-            mulaw = await job  # a Sarvam error reaches the call (and _ClonedStream's stock fallback)
-            if mulaw:
-                yield mulaw
+        if self._timing is None:
+            while True:
+                job = await self._jobs.get()
+                if job is None:
+                    return
+                mulaw = await job  # a Sarvam error reaches the call (and _ClonedStream's stock fallback)
+                if mulaw:
+                    yield mulaw
+        timing, finished = self._timing, False
+        try:
+            while True:
+                job = await self._jobs.get()
+                if job is None:
+                    finished = True
+                    return
+                mulaw = await job
+                timing.got(job, mulaw)
+                if mulaw:
+                    yield mulaw
+                    timing.handed_over(job)  # the call took it (after any wait before the reply's first sound)
+        finally:
+            timing.log(finished)
 
     def is_open(self) -> bool:
         return not self._closed and not self._ended

@@ -233,6 +233,11 @@ class Settings(BaseSettings):
     # first sentence) was cut off mid-reply when Sarvam dropped the connection, and once sent no audio for 10 s.
     # Stock voices always stream on Bulbul's socket.
     SARVAM_TTS_CLONE_STREAM: str = "rest"
+    # Diagnostics for that REST stream (2026-11-27, set true only in .env.ta): one "Clone reply timing" log line per
+    # reply, numbers only (never the text), with each sentence's characters, synthesis time, audio length and edge
+    # silence, and the silence at each sentence boundary split into its causes: waiting for the LLM's next sentence,
+    # waiting for Sarvam's audio, and the silence inside Sarvam's audio. The audio is not changed. False = as before.
+    SARVAM_TTS_CLONE_TIMING_LOG: bool = False
 
     # --- LLM ---
     LLM_PROVIDER: str = "gemini"  # gemini | openai | groq | sarvam | ollama | openai_compatible | anthropic
