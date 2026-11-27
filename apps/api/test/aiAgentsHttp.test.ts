@@ -98,6 +98,7 @@ const db = {
   aiAgentKnowledgeFile: model("aiAgentKnowledgeFile"),
   aiAgentKnowledgeItem: model("aiAgentKnowledgeItem", () => ({ status: "DRAFT", always: false, decidedAt: null, decidedByEmail: null })),
   aiIndustry: model("aiIndustry", () => ({ archivedAt: null })),
+  aiCallCustomer: model("aiCallCustomer", () => ({ deletedAt: null })),
   setting: {
     ...model("setting"),
     upsert: async ({ where, create, update }: { where: { key: string }; create: { key: string; value: unknown }; update: { value: unknown } }) => {
@@ -679,6 +680,25 @@ describe("Identity opening (2026-11-27): one Tamil agent's own switch, followed 
     expect((await get(a.id)).unpublishedChanges).toBe(false);
     await req("PUT", `/api/ai-agents/${a.id}`, { agent: AGENT }); // an older client that doesn't send it
     expect(await get(a.id)).toMatchObject({ identityOpening: false, unpublishedChanges: false });
+  });
+
+  it("Voicecall Contacts: a Not specified contact is called as unknown (never Male) with this agent only", async () => {
+    const on = await createAgent("ta", { ...AGENT, identityOpening: true });
+    const off = await createAgent("ta", { ...AGENT, name: "Other Tamil agent" });
+    const flowOf = async (id: string) => ((await (await req("POST", `/api/ai-agents/${id}/publish`)).json()) as { flowId: string }).flowId;
+    const [onFlow, offFlow] = [await flowOf(on.id), await flowOf(off.id)];
+    const contact = (id: string, gender: string, i: number) =>
+      ({ id, customerName: "Kumar", gender, followUpDetail: null, phone: `+91987650000${i}`, language: "ta", deletedAt: null }) as Row;
+    T("aiCallCustomer").push(contact("cu_m", "male", 1), contact("cu_u", "unspecified", 2), contact("cu_f", "female", 3));
+    const call = async (flowId: string) => {
+      const r = await req("POST", "/api/ai-call-customers/call", { customerIds: ["cu_m", "cu_u", "cu_f"], mode: "all", flowId, language: "ta" });
+      expect(r.status).toBe(200);
+      return runCalls.at(-1)!;
+    };
+    const withIt = await call(onFlow);
+    expect((withIt[0] as { rows: { gender: string }[] }).rows.map((r) => r.gender)).toEqual(["male", "unspecified", "female"]);
+    expect(withIt[3]).toEqual({ neutralGenderRows: new Set([1]) }); // only the Not specified row
+    expect((await call(offFlow))[3]).toBeUndefined(); // another agent: exactly as before
   });
 
   it("a language without an identity opening never keeps it", async () => {

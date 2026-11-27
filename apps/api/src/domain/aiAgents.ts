@@ -452,6 +452,18 @@ async function approvedKnowledge(agentId: string): Promise<CompileKnowledgeItem[
   }));
 }
 
+/**
+ * True when the flow's latest published version is an AI Agent's with the identity opening (autonomous.fixed_greeting,
+ * compiled only from identityOpening). Its Voicecall Contacts calls send a "Not specified" gender as unknown (the
+ * opening then says Sir by its own rule) instead of the Male default; every other flow calls exactly as before.
+ */
+export async function flowHasIdentityOpening(flowId: string | null | undefined): Promise<boolean> {
+  if (!flowId) return false;
+  const live = await latestPublished(flowId);
+  const autonomous = (live?.definition as { autonomous?: { fixed_greeting?: unknown } } | null | undefined)?.autonomous;
+  return autonomous?.fixed_greeting === true;
+}
+
 /** Hash of everything a publish compiles from (compiler, settings, approved knowledge): differs = unpublished changes. */
 export async function agentInputsHash(a: AiAgent): Promise<string> {
   const knowledge = await approvedKnowledge(a.id);

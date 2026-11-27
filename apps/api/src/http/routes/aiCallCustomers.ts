@@ -57,6 +57,7 @@ import {
   updateCustomer,
 } from "../../domain/aiCallCustomers.js";
 import { buildSampleCustomersWorkbook } from "../../domain/aiCallCustomerSample.js";
+import { flowHasIdentityOpening } from "../../domain/aiAgents.js";
 import { createManualFollowup, FollowupError } from "../../domain/aiCallFollowups.js";
 import { prisma } from "../../prisma.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
@@ -222,7 +223,16 @@ aiCallCustomersRouter.post(
       return { customerName: c?.customerName ?? null, gender: c?.gender ?? null, followUpDetail: c?.followUpDetail ?? null, phone: c?.phone ?? "" };
     });
     const { customerIds, ...rest } = body;
-    const out = await planAndStartAiCallRun({ ...rest, rows }, req.user!, customerIds.map((id) => (byId.has(id) ? id : null)));
+    // An AI Agent with the identity opening only: a "Not specified" contact is called as unknown, never as Male.
+    const neutral = (await flowHasIdentityOpening(body.flowId))
+      ? new Set(rows.flatMap((r, i) => (r.gender === "unspecified" ? [i] : [])))
+      : undefined;
+    const out = await planAndStartAiCallRun(
+      { ...rest, rows },
+      req.user!,
+      customerIds.map((id) => (byId.has(id) ? id : null)),
+      neutral?.size ? { neutralGenderRows: neutral } : undefined,
+    );
     res.status(out.status).json(out.json);
   }),
 );

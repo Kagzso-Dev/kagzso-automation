@@ -97,8 +97,12 @@ GREETING_INSTRUCTION = (
 # words, in the call's language. Sent as this turn's message only; never stored as the customer's words.
 # A call variable set when an agent's call opens with its published greeting (AGENT_FIXED_GREETING).
 FIXED_GREETING_VARIABLE = "flow_fixed_greeting"
-# Set with it when that greeting asks for the customer by name (a Dispatch agent's identity opening, Tamil) and the
-# customer has one: the prompt then says the question is asked and the first reply answers it (llm_service).
+# A Dispatch AI Agent's identity opening (its flow's autonomous.fixed_greeting, Tamil only): set with the one above.
+# Only these calls get the opening's own titles and lose its question when there is no name (opening_line); a greeting
+# that AGENT_FIXED_GREETING makes fixed is said exactly as before.
+IDENTITY_OPENING_VARIABLE = "flow_identity_opening"
+# Set with it when the customer has a name, so the opening asked whether this is them: the prompt then says the question
+# was asked and the first reply answers it (llm_service.GREETING_IDENTITY_RULES).
 GREETING_IDENTITY_VARIABLE = "flow_greeting_identity"
 AGENT_GREETING_INSTRUCTION = (
     "(The customer has just picked up the phone and has not said anything yet. Open the call as OPENING says, "
@@ -499,17 +503,32 @@ def greets_by_name(first_message: str) -> bool:
 
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_TITLE_TO_USE_RE = re.compile(r"\{\{\s*title_to_use\s*\}\}")
+# The identity opening's title, as the user wrote it (2026-11-27): from the contact's given gender only, Sir when it is
+# not specified or unknown (never guessed from the name), whatever CALL_DEFAULT_TITLE says.
+IDENTITY_OPENING_TITLES = {"male": "Sir", "female": "Madam"}
+IDENTITY_OPENING_DEFAULT_TITLE = "Sir"
+
+
+def identity_opening_text(first_message: str, variables: Mapping[str, Any]) -> str:
+    """An agent's identity opening before rendering: its own title in place of {{title_to_use}}, and without the
+    sentences that name the customer when there is no name (the greeting stays, the question goes)."""
+    safe = safe_variables(variables)
+    title = IDENTITY_OPENING_TITLES.get(safe["gender"], IDENTITY_OPENING_DEFAULT_TITLE)
+    text = _TITLE_TO_USE_RE.sub(title, first_message.strip())
+    if not safe["customer_name"]:
+        text = " ".join(p for p in _SENTENCE_SPLIT_RE.split(text) if not greets_by_name(p))
+    return text
 
 
 def opening_line(first_message: str, variables: Mapping[str, Any]) -> str:
     """The greeting as spoken: rendered as before, or NO_NAME_GREETING when it names the customer
-    and the customer has no name (never "Hello , ..." or a blank). An agent's fixed greeting (its identity
-    opening) is said without the sentences that name the customer instead: the greeting stays, the question goes."""
+    and the customer has no name (never "Hello , ..." or a blank). An agent's identity opening: see
+    identity_opening_text."""
+    if variables.get(IDENTITY_OPENING_VARIABLE) == "true":
+        if line := render_first_message(identity_opening_text(first_message, variables), variables):
+            return line
     if greets_by_name(first_message) and not safe_variables(variables)["customer_name"]:
-        if variables.get(FIXED_GREETING_VARIABLE) == "true":
-            kept = " ".join(p for p in _SENTENCE_SPLIT_RE.split(first_message.strip()) if not greets_by_name(p))
-            if kept.strip():
-                return render_first_message(kept, variables)
         return NO_NAME_GREETING
     return render_first_message(first_message, variables)
 
@@ -900,6 +919,7 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
                     flow_vars[INSTRUCTIONS_LEAD_VARIABLE] = "true"
                 if autonomous.fixed_greeting and autonomous.natural_lines:  # the agent's identity opening, word for word
                     flow_vars[FIXED_GREETING_VARIABLE] = "true"
+                    flow_vars[IDENTITY_OPENING_VARIABLE] = "true"
                 flow_vars["flow_voice_profile"] = AGENT_VOICE_PROFILE  # one calm, steady voice for the whole call
                 if autonomous.voice_pace is not None:  # the agent's own speed, every line of the call
                     flow_vars["flow_voice_pace"] = str(autonomous.voice_pace)
@@ -944,9 +964,9 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
     variables.update(flow_vars)
     if flow_vars.get("flow_natural_lines") and cfg.AGENT_FIXED_GREETING:
         variables[FIXED_GREETING_VARIABLE] = "true"  # this call opens with the agent's greeting, word for word
-    if (variables.get(FIXED_GREETING_VARIABLE) == "true" and greets_by_name(agent.first_message or "")
+    if (variables.get(IDENTITY_OPENING_VARIABLE) == "true" and greets_by_name(agent.first_message or "")
             and safe_variables(variables)["customer_name"]):
-        variables[GREETING_IDENTITY_VARIABLE] = "true"  # that greeting asks whether this is the customer
+        variables[GREETING_IDENTITY_VARIABLE] = "true"  # the identity opening asks whether this is the customer
     tuning = turn_tuning.call_variable(req.voice_tuning.model_dump() if req.voice_tuning else None, cfg)
     if tuning:  # only this backend's tuned language; anywhere else it is ignored
         variables[turn_tuning.VARIABLE] = tuning

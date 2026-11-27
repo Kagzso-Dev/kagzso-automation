@@ -133,7 +133,7 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
     ?.replace("{agent}", f.executiveName.trim() || "…")
     .replace("{company}", f.companyName.trim() || "…")
     .replace("{{time_greeting}}", "Good morning")
-    .replace(/\{\{title_to_use\}\}/g, "sir")
+    .replace(/\{\{title_to_use\}\}/g, "Sir")
     .replace("{{customer_name}}", "Kumar");
 
   const save = useMutation({
@@ -307,7 +307,7 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
                 <span>
                   <span className="font-medium">Open every call with the fixed identity greeting</span>
                   <span className="block text-xs text-slate-550">
-                    Said word for word, e.g. “{identityLine}” Good morning / afternoon / evening follows India time; sir or madam follows the
+                    Said word for word, e.g. “{identityLine}” Good morning / afternoon / evening follows India time; Sir or Madam follows the
                     contact&apos;s gender (sir when it is not specified, never guessed from the name). Without a customer name the question is left
                     out. The AI never repeats the introduction. Takes effect once the agent is published again.
                   </span>

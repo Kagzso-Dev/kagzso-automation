@@ -173,7 +173,7 @@ describe("AI Agents page", () => {
     const box = screen.getByRole("checkbox", { name: /Open every call with the fixed identity greeting/ }) as HTMLInputElement;
     expect(box.checked).toBe(false);
     expect(
-      screen.getByText(/Hello\. Good morning, sir\. நான் Thaara, Kagzso Technology Services-ல இருந்து பேசுறேன்\. Am I speaking with Kumar, sir\?/),
+      screen.getByText(/Hello\. Good morning, Sir\. நான் Thaara, Kagzso Technology Services-ல இருந்து பேசுறேன்\. Am I speaking with Kumar, Sir\?/),
     ).toBeTruthy();
     fireEvent.click(box);
     fireEvent.change(field("Agent name"), { target: { value: "Kayal" } });
