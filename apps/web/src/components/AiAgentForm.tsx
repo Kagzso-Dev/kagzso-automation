@@ -339,7 +339,8 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
 
           <Section title="AI Conversation Instructions">
             <textarea
-              className="input min-h-[160px] font-mono text-xs"
+              // Grows with the text (field-sizing) up to 70% of the screen, then scrolls; older browsers keep the 320 px box.
+              className="input min-h-[320px] max-h-[70vh] resize-y font-mono text-xs leading-relaxed [field-sizing:content]"
               maxLength={AI_AGENT_INSTRUCTIONS_MAX}
               value={f.instructions}
               onChange={(e) => set("instructions", e.target.value)}
