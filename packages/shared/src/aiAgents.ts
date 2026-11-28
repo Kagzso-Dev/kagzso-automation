@@ -107,7 +107,7 @@ const VOICE_SPEED_RULE = `Enter a speed from ${AI_AGENT_VOICE_SPEED_LIMITS.min.t
  * voice "svc-<uuid>" (app/core/config.py CLONED_VOICE_RE). 64 characters at most (ai_agents.voiceId).
  */
 export const AI_AGENT_VOICE_ID_RE = /^(?:[a-z][a-z0-9_]{0,63}|svc-[a-z0-9][a-z0-9-]{0,59})$/;
-export const AI_AGENT_INSTRUCTIONS_MAX = 4000;
+export const AI_AGENT_INSTRUCTIONS_MAX = 7000;
 export const AI_AGENT_OBJECTIVE_MAX = 500;
 
 /** Letters (any script), spaces and . ' - only: it is spoken in the greeting and kept in the training profile. */
