@@ -509,9 +509,52 @@ def test_the_end_of_call_marker_is_never_lost_to_the_limit(client, auth, fakes, 
     assert "இனிய நாளா" in _agent_lines(sync_engine, call_id)[-1]  # and the goodbye is said
 
 
+# ------------------------------------------------------------------ why a reply did (not) reuse the early transcript
+def _early_lines(caplog):
+    return [r.getMessage() for r in caplog.records if r.getMessage().startswith("Early transcript ")]
+
+
+def test_a_reply_that_reuses_the_pause_transcript_says_so(client, auth, fakes, monkeypatch, sync_engine, said, caplog):  # noqa: F811
+    caplog.set_level("INFO")
+    call_id, token = _tamil(client, auth, fakes, monkeypatch)
+    with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
+        _open(ws, said)
+        caplog.clear()
+        said["text"] = "நாங்க hotel நடத்துறோம்"
+        _send(ws, SAID)
+        _realtime_silence(ws, 800)
+        _until(ws, "checkpoint")
+    lines = _early_lines(caplog)
+    assert len(lines) == 1 and lines[0].startswith("Early transcript used: ")
+    assert "eos=short early_made=1 spoke_again_after_one=0" in lines[0]
+    assert "நாங்க" not in lines[0] and "hotel" not in lines[0]  # numbers only, never the customer's words
+
+
+def test_a_fourth_pause_in_one_answer_names_the_early_transcript_limit(client, auth, fakes, monkeypatch, sync_engine, said, caplog):  # noqa: F811
+    """Three pauses each get an early transcript; the customer speaks again after each, so the last pause has none
+    and the reply waits for a full transcript (the "stt" of its Turn timing line)."""
+    caplog.set_level("INFO")
+    call_id, token = _tamil(client, auth, fakes, monkeypatch)
+    with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
+        _open(ws, said)
+        caplog.clear()
+        said["text"] = "நாங்க ஒரு"  # unfinished: every pause waits on
+        for _ in range(cs.CallSession.EARLY_STT_MAX):
+            _send(ws, SAID)
+            _realtime_silence(ws, 500)
+        _send(ws, SAID)
+        _realtime_silence(ws, 1700)
+        _until(ws, "checkpoint")
+    lines = _early_lines(caplog)
+    assert len(lines) == 1, lines
+    assert lines[0].startswith(f"Early transcript not used - the limit of {cs.CallSession.EARLY_STT_MAX} early")
+    assert f"early_made={cs.CallSession.EARLY_STT_MAX} spoke_again_after_one={cs.CallSession.EARLY_STT_MAX}" in lines[0]
+
+
 # ------------------------------------------------------------------ the same call without tuning
-def test_a_tamil_call_on_current_behavior_keeps_today_s_path(client, auth, fakes, monkeypatch, sync_engine, said):  # noqa: F811
+def test_a_tamil_call_on_current_behavior_keeps_today_s_path(client, auth, fakes, monkeypatch, sync_engine, said, caplog):  # noqa: F811
     """No tuning sent: no check-in, the normal 700 ms wait, the backend's own settings and token cap."""
+    caplog.set_level("INFO")
     call_id, token = _tamil(client, auth, fakes, monkeypatch, tuning=None)
     with client.websocket_connect(f"/ws/plivo/media?call_id={call_id}&token={token}") as ws:
         _open(ws, said)
@@ -521,10 +564,12 @@ def test_a_tamil_call_on_current_behavior_keeps_today_s_path(client, auth, fakes
         _says(ws, said, "mm")
         time.sleep(0.5)
     assert _events(sync_engine, call_id, "checkin_sent") == []
+    assert _early_lines(caplog) == []  # the early-transcript line is a tuned call's only
 
 
 @pytest.mark.parametrize("language", ["en", "hi", "kn"])
-def test_a_call_in_another_language_runs_on_the_backend_s_own_settings(client, auth, fakes, monkeypatch, sync_engine, said, language):  # noqa: F811
+def test_a_call_in_another_language_runs_on_the_backend_s_own_settings(client, auth, fakes, monkeypatch, sync_engine, said, language, caplog):  # noqa: F811
+    caplog.set_level("INFO")
     flow = _flow(language, monkeypatch)
     fakes.llm.replies = ["Hello sir."]
     fakes.llm.reply = "Thank you."
@@ -537,3 +582,4 @@ def test_a_call_in_another_language_runs_on_the_backend_s_own_settings(client, a
         _says(ws, said, "mm")
         time.sleep(0.5)
     assert _events(sync_engine, call_id, "checkin_sent") == []
+    assert _early_lines(caplog) == []

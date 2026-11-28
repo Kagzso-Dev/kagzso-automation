@@ -1499,6 +1499,7 @@ class CallSession:
         self._slow_speaker = False
         self._early_stt: Optional[Dict[str, Any]] = None  # ADAPTIVE_EOS: STT started during the current pause
         self._early_stt_count = 0  # ...for the utterance in progress
+        self._early_stt_restarts = 0  # ...and how often the customer spoke again after one started (timing log)
         self._warm_tts: Optional[Tuple[asyncio.Task, float]] = None  # TTS_WARM_STREAM: (open task, opened at)
         self._ack_last_turn = False  # THINKING_ACK played in the previous reply
         self._ack_last: Optional[int] = None  # ...and which one played last
@@ -1829,7 +1830,7 @@ class CallSession:
             if ev.event == audio.VadEvent.SPEECH_START:
                 self._note_resume()
                 self._drop_early_stt()
-                self._early_stt_count = 0
+                self._early_stt_count = self._early_stt_restarts = 0
                 ack = self._ack_state
                 if ack is not None and not ack["playing"] and ack["task"] is not None and not ack["task"].done():
                     ack["task"].cancel()  # THINKING_ACK: the customer is speaking
@@ -1871,11 +1872,13 @@ class CallSession:
         # ADAPTIVE_EOS: STT that ran during this pause already has these words - kept only for an
         # ordinary turn and only if nothing was voiced since.
         early = self._early_stt
+        early_made, early_restarts = self._early_stt_count, self._early_stt_restarts  # a tuned call's timing log
+        early_stale = early is not None and early["voiced"] * audio.FRAME_MS != ev.voiced_ms
         if (early is None or not ev.audio or early["voiced"] * audio.FRAME_MS != ev.voiced_ms
                 or self._opening_speech or candidate or self.ai_busy):
             self._drop_early_stt()
             early = None
-        self._early_stt, self._early_stt_count = None, 0
+        self._early_stt, self._early_stt_count, self._early_stt_restarts = None, 0, 0
         if not ev.audio:
             self._drop_stt_stream(stt_stream)
             self._after_noise()
@@ -1905,11 +1908,27 @@ class CallSession:
                 stt_stream = None
             if self.cfg.ADAPTIVE_EOS:
                 eos = eos or ("long" if early is not None and early["kind"] == "trailing" else "normal")
+            if self._tuning is not None and self.cfg.ADAPTIVE_EOS:
+                self._log_early_transcript(early is not None, early_stale, early_made, early_restarts, eos)
             self._start_turn(audio_pcm=ev.audio, stt_stream=stt_stream, t0=t0,
                              near_agent=self._speech_near_agent, focus=focus,
                              early_stt=early["task"] if early is not None else None, eos=eos)
 
     EARLY_STT_MAX = 3  # ADAPTIVE_EOS: STT requests per utterance during pauses (cost bound)
+
+    def _log_early_transcript(self, used: bool, stale: bool, made: int, restarts: int, eos: Optional[str]) -> None:
+        """A tuned call (turn rules: Tamil only): whether the reply reuses the transcript made during the customer's
+        last pause, and if not why, so a "Turn timing" line with stt > 0 can be explained. Numbers only."""
+        if used:
+            why = "used"
+        elif stale:
+            why = "not used - the customer made a sound after it"
+        elif made >= self.EARLY_STT_MAX:
+            why = f"not used - the limit of {self.EARLY_STT_MAX} early transcripts per answer was reached"
+        else:
+            why = "not used - none was made for the last pause"
+        log.info("Early transcript %s: turn=%d eos=%s early_made=%d spoke_again_after_one=%d", why,
+                 self.turn_index + 1, eos or "normal", made, restarts)
 
     def _drop_early_stt(self, early: Optional[Dict[str, Any]] = None) -> None:
         """Cancel `early` (default: the session's) - its words are not used."""
@@ -1933,6 +1952,7 @@ class CallSession:
             return
         early = self._early_stt
         if early is not None and early["voiced"] != ep.voiced_frames:  # spoke again: the next pause decides
+            self._early_stt_restarts += 1
             self._drop_early_stt()
             ep.hold_frames = 0
             early = None
