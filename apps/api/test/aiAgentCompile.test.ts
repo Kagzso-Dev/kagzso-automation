@@ -225,11 +225,13 @@ describe.each(["en", "ta", "hi", "kn"] as const)("compiled agent flow (%s)", (la
 describe("one set of system rules for every language", () => {
   it("the same blocks in English, Tamil, Hindi and Kannada; only the own-name script line differs", () => {
     const ids = (language: AiCallLanguage) =>
-      compileAgentFlow(input(language)).blocks.map((b) => b.id).filter((id) => id !== "speaking_style");
+      compileAgentFlow(input(language))
+        .blocks.map((b) => b.id)
+        .filter((id) => id !== "speaking_style" && id !== "reply_length");
     for (const language of ["ta", "hi", "kn"] as const) expect(ids(language)).toEqual(ids("en"));
     // The system text is the same apart from the language's own do-not-call line, its name rule and Tamil's
-    // no-team-confirm truthfulness lines and own-knowledge-only facts (below): no other language-specific rule is
-    // compiled in.
+    // no-team-confirm truthfulness lines, own-knowledge-only facts and reply length (below): no other
+    // language-specific rule is compiled in.
     const strip = (language: AiCallLanguage, skip: string[] = []) => {
       const flow = compileAgentFlow(input(language));
       return flow.blocks
@@ -237,7 +239,7 @@ describe("one set of system rules for every language", () => {
         .map((b) => ("text" in b ? b.text : `locked:${b.locked}`));
     };
     for (const language of ["hi", "kn"] as const) expect(strip(language)).toEqual(strip("en"));
-    expect(strip("ta", ["company_facts"])).toEqual(strip("en", ["company_facts"]));
+    expect(strip("ta", ["company_facts", "reply_length"])).toEqual(strip("en", ["company_facts"]));
   });
 
   it("an agent's own instructions reach its flow unchanged, in any language and any script", () => {
@@ -508,7 +510,30 @@ describe("compiler 5: every agent shows unpublished changes until it is publishe
     expect(aiAgentCompilerVersion("en")).toBe(5);
     expect(aiAgentCompilerVersion("hi")).toBe(5);
     expect(aiAgentCompilerVersion("kn")).toBe(5);
-    expect(aiAgentCompilerVersion("ta")).toBe("5.ta4");
+    expect(aiAgentCompilerVersion("ta")).toBe("5.ta5");
+  });
+});
+
+describe("Tamil 5 (2026-11-28): a reply is up to four short sentences, ending with one question - Tamil only", () => {
+  it("a Tamil agent's flow says it once, as a rule block between the rules and the voice block", () => {
+    const flow = compileAgentFlow(input("ta"));
+    const ids = flow.blocks.map((b) => b.id);
+    expect(text(flow, "reply_length")).toBe(
+      "# REPLY LENGTH\n\nA reply is up to four short sentences. Its last sentence is one question, so the customer " +
+        "knows it is their turn to speak. A goodbye has no question.\n\n---\n\n",
+    );
+    expect(flow.blocks.find((b) => b.id === "reply_length")).toMatchObject({ group: "rules" });
+    expect(ids.indexOf("reply_length")).toBe(ids.indexOf("voice_delivery") - 1);
+    expect(ids.indexOf("reply_length")).toBeGreaterThan(ids.indexOf("rules"));
+    // No other sentence limit for a normal reply anywhere in the flow (the goodbyes keep their own, shorter ones).
+    const others = flow.blocks.filter((b) => !["reply_length", "busy", "not_interested", "end_call_request"].includes(b.id));
+    expect(others.map((b) => ("text" in b ? b.text : "")).join("\n")).not.toMatch(/\b(one|two|three|four|1|2|3|4)\b[^.\n]*sentences?/i);
+  });
+
+  it.each(["en", "hi", "kn"] as const)("%s: no reply-length block; its flow is byte-for-byte as before (fixture)", (language) => {
+    const flow = compileAgentFlow(input(language));
+    expect(flow.blocks.some((b) => b.id === "reply_length")).toBe(false);
+    expect(allText(flow)).not.toContain("REPLY LENGTH");
   });
 });
 

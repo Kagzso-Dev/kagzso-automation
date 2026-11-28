@@ -86,8 +86,9 @@ export const AI_AGENT_COMPILER_VERSION = 5;
  * Version 5 (2026-11-26, every language): the company name is written with readable casing (businessDisplayName).
  * Tamil 4 (2026-11-28): company facts come only from the agent's approved knowledge (OWN_FACTS_ONLY), never from the
  * built-in executive flow.
+ * Tamil 5 (2026-11-28): a reply is up to four short sentences ending with one question (REPLY_LENGTH_BLOCKS).
  */
-export const AI_AGENT_COMPILER_LANGUAGE_REVISION: Partial<Record<AiCallLanguage, number>> = { ta: 4 };
+export const AI_AGENT_COMPILER_LANGUAGE_REVISION: Partial<Record<AiCallLanguage, number>> = { ta: 5 };
 
 /** What agentInputsHash hashes as the compiler: AI_AGENT_COMPILER_VERSION itself for a language without a revision. */
 export function aiAgentCompilerVersion(language: string): number | string {
@@ -263,6 +264,18 @@ export function voiceIdentityLines(gender: "female" | "male"): string {
     "or neither when no gender is given), never by the voice's gender.\n"
   );
 }
+
+/**
+ * How long a reply is, per language (Tamil revision 5, 2026-11-28: the full reply the LLM writes, up to four short
+ * sentences ending with one question). A language without an entry gets no such block: its flow is as before. The
+ * voice backend's spoken limit for Tamil agents follows TAMIL_AGENT_REPLY_SENTENCES.
+ */
+export const REPLY_LENGTH_BLOCKS: Partial<Record<AiCallLanguage, string>> = {
+  ta:
+    "# REPLY LENGTH\n\n" +
+    "A reply is up to four short sentences. Its last sentence is one question, so the customer knows it is their turn " +
+    "to speak. A goodbye has no question.\n\n---\n\n",
+};
 
 function voiceDeliveryBlock(voice: CompileInput["voice"]): string {
   if (!voice?.gender) return VOICE_DELIVERY_BLOCK;
@@ -446,6 +459,8 @@ export function compileAgentFlow(input: CompileInput): CallFlowDefinition {
       blocks.push({ id: "customer_business", group: "main_script", text: businessBlock(input) });
     }
   }
+  const replyLength = REPLY_LENGTH_BLOCKS[language];
+  if (replyLength) blocks.push({ id: "reply_length", group: "rules", text: replyLength });
   blocks.push({ id: "voice_delivery", group: "tone", text: voiceDeliveryBlock(input.voice) });
   blocks.push({ id: "call_length", group: "rules", text: callLengthBlock(agent.targetDurationSec, agent.maxDurationSec) });
   for (const b of blocks) {
