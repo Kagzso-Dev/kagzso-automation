@@ -88,6 +88,9 @@ function initial(a: AiAgentView | null, autonomousOk: boolean, language: AiCallL
 
 const fmt = (sec: number) => (sec % 60 ? `${Math.floor(sec / 60)} min ${sec % 60} s` : `${sec / 60} min`);
 
+/** Languages whose NEW agents are Autonomous only (2026-11-28: Tamil). An existing agent, Guided or not, keeps both. */
+const NEW_AGENTS_AUTONOMOUS_ONLY: readonly AiCallLanguage[] = ["ta"];
+
 /** The agent's settings (create or edit). Saving never publishes: an autonomous agent is published from its own tab. */
 export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; onCreated: (id: string) => void }) {
   const language = useAiCallLanguage();
@@ -108,6 +111,8 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
   }, [startVoice]);
 
   const published = (flows.data?.items ?? []).filter((x) => x.published);
+  const autonomousOnly = !agent && autonomousOk && NEW_AGENTS_AUTONOMOUS_ONLY.includes(language);
+  const modes = autonomousOnly ? (["autonomous"] as const) : (["autonomous", "guided"] as const);
   // A male AI Voice with a known female executive name (the default Thaara, Sara, Nila): flagged at the name too.
   const voiceGender = offeredVoices?.find((v) => v.id === f.voiceId)?.gender;
   const nameMismatch = f.mode === "autonomous" && femaleNameForMaleVoice(f.executiveName, voiceGender);
@@ -162,7 +167,7 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
     <div className="max-w-4xl space-y-5 text-sm">
       <Section title="Conversation mode">
         <div className="flex flex-wrap gap-2">
-          {(["autonomous", "guided"] as const).map((m) => (
+          {modes.map((m) => (
             <button
               key={m}
               type="button"
@@ -181,6 +186,11 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
         </div>
         {!autonomousOk && (
           <p className="mt-2 text-xs text-warn">Autonomous agents have no reviewed opening lines in {AI_CALL_LANGUAGE_NAMES[language]} yet.</p>
+        )}
+        {autonomousOnly && (
+          <p className="mt-2 text-xs text-slate-550">
+            New {AI_CALL_LANGUAGE_NAMES[language]} agents are Autonomous. To call with a Call Flow, pick it on the Voicecall Contacts page.
+          </p>
         )}
       </Section>
 

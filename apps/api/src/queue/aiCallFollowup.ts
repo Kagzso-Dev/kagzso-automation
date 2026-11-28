@@ -5,7 +5,8 @@
 //
 // The call is in the customer's list language. English calls with the default
 // agent, as before; another language calls with one of its own published flows
-// (the one the customer was last called with, else its newest).
+// (the one the customer was last called with, else its newest). Tamil: a follow-up
+// from an AI Agent's call uses that agent's published version only, or fails.
 
 import { DEFAULT_AI_CALL_LANGUAGE, maskPhone } from "@dispatch/shared";
 import { prisma } from "../prisma.js";
@@ -13,7 +14,7 @@ import { logger } from "../logger.js";
 import { aiCallsConfig } from "../config/aiCalls.js";
 import { callsCountedTowardDailyCap, loadDoNotCallPhones } from "../domain/aiCalls.js";
 import { aiCallLanguageBlockedReason, asAiCallLanguage, languageName, runInProgressReason } from "../domain/aiCallLanguages.js";
-import { agentVersionForCallAgain, flowVersionForCallAgain } from "../domain/callFlows.js";
+import { agentCallAgainTarget, agentVersionForCallAgain, flowVersionForCallAgain } from "../domain/callFlows.js";
 import { addCustomerEvent } from "../domain/aiCallFollowups.js";
 import { linkCustomersToRun } from "../domain/aiCallCustomerSync.js";
 import { isHardStopEnabled } from "../config/hardStop.js";
@@ -49,7 +50,11 @@ export async function processAiCallFollowup(payload: Record<string, unknown>): P
   }
   let flowVersionId: string | null = null;
   if (language !== DEFAULT_AI_CALL_LANGUAGE) {
-    const version = await flowVersionForCallAgain(c.id, language);
+    // Tamil: a follow-up from an AI Agent's call calls again with that agent only; one it can't use fails, never
+    // another flow (agentCallAgainTarget). Any other follow-up, and every other language: exactly as before.
+    const agent = await agentCallAgainTarget(f.sourceCallLogId, language);
+    if (agent && agent.version === null) return fail(f.id, c.id, "FAILED", agent.reason);
+    const version = agent?.version ?? (await flowVersionForCallAgain(c.id, language));
     if (!version) return fail(f.id, c.id, "FAILED", `No published ${languageName(language)} call flow to call again with`);
     flowVersionId = version.id;
   } else {

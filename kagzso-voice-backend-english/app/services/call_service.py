@@ -878,6 +878,12 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
         try:
             resolved = await resolve_flow_agent(db, req.flow_id, req.flow_version or 0, req.flow_draft, req.flow)
         except FlowError as exc:
+            if (cfg.TAMIL_AGENT_IGNORE_CALL_FLOWS and cfg.call_language == "ta"
+                    and isinstance(req.flow, Mapping) and isinstance(req.flow.get("autonomous"), Mapping)):
+                # An AI agent's call is that agent or nothing: never the built-in agent's script, voice or facts.
+                log.warning("AI agent flow %s v%s refused (%s) - call not placed", req.flow_id, req.flow_version, exc.reason)
+                raise CallError(409, f"The AI agent's flow was refused by the voice backend ({exc.reason}) - "
+                                     "publish the agent again", "agent_flow_rejected")
             log.warning("Call flow %s v%s not used (%s) - falling back to agent '%s'",
                         req.flow_id, req.flow_version, exc.reason, agent.name)
             flow_vars = {"flow_id": req.flow_id, "flow_version": str(req.flow_version), "flow_fallback": exc.reason}

@@ -24,6 +24,8 @@
 //                        busy / not-interested / end closings as refusal handling, plus "voice_delivery" (what the
 //                        text-to-speech voice needs) and "call_length" (the agent's own target and the hard stop);
 //                        {{title_to_use}} -> {{title}} everywhere, so a contact without a gender gets no sir / madam
+//   company_facts        a Kagzso company: the built-in Kagzso facts under its name; another company, and every Tamil
+//                        agent (OWN_FACTS_ONLY): only its own approved knowledge
 //   training             agent profile (name, company, the agent's personality) + approved knowledge, all Active
 //   limits / autonomous  max = the agent's maximum (the hard stop), target = its target, voice_pace = its voice speed,
 //                        contact_business = each call uses the contact's own business, instructions_lead = the voice
@@ -82,8 +84,10 @@ export const AI_AGENT_COMPILER_VERSION = 5;
  * Version 4 (2026-11-26, every language): the admin's instructions lead (autonomous.instructions_lead). Tamil keeps
  * its revision only so that its hash stays as distinct as before.
  * Version 5 (2026-11-26, every language): the company name is written with readable casing (businessDisplayName).
+ * Tamil 4 (2026-11-28): company facts come only from the agent's approved knowledge (OWN_FACTS_ONLY), never from the
+ * built-in executive flow.
  */
-export const AI_AGENT_COMPILER_LANGUAGE_REVISION: Partial<Record<AiCallLanguage, number>> = { ta: 3 };
+export const AI_AGENT_COMPILER_LANGUAGE_REVISION: Partial<Record<AiCallLanguage, number>> = { ta: 4 };
 
 /** What agentInputsHash hashes as the compiler: AI_AGENT_COMPILER_VERSION itself for a language without a revision. */
 export function aiAgentCompilerVersion(language: string): number | string {
@@ -196,9 +200,17 @@ function businessBlock(input: CompileInput): string {
 // (llm_service.customer_business_rules), and those do ask, so the line would contradict them.
 const BUILTIN_BUSINESS_RULE = "If `business_type` or `company_name` is in the customer details, use it naturally when relevant; never ask for it. ";
 
-function companyFactsBlock(original: string, company: string): string {
-  if (!isKagzso(company)) {
-    // Another company: the built-in Kagzso facts don't apply. Only its approved knowledge (training) does.
+/**
+ * Languages whose agents take every company fact from their own approved knowledge only (Tamil revision 4,
+ * 2026-11-28): never the built-in executive flow's Kagzso facts, whatever the company name. Every other language keeps
+ * the built-in facts for a Kagzso company, exactly as before.
+ */
+const OWN_FACTS_ONLY: readonly AiCallLanguage[] = ["ta"];
+
+function companyFactsBlock(original: string, company: string, language: AiCallLanguage): string {
+  if (!isKagzso(company) || OWN_FACTS_ONLY.includes(language)) {
+    // Another company (or a language in OWN_FACTS_ONLY): the built-in Kagzso facts don't apply. Only its approved
+    // knowledge (training) does.
     return (
       `# APPROVED COMPANY FACTS (${company})\n\n` +
       `Use only the training's approved facts and Q&A for anything about ${company}. Never add facts that are not there.\n\n---\n\n`
@@ -274,6 +286,34 @@ function instructionsBlock(text: string): string {
     body +
     "\n\n---\n\n"
   );
+}
+
+/** Languages whose instructions may fill the whole box (2026-11-28: Tamil): see instructionsBlocks. */
+const SPLIT_LONG_INSTRUCTIONS: readonly AiCallLanguage[] = ["ta"];
+
+/**
+ * The admin's instructions as flow blocks. Whatever fits one block (every agent that publishes today) is that one
+ * "ai_instructions" block, exactly as before. A Tamil box too long for one block once each line is quoted (a full
+ * AI_AGENT_INSTRUCTIONS_MAX box of many short lines) continues in "ai_instructions_2" (and _3), cut at a line break:
+ * the voice backend joins blocks end to end (render_blocks), so the prompt reads exactly as one block would. Every
+ * other language: one block, refused when too long, as before.
+ */
+function instructionsBlocks(text: string, language: AiCallLanguage): CallFlowTextBlock[] {
+  const whole = instructionsBlock(text);
+  const block = (id: string, part: string): CallFlowTextBlock => ({ id, group: "main_script", text: part });
+  if (whole.length <= CALL_FLOW_MAX_BLOCK_CHARS || !SPLIT_LONG_INSTRUCTIONS.includes(language)) {
+    return [block("ai_instructions", whole)];
+  }
+  const parts: string[] = [];
+  let rest = whole;
+  while (rest.length > CALL_FLOW_MAX_BLOCK_CHARS) {
+    const lineEnd = rest.lastIndexOf("\n", CALL_FLOW_MAX_BLOCK_CHARS - 1) + 1; // just after a line break
+    const cut = lineEnd > 0 ? lineEnd : CALL_FLOW_MAX_BLOCK_CHARS; // (never: the header alone has line breaks)
+    parts.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+  }
+  parts.push(rest);
+  return parts.map((part, i) => block(i === 0 ? "ai_instructions" : `ai_instructions_${i + 1}`, part));
 }
 
 /**
@@ -395,13 +435,13 @@ export function compileAgentFlow(input: CompileInput): CallFlowDefinition {
       if (!text) continue;
     } else if (b.id === "rules") text = rulesBlock(b.text);
     else if (b.id in NATURAL_CLOSINGS) text = NATURAL_CLOSINGS[b.id]!;
-    else if (b.id === "company_facts") text = companyFactsBlock(b.text, company);
+    else if (b.id === "company_facts") text = companyFactsBlock(b.text, company, language);
     else if (b.id === "do_not_call") text = doNotCallBlock(b.text, opening.dnc);
     blocks.push({ ...b, text: swapTitle(text) });
     if (b.id === "agent") {
       // The admin's instructions right after who the agent is: they lead the conversation.
       if (blockSafe(agent.instructions)) {
-        blocks.push({ id: "ai_instructions", group: "main_script", text: instructionsBlock(agent.instructions) });
+        blocks.push(...instructionsBlocks(agent.instructions, language));
       }
       blocks.push({ id: "customer_business", group: "main_script", text: businessBlock(input) });
     }

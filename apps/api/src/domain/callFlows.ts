@@ -179,6 +179,47 @@ export async function agentVersionForCallAgain(sourceCallLogId: string | null | 
   }
 }
 
+/** Languages whose "call again" from an AI Agent's call uses that agent only (2026-11-28: Tamil). */
+export const CALL_AGAIN_AGENT_ONLY_LANGUAGES: readonly AiCallLanguage[] = ["ta"];
+
+/**
+ * "Call again" in a CALL_AGAIN_AGENT_ONLY_LANGUAGES language when the follow-up came from an AI Agent's call (its run
+ * used a flow an AI Agent of that language generated):
+ *   null                      not an AI Agent's call (a manual follow-up, a Guided agent's or an ordinary Call Flow's
+ *                             call): the caller picks the flow exactly as before (flowVersionForCallAgain);
+ *   { version }               the agent's current published version - the only flow this follow-up may call with;
+ *   { version: null, reason } it was, but the agent can't call now (removed, switched to Guided, unpublished): the
+ *                             follow-up fails with `reason`. Never another flow in its place.
+ */
+export async function agentCallAgainTarget(
+  sourceCallLogId: string | null | undefined,
+  language: AiCallLanguage,
+): Promise<{ version: CallFlowVersion } | { version: null; reason: string } | null> {
+  if (!sourceCallLogId || !CALL_AGAIN_AGENT_ONLY_LANGUAGES.includes(language)) return null;
+  const log = await prisma.aiCallLog.findUnique({
+    where: { id: sourceCallLogId },
+    select: { run: { select: { flow: { select: { flowVersion: { select: { flowId: true } } } } } } },
+  });
+  const flowId = log?.run.flow?.flowVersion.flowId;
+  if (!flowId) return null;
+  // Whatever the agent's state now: a removed or switched agent's follow-up must fail, not fall back.
+  const agent = await prisma.aiAgent.findFirst({
+    where: { callFlowId: flowId, language },
+    select: { name: true, mode: true, archivedAt: true },
+  });
+  if (!agent) return null;
+  const who = `The AI agent "${agent.name}" whose call created this follow-up`;
+  const again = "No other call flow is used in its place.";
+  if (agent.archivedAt) return { version: null, reason: `${who} was removed. ${again}` };
+  if (agent.mode !== "AUTONOMOUS") return { version: null, reason: `${who} is no longer Autonomous. ${again}` };
+  try {
+    return { version: await versionForNewRun(flowId, language) };
+  } catch (err) {
+    if (!(err instanceof CallFlowError)) throw err;
+    return { version: null, reason: `${who} has no published version — publish it again, then approve a new follow-up. ${again}` };
+  }
+}
+
 /** What an admin types to remove a live (published) flow. */
 export const REMOVE_LIVE_CONFIRM = "DELETE";
 

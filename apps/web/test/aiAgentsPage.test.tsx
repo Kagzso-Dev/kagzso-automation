@@ -208,6 +208,50 @@ describe("AI Agents page", () => {
     expect(screen.queryByRole("checkbox", { name: /Speak only/ })).toBeNull();
   });
 
+  it("a NEW Tamil agent is Autonomous only: no Guided (existing Call Flow) button", async () => {
+    page("ta");
+    fireEvent.click(await screen.findByRole("button", { name: "Create agent" }));
+    expect(screen.getByRole("button", { name: /Autonomous AI conversation/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Guided \(existing Call Flow\)/ })).toBeNull();
+    expect(screen.getByText(/New Tamil agents are Autonomous\. To call with a Call Flow, pick it on the Voicecall Contacts page\./)).toBeTruthy();
+  });
+
+  it.each(["en", "hi", "kn"] as const)("a new %s agent still offers both modes", async (language) => {
+    page(language);
+    fireEvent.click(await screen.findByRole("button", { name: "Create agent" }));
+    expect(screen.getByRole("button", { name: /Guided \(existing Call Flow\)/ })).toBeTruthy();
+    expect(screen.queryByText(/agents are Autonomous\. To call with a Call Flow/)).toBeNull();
+  });
+
+  it("an EXISTING Tamil Guided agent stays exactly as it is: Guided shown and selected, saved with its Call Flow", async () => {
+    flowItems = [{ id: "flow1", name: "Nila", published: { version: 3 } }];
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const puts: Record<string, unknown>[] = [];
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (url: string, init: { method?: string; body?: string } = {}) => {
+      if (init.method === "PUT") puts.push(JSON.parse(init.body ?? "{}").agent);
+      return json({ items: flowItems });
+    });
+    const guided = { ...oldAgent("ta"), mode: "guided", guidedFlowId: "flow1", objective: "" } as unknown as AiAgentView;
+    render(
+      <QueryClientProvider client={qc}>
+        <ToastProvider>
+          <ConfirmProvider>
+            <AiCallLanguageProvider language="ta">
+              <AiAgentForm agent={guided} onCreated={() => {}} />
+            </AiCallLanguageProvider>
+          </ConfirmProvider>
+        </ToastProvider>
+      </QueryClientProvider>,
+    );
+    const guidedButton = screen.getByRole("button", { name: /Guided \(existing Call Flow\)/ });
+    expect(guidedButton.className).toContain("border-accent"); // still the selected mode
+    expect(screen.queryByText(/New Tamil agents are Autonomous/)).toBeNull();
+    await screen.findByRole("option", { name: /Nila/ });
+    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0]).toMatchObject({ mode: "guided", guidedFlowId: "flow1" });
+  });
+
   it("a language without reviewed opening lines offers guided agents only", async () => {
     page("te");
     expect(await screen.findByText(/only guided agents/)).toBeTruthy();

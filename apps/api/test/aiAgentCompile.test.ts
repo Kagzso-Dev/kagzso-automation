@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   AI_AGENT_DEFAULTS,
   AI_AGENT_DURATION_LIMITS,
+  AI_AGENT_INSTRUCTIONS_MAX,
   AI_AGENT_OPENINGS,
   AI_AGENT_VOICE_SPEED_LIMITS,
   AI_AGENT_VOICE_SPEEDS,
@@ -227,14 +228,16 @@ describe("one set of system rules for every language", () => {
       compileAgentFlow(input(language)).blocks.map((b) => b.id).filter((id) => id !== "speaking_style");
     for (const language of ["ta", "hi", "kn"] as const) expect(ids(language)).toEqual(ids("en"));
     // The system text is the same apart from the language's own do-not-call line, its name rule and Tamil's
-    // no-team-confirm truthfulness lines (below): no other language-specific rule is compiled in.
-    const strip = (language: AiCallLanguage) => {
+    // no-team-confirm truthfulness lines and own-knowledge-only facts (below): no other language-specific rule is
+    // compiled in.
+    const strip = (language: AiCallLanguage, skip: string[] = []) => {
       const flow = compileAgentFlow(input(language));
       return flow.blocks
-        .filter((b) => !["speaking_style", "do_not_call", "customer_business", "objections"].includes(b.id))
+        .filter((b) => !["speaking_style", "do_not_call", "customer_business", "objections", ...skip].includes(b.id))
         .map((b) => ("text" in b ? b.text : `locked:${b.locked}`));
     };
-    for (const language of ["hi", "kn", "ta"] as const) expect(strip(language)).toEqual(strip("en"));
+    for (const language of ["hi", "kn"] as const) expect(strip(language)).toEqual(strip("en"));
+    expect(strip("ta", ["company_facts"])).toEqual(strip("en", ["company_facts"]));
   });
 
   it("an agent's own instructions reach its flow unchanged, in any language and any script", () => {
@@ -505,7 +508,105 @@ describe("compiler 5: every agent shows unpublished changes until it is publishe
     expect(aiAgentCompilerVersion("en")).toBe(5);
     expect(aiAgentCompilerVersion("hi")).toBe(5);
     expect(aiAgentCompilerVersion("kn")).toBe(5);
-    expect(aiAgentCompilerVersion("ta")).toBe("5.ta3");
+    expect(aiAgentCompilerVersion("ta")).toBe("5.ta4");
+  });
+});
+
+describe("a full AI Conversation Instructions box (7,000 characters) always publishes in Tamil (2026-11-28)", () => {
+  /** A box of exactly `total` characters made of lines of `lineLen` characters (Tamil letters). */
+  const box = (lineLen: number, total = AI_AGENT_INSTRUCTIONS_MAX) => {
+    const line = "க".repeat(lineLen - 1);
+    let s = "";
+    while (s.length + line.length + 1 <= total) s += (s ? "\n" : "") + line;
+    const left = total - s.length; // filled up with one last line (or letter), never a trailing line break
+    return left >= 2 ? `${s}\n${"ம".repeat(left - 1)}` : s + "ம".repeat(left);
+  };
+  const quoted = (t: string) => t.split("\n").map((l) => `> ${l}`).join("\n");
+  const compiled = (language: AiCallLanguage, instructions: string) =>
+    compileAgentFlow(input(language, { agent: agent({ instructions }) }));
+  const parts = (d: CallFlowDefinition) => d.blocks.filter((b) => b.id.startsWith("ai_instructions")) as CallFlowTextBlock[];
+
+  it.each([20, 10, 2])("7,000 characters in lines of %i: split at line breaks, joined back word for word", (lineLen) => {
+    const text = box(lineLen);
+    expect(text).toHaveLength(7000);
+    const flow = compiled("ta", text);
+    expect(callFlowDefinition.safeParse(flow).success).toBe(true);
+    const ps = parts(flow);
+    expect(ps.length).toBeGreaterThanOrEqual(2);
+    expect(ps.map((b) => b.id)).toEqual(["ai_instructions", "ai_instructions_2", "ai_instructions_3"].slice(0, ps.length));
+    for (const p of ps) expect(p.text.length).toBeLessThanOrEqual(8000);
+    for (const p of ps.slice(0, -1)) expect(p.text.endsWith("\n")).toBe(true); // cut just after a line break
+    const joined = ps.map((p) => p.text).join("");
+    expect(joined.startsWith(`${INSTRUCTIONS_HEADER}\n\n`)).toBe(true);
+    expect(joined).toContain(quoted(text)); // every character of the box, in order
+    expect(joined.endsWith("\n\n---\n\n")).toBe(true);
+    // Right after who the agent is, the parts together, then the rest as before.
+    const ids = flow.blocks.map((b) => b.id);
+    expect(ids.slice(ids.indexOf("agent"), ids.indexOf("customer_business") + 1)).toEqual(["agent", ...ps.map((p) => p.id), "customer_business"]);
+  });
+
+  it("the 20-character case is the one written for the voice backend to check (fixtures/autonomous/ta_long_instructions.json)", () => {
+    const file = path(`${FIXTURES}ta_long_instructions.json`);
+    const json = JSON.stringify(compiled("ta", box(20)), null, 2) + "\n";
+    if (process.env.UPDATE_FIXTURES === "1") writeFileSync(file, json);
+    expect(readFileSync(file, "utf8")).toBe(json);
+  });
+
+  it.each([200, 50, 40])("7,000 characters in lines of %i: fits one block - exactly as before", (lineLen) => {
+    const text = box(lineLen);
+    const ps = parts(compiled("ta", text));
+    expect(ps.map((b) => b.id)).toEqual(["ai_instructions"]);
+    expect(ps[0]!.text).toBe(
+      `${INSTRUCTIONS_HEADER}\n\n` +
+        "These instructions were written for you by the administrator. They decide how you talk and behave on this call: " +
+        "your role and personality, your language and speaking style, your objective, what you ask and how you answer. " +
+        "Understand what each one is for and apply it to what the customer is saying now: they are guidance, not lines to " +
+        "read out or steps to follow in order.\n\n" +
+        quoted(text) +
+        "\n\n---\n\n",
+    );
+  });
+
+  it.each(["en", "hi", "kn"] as const)("%s: never split - a box too long for one block is refused, exactly as before", (language) => {
+    expect(() => compiled(language, box(20))).toThrow('The "ai_instructions" part is longer than 8000 characters');
+    expect(parts(compiled(language, box(200))).map((b) => b.id)).toEqual(["ai_instructions"]);
+  });
+});
+
+describe("Tamil 4 (2026-11-28): a Tamil agent's facts come only from its own approved knowledge", () => {
+  // The built-in executive flow's own facts: they reach a Tamil agent's flow nowhere.
+  const BUILTIN_FACTS = [
+    /helps businesses simplify and automate/,
+    /Typical areas: suitable parts of follow-ups/,
+    /full details about the company and its solutions/,
+    /potentially help reduce operating costs/,
+    /KAGZSO AI AND AUTOMATION|Kagzso AI and Automation/,
+  ];
+
+  it.each(["Kagzso Technology Services", "Kagzso Automation", "ABC Hospital"])("%s: only the approved knowledge", (company) => {
+    const flow = compileAgentFlow(input("ta", { agent: agent({ companyName: company }) }));
+    const facts = text(flow, "company_facts");
+    expect(facts).toBe(
+      `# APPROVED COMPANY FACTS (${businessDisplayName(company)})\n\n` +
+        `Use only the training's approved facts and Q&A for anything about ${businessDisplayName(company)}. Never add facts that are not there.\n\n---\n\n`,
+    );
+    for (const fact of BUILTIN_FACTS) expect(allText(flow)).not.toMatch(fact);
+    // What it may say about the company: its own knowledge, word for word.
+    expect(flow.training!.knowledge!.map((k) => k.text)).toEqual(input("ta").knowledge.map((k) => k.text));
+  });
+
+  it("the agent's own values: name, company, voice speed, length, callback number only when asked", () => {
+    const flow = compileAgentFlow(input("ta", { agent: agent({ executiveName: "Kayal", companyName: "Kagzso Technology", voiceSpeed: 0.96 }) }));
+    expect(text(flow, "agent")).toContain("You are **Kayal**, an AI calling assistant for **Kagzso Technology**");
+    expect(flow.training!.persona).toMatchObject({ agent_name: "Kayal", company: "Kagzso Technology" });
+    expect(flow.autonomous).toMatchObject({ voice_pace: 0.96, target_duration_sec: 60 });
+    expect(flow.limits).toEqual({ max_duration_sec: 105 });
+    expect(allText(flow).match(/\+91 98000 12345/g)).toHaveLength(2); // the agent's own callback number, both "only when asked"
+    expect(allText(compileAgentFlow(input("ta", { agent: agent({ callbackNumber: null }) })))).not.toMatch(/98000|\+91/);
+  });
+
+  it.each(["en", "hi", "kn"] as const)("%s: a Kagzso company keeps the built-in facts, exactly as before", (language) => {
+    expect(text(compileAgentFlow(input(language)), "company_facts")).toContain("Kagzso Technology Services helps businesses");
   });
 });
 
@@ -524,7 +625,8 @@ describe("F: the company name reads the same whatever its capitals", () => {
       expect(text(flow, "agent")).toContain("an AI calling assistant for **Kagzso Technology Services**");
       expect(flow.greeting.text).toContain("Kagzso Technology Services");
       expect(flow.training!.persona!.company).toBe("Kagzso Technology Services");
-      expect(text(flow, "company_facts")).toContain("Kagzso Technology Services helps businesses"); // still a Kagzso company
+      // Tamil: its own approved knowledge only (Tamil 4), under the readable name.
+      expect(text(flow, "company_facts")).toContain("# APPROVED COMPANY FACTS (Kagzso Technology Services)");
       expect(saved.companyName).toBe(before); // the saved setting itself is never changed
     },
   );

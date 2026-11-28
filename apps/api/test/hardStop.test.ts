@@ -43,7 +43,12 @@ vi.mock("../src/domain/aiCalls.js", async (orig) => ({
   loadDoNotCallPhones: async () => new Set<string>(),
   callsCountedTowardDailyCap: async () => 0,
 }));
-vi.mock("../src/domain/callFlows.js", () => ({ pinnedFlowForRun: async () => null, flowVersionForCallAgain: async () => null, agentVersionForCallAgain: async () => null }));
+vi.mock("../src/domain/callFlows.js", () => ({
+  pinnedFlowForRun: async () => null,
+  flowVersionForCallAgain: async () => null,
+  agentVersionForCallAgain: async () => null,
+  agentCallAgainTarget: async () => null,
+}));
 vi.mock("../src/domain/aiCallVoiceTuning.js", () => ({ voiceTuningForCall: async () => null }));
 vi.mock("../src/domain/aiAgentQuestions.js", () => ({ knownQuestionsForFlow: async () => null }));
 vi.mock("../src/domain/aiCallCustomerSync.js", () => ({

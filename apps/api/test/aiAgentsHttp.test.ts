@@ -799,6 +799,21 @@ describe("Kannada Autonomous AI calls are paused (until native-speaker review)",
     expect(k.status).toBe(200);
   });
 
+  it("a Tamil autonomous agent calls with its own flow only, even with another Tamil flow published and left on the agent", async () => {
+    // "ABC Hospital - Thaara": an ordinary published Tamil Call Flow, and an old Guided pick still saved on the agent.
+    T("callFlow").push({ id: "abc_thaara", name: "ABC Hospital - Thaara", base: "executive", language: "ta", archivedAt: null });
+    T("callFlowVersion").push({
+      id: "v_abc", flowId: "abc_thaara", version: 9, status: "PUBLISHED", publishedAt: new Date(),
+      definition: { language: "ta", greeting: { text: "நான் Thaara, ABC Hospital-ல இருந்து" }, voice_id: "anushka", limits: { max_duration_sec: 300 } },
+    });
+    const a = await liveAgent("ta", { ...AGENT, name: "Kagzso Technology", executiveName: "Kayal", companyName: "Kagzso Technology" });
+    T("aiAgent").find((r) => r.id === a.id)!.guidedFlowId = "abc_thaara";
+    expect((await req("POST", `/api/ai-agents/${a.id}/call`, { dryRun: true })).status).toBe(200);
+    expect(runCalls).toHaveLength(1);
+    expect(runCalls[0]![0]).toMatchObject({ flowId: `flow_${a.id}`, language: "ta" });
+    expect(JSON.stringify(runCalls[0])).not.toMatch(/abc_thaara|ABC Hospital|anushka/);
+  });
+
   it("English, Tamil and Hindi autonomous agents and Kannada GUIDED agents call as before", async () => {
     for (const language of ["en", "ta", "hi"]) {
       const a = await liveAgent(language);

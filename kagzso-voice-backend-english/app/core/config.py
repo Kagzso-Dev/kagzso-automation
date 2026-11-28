@@ -368,6 +368,11 @@ class Settings(BaseSettings):
     # the call's language (or a mix with English) gets the call's language as before. Off (default) = one language per
     # call, exactly as before. Turned on per backend (.env.ta). Guided calls never change.
     AGENT_FOLLOW_CUSTOMER_LANGUAGE: bool = False
+    # Tamil AI Agent calls take nothing but the agent's own flow (2026-11-28): an AI Agent flow (it has `autonomous`) that
+    # this backend rejects (invalid, or a published version with other content) refuses the call (409, nothing dialled)
+    # instead of dialling with the backend's own agent (Nila: its script, voice and facts). Off (default) = as before.
+    # Only a Tamil backend (CALL_LANGUAGE=ta) reads it; turned on only in .env.ta.
+    TAMIL_AGENT_IGNORE_CALL_FLOWS: bool = False
     # Plivo answering-machine detection (async); voicemail -> hang up, outcome=voicemail.
     PLIVO_MACHINE_DETECTION: bool = True
     # Plivo's "machine" verdict sometimes fires on a person saying "Hello? Hello?". Before hanging up,
